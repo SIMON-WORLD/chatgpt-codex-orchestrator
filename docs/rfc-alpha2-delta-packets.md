@@ -1,9 +1,8 @@
 # RFC: Alpha.2 — Delta Packets + Fast Bootstrap
 
-- **Status:** Finalized design (not implemented)
-- **Target release:** `v0.2.0-alpha.2` (next dogfood milestone)
+- **Status:** Accepted design — implementation pending
+- **Target release:** `v0.1.0-alpha.2` (next dogfood milestone, following `v0.1.0-alpha.1`)
 - **Scope:** minimal architecture change to make Brain <-> Codex orchestration **delta-based and compact by default**, and to make a fresh run **bootstrap fast**, based on Dogfood #1.
-- This RFC changes no runtime behavior, does not modify README or package.json, and is not committed or pushed.
 
 ## 0. Alpha.2 Scope
 
@@ -56,7 +55,7 @@ Do **not** implement Claude / DeepSeek / GLM providers in Alpha.2. The neutral n
 
 ## 3. Design Principles
 
-1. **Stable facts live in durable state, not in the per-turn packet.** Project Profile / Task State holds the repo map, scope, constraints, verification commands, and done criteria.
+1. **Stable facts live in durable state, not in the per-turn packet.** Project Profile / Task State holds the repo map, scope, constraints, and done criteria; verification commands/policies are resolved from Project Profile / `verificationPolicy`.
 2. **Task Contract and Plan are created once.** A single `PLAN` establishes the contract and milestones; later turns do not re-send them.
 3. **Normal turns transmit only deltas.** A compact `TASK` Step Packet (one instruction + acceptance) and a compact `RESULT` Step Packet (changed + evidence). Nothing project-wide is repeated.
 4. **Raw historical prompts/results are not required every turn.** Durable state is authoritative and rehydratable only when needed.
@@ -175,32 +174,35 @@ Alpha.2 adds these fields. All are **additive with safe defaults**, and **schema
 
 | Field | Type | Purpose |
 |---|---|---|
-| `taskContract` | object | Created by `PLAN`. **Excludes `repoContext`**: `goal`, `constraints[]`, `doneCriteria[]`, `verificationPolicyRef`, `createdAt`, `version`. |
+| `taskContract` | object | Created by `PLAN`. **Task-stable only**: `goal`, `constraints[]`, `doneCriteria[]`, `verificationPolicyRef` (if needed), `createdAt`/`version` metadata. **Does NOT include** `repoContext`, `repoDir`, or generic `verificationCommands`. |
 | `repoContext` | object | **Not part of `taskContract`**; bounded, derived, refreshed per the refresh policy (see §8). |
 | `projectProfileRef` | string? | Reference to the durable Project Profile (long-lived rules / docs / commands / policies). |
 | `plan` | object | Created by `PLAN`: `planId`, `planVersion`, `milestones[]`, `steps[]`, `status`. |
 | `currentStepId` | string? | The active step; `null` when idle / waiting on the Brain. |
 | `verificationPolicy` | object | `{ defaultLevel, stepRules, milestoneRules, finalRules, fullTestAt, docOnlyTier }`. |
-| `compactedSteps` / `stepSummaries` | array | Completed steps folded into compact summaries (see §14). |
-| `evidenceLedger` | array | Durable evidence `{ id, stepId, acceptanceId, status: pass|fail|unknown, kind: command|test|file|diff|verify, summary, artifactRef?, at }`. |
+| `completedSteps` | array | **Existing, retained** — the `reviewed` stepId list, used for compatibility/idempotency. |
+| `stepSummaries` | array | **New** compact durable summaries produced by `reviewed -> compact`: `{ stepId, milestoneId, title, summary, status, acceptanceSummary, evidenceRefs[], verification, compactedAt }`. |
+| `evidenceLedger` | array | Durable, append-only **real structured evidence** `{ id, stepId, acceptanceId, status: pass|fail|unknown, kind: command|test|file|diff|verify, summary, artifactRef?, at }`. |
 | `unresolvedRisks` | array | Open risks `{ id, description, severity, status, milestoneId?, stepId?, owner }`. |
 
-**Defaults on load:** `taskContract = null`, `repoContext = null`, `projectProfileRef = null`, `plan = null`, `currentStepId = null`, `verificationPolicy = { defaultLevel: 'step', fullTestAt: ['milestone', 'final'], docOnlyTier: 'step' }`, `compactedSteps = []`, `evidenceLedger` seeded from `acceptanceRegistry`, `unresolvedRisks = []`.
+**Defaults on load:** `taskContract = null`, `repoContext = null`, `projectProfileRef = null`, `plan = null`, `currentStepId = null`, `verificationPolicy = { defaultLevel: 'step', fullTestAt: ['milestone', 'final'], docOnlyTier: 'step' }`, `stepSummaries = []`, `evidenceLedger = []` (unless real evidence can be recovered from persisted structured result data), `unresolvedRisks = []`.
 
 ## 10. Protocol
 
 The control set grows from `CONTROLS = ['TASK','REVISE','ASK_USER','DONE']` to include `PLAN` and `REPLAN`. `RESULT` is the Codex->Brain response type. The **legacy text protocol fallback is kept** for Alpha.2 compatibility, but new runtime behavior **prefers/produces the structured protocol by default**.
 
 ### `PLAN` (Brain -> Orchestrator, once)
+
+`repoDir` is an orchestrator / task-state identity, supplied by the Orchestrator — it is **not** carried in the Brain `PLAN` `taskContract` payload. Generic `verificationCommands` are **not** placed in `taskContract`; they resolve from Project Profile / `verificationPolicy` unless a task-specific requirement explicitly overrides them.
+
 ```json
 {
   "control": "PLAN",
   "taskContract": {
     "goal": "Refactor the stats module and add tests",
-    "repoDir": "/repo",
     "constraints": ["preserve public API", "no new dependencies"],
     "doneCriteria": ["tests pass", "readme updated"],
-    "verificationCommands": ["npm test", "npm run check"]
+    "verificationPolicyRef": "project-profile/default"
   },
   "plan": {
     "planId": "p-1",
@@ -294,7 +296,7 @@ A compact `TASK` becomes a **full contract packet** (re-attaching `taskContract`
 2. **Architecture migration** — orchestration architecture, protocol, durable schema, runtime/process boundaries.
 3. **Security-sensitive work** — auth, redaction, secrets, IPC tokens, credentials.
 4. **Ambiguous repo facts** — `repoContext` missing/stale, or step touches an uncovered area.
-5. **Repeated failed revision** — the same step is `REVISE`-d **more than 2 times**. After **two** failed revisions on the same step, the Brain may upgrade that step from a compact packet to a fuller contract packet.
+5. **Repeated failed revision** — after **2** failed `REVISE` attempts on the same step, the Brain may escalate that step to a fuller contract packet.
 
 **Repository-fact ambiguity does NOT immediately trigger `ASK_USER`.** Preferred order:
 
@@ -306,12 +308,13 @@ targeted repo read/evidence
 
 ## 13. Verification Policy & Authority
 
-### Tiers
-- **Step verification** (`defaultLevel: 'step'`) — cheap and local: a targeted command, `node --test <affected>`, or a single step command. **Documentation-only steps may skip the full `npm test` suite**, but must still run relevant lightweight verification: link/path validation, JSON/YAML parsing, targeted grep, `git diff --check`, or relevant structural checks.
-- **Milestone verification** (`level: 'milestone'`) — broader aggregate checks (e.g. `npm test` + `npm run check`) at landmark scope.
-- **Final verification** (`level: 'final'`) — full repository acceptance suite: `npm test` + `npm run check` + `git diff --check` + link/JSON/YAML sanity.
+### Tiers (repository-agnostic)
 
-Full `npm test` runs only at justified milestone/final boundaries.
+- **Step verification** (`defaultLevel: 'step'`) — **project/step-specific cheap checks** (for this repository / Dogfood, examples: a targeted `node --test <affected>`, a single step command, or lightweight checks such as link/path validation, JSON/YAML parsing, targeted grep, `git diff --check`, relevant structural checks). **Documentation-only steps may skip the full suite**, but must still run relevant lightweight verification where applicable.
+- **Milestone verification** (`level: 'milestone'`) — the **broader commands defined by the Project Profile / task verification policy**.
+- **Final verification** (`level: 'final'`) — the **full acceptance suite defined for the target repository/task** (for this repository / Dogfood, examples: `npm test` + `npm run check` + `git diff --check` + link/JSON/YAML sanity).
+
+`npm test`, `npm run check`, `git diff --check`, and link/JSON/YAML checks are **examples for this repository/Dogfood, not universal orchestrator requirements**. The full suite runs only at justified milestone/final boundaries.
 
 ### Authority
 - **Orchestrator** — owns **mandatory milestone/final verification boundaries**; these cannot be silently downgraded.
@@ -333,11 +336,13 @@ A downgrade, when otherwise permitted, requires an **explicit Brain decision / `
 **Trigger:** when a step reaches `reviewed`.
 
 **Then (deterministic):**
-- convert that completed step to a compact durable summary;
+- convert that completed step to a compact durable summary in `stepSummaries`;
 - preserve acceptance outcome;
 - preserve evidence in `evidenceLedger`;
 - preserve unresolved risks;
 - remove verbose historical TASK/RESULT text from future active Brain context.
+
+`completedSteps` (the reviewed stepId list) is retained for compatibility/idempotency; `stepSummaries` holds the compact durable summaries produced by `reviewed -> compact`.
 
 **Keep the latest active/unreviewed step detailed.**
 
@@ -355,8 +360,8 @@ For Alpha.2, do **not** add context-pressure thresholds or adaptive compaction h
 **Durable (owned by task state):**
 - Plan
 - acceptance registry
-- evidence ledger
-- completed-step summaries
+- evidence ledger (`evidenceLedger`)
+- completed-step summaries (`stepSummaries`)
 - unresolved risks
 
 **Per-turn delta:**
@@ -370,7 +375,9 @@ For Alpha.2, do **not** add context-pressure thresholds or adaptive compaction h
 ## 16. Compatibility / Migration
 
 - **Existing TASK / REVISE / ASK_USER / DONE workflows remain usable.** Compact `TASK` is a subset of the existing structured form; the full form is a superset. Extend `parseBrainOutput` / `validateControl` / `repairControl` to recognize `PLAN` / `REPLAN` (additive to `CONTROLS`).
-- **Existing acceptance/evidence gate remains** — `checkAcceptanceGate` unchanged; `evidenceLedger` both feeds and mirrors `acceptanceRegistry`.
+- **Existing acceptance/evidence gate remains** — `checkAcceptanceGate` unchanged.
+- **`evidenceLedger` is append-only real structured evidence.** New `RESULT` evidence is appended to `evidenceLedger`. Applying new evidence also updates `acceptanceRegistry` for compatibility and for the existing `DONE` gate.
+- **`acceptanceRegistry` remains the compatibility/status projection** used by the current acceptance gate in Alpha.2. **Old v1 tasks hydrate `evidenceLedger` to `[]`** unless real evidence can be recovered from persisted structured result data. **A legacy `acceptanceRegistry` `pass` must not be converted into fabricated evidence.**
 - **Existing task state migrates/defaults safely.** Keep **`schemaVersion = 1`**; add a load-time `hydrateTaskState(state)` filling the new fields with defaults. No stored data discarded; old tasks remain readable and re-runnable.
 - Legacy text protocol fallback stays for compatibility; structured protocol is the Alpha.2 default.
 
@@ -401,7 +408,3 @@ user sends brain-command request
 ## 18. Implementation Readiness
 
 The RFC is ready for **Alpha.2 implementation**, subject to one check: during implementation planning, confirm there is **no contradiction with the current codebase** (e.g. existing parser/state/loop assumptions that would conflict with the additive fields or the new `PLAN` / `REPLAN` controls). If no contradiction is found, implementation may proceed; the precise steps and any resulting code changes are tracked as a separate implementation task.
-
----
-
-*This RFC is a design proposal. It changes no runtime behavior, does not modify README or package.json, and has not been committed or pushed.*
