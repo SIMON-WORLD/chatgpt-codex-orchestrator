@@ -28,3 +28,7 @@ export { resolveDataRoot, probeWritable } from './data-root.js';
 export { loadAlphaConfig, DEFAULT_ALPHA_CONFIG } from './config.js';
 export * as taskState from './task-state.js';
 export * as protocol from './protocol.js';
+export * as verification from './verification.js';
+export * as bootstrap from './bootstrap.js';
+export { loadBrainCommandConfig, writeBrainCommandConfig, codexHome, brainCommandConfigPath, DEFAULT_BRAIN_COMMAND_CONFIG, BrainCommandConfigError, resolveRepoDir, resolveOrchestratorRoot, fastPreflight, fullDoctor, isBrainCommandTrigger, newBootstrapMetrics, recordBootstrapMetric, bootstrapElapsedMs, setupBrainCommand, installBrainCommandSkill, brainCommandInstalled, installedBrainCommandSkillPath, legacyBrainCommandSkillPath, sourceBrainCommandSkillPath, userHome, inferRepoRoot, discoverBroadRepoDir, markBroadDiscovery } from './bootstrap.js';
+export { resolveVerificationLevel, shouldRunFullSuite, resolveVerificationCommands, buildVerificationPlan, normalizeVerificationPolicy, canDowngrade, VERIFICATION_TIERS, TIER_RANK, VerificationPolicyError, isMandatoryBoundary, assertMandatoryVerification } from './verification.js';

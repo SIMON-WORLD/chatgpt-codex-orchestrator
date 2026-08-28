@@ -1,6 +1,6 @@
 # Architecture
 
-> Scope: current architecture of **v0.1.0-alpha.1**.
+> Scope: current architecture of **v0.1.0-alpha.2** (delta packets + fast bootstrap).
 > [`README.md`](../README.md) is the project overview; [`README.zh-CN.md`](../README.zh-CN.md) is its Chinese counterpart. [`development-history.md`](development-history.md) holds the historical implementation notes that predate the public-polish pass.
 
 ---
@@ -155,6 +155,32 @@ On an unconfirmed in-flight step, the task transitions to `recovery_required` ra
 - No remote / Cloudflare runtime yet.
 
 These are current boundaries, not roadmap commitments. Roadmap items (stabilizing `adopt-current` via explicit `tabId`, remote runtime, cost ledger, richer context providers, GUI-free daily entry) are **planned** and not part of the current architecture.
+
+## Alpha.2 — Delta Packets + Fast Bootstrap
+
+### Bootstrap / Discovery
+
+The canonical launcher Skill is `brain-command` (see [skills/brain-command/SKILL.md](../skills/brain-command/SKILL.md)). It resolves the user-scoped config at `$CODEX_HOME/brain-command/config.json` ([`src/bootstrap.js`](../src/bootstrap.js)), resolves the repo deterministically (inside target repo > explicit path > configured workspace), and runs a fast preflight. Broad filesystem discovery is not part of normal startup. The full `fullDoctor` is used only for setup / env change / preflight failure / explicit request. One-time `npm run setup:brain-command` (scripts/setup-brain-command.mjs → `setupBrainCommand`) installs the launcher Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and creates/updates `$CODEX_HOME/brain-command/config.json`, preserving machine-local paths; normal execution only reads the config and never reinstalls the Skill. `broadDiscoveryOccurred` is meaningful: the fast path reports `false` and never invokes a broad search, while an explicit setup/fallback discovery helper marks `true`.
+
+### Durable state (schema v1, hydrated)
+
+`task-state.js` adds the Alpha.2 fields while keeping `schemaVersion = 1`: `taskContract`, `repoContext`, `projectProfileRef`, `plan`, `currentStepId`, `verificationPolicy`, `stepSummaries`, `evidenceLedger`, `unresolvedRisks`. `hydrateTaskState(state)` fills defaults at load time; it never fabricates evidence from a legacy `acceptanceRegistry` `pass` — it only recovers real structured evidence from persisted step result data.
+
+### Evidence ledger
+
+`evidenceLedger` is append-only real structured evidence. New `RESULT` evidence is appended to the ledger and also applied to `acceptanceRegistry` (the compatibility/status projection used by the existing DONE gate). `acceptanceRegistry` never swaps out for the ledger in Alpha.2.
+
+### Canonical PLAN step identity
+
+When a `PLAN` exists, the plan `stepId` is the canonical orchestration step identity for `TASK`, `REVISE`, `RESULT`, `evidenceLedger.stepId`, `currentStepId`, `reviewed`, `completedSteps`, and `stepSummaries`. A `REVISE` re-opens the canonical step in place (no duplicate step objects). A planned step that cannot be resolved to its declared milestone (in a milestone-based plan) surfaces a deterministic `ProtocolError` rather than falling back to the first milestone. Legacy no-PLAN tasks keep orchestrator-generated `step-N` ids.
+
+### Compaction
+
+Compaction is Orchestrator-owned. When a step reaches `reviewed`, the manager writes a compact durable `stepSummary` to `stepSummaries`, retaining `completedSteps` for compatibility/idempotency. There are no context-pressure thresholds in Alpha.2 — the rule is deterministic: `reviewed -> compact`.
+
+### Verification authority (operational)
+
+[`src/verification.js`](../src/verification.js) implements step / milestone / final tiers and the precedence `mandatory orchestrator boundary > Brain requested level > Codex local minimum`. Repository-specific verification commands come from the Project Profile / verification policy, not from globally hard-coded defaults. Codex may escalate verification; it may not silently downgrade the required level.
 
 ## Related Documentation
 

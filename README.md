@@ -2,7 +2,7 @@
 
 Agentic orchestration that keeps **ChatGPT as the planner/reviewer** and **Codex as the local executor** in one durable, recoverable loop.
 
-**Status:** Alpha — `v0.1.0-alpha.1` · **English** · [中文](README.zh-CN.md)
+**Status:** Alpha — `v0.1.0-alpha.2` · **English** · [中文](README.zh-CN.md)
 
 ---
 
@@ -98,7 +98,20 @@ These are the documented entry points (see [SKILL.md](SKILL.md) for the runtime 
 用 ChatGPT 指挥模式完成这个任务：<goal>
 ```
 
-## Supported in `v0.1.0-alpha.1`
+## Alpha.2 — Delta Packets + Fast Bootstrap
+
+- **One-time setup (user-runnable)** — run `npm run setup:brain-command` from the repository. It installs the launcher Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and creates/updates `$CODEX_HOME/brain-command/config.json`, deterministically resolving `orchestratorRoot` (repo root), `dataRoot`, and `workspaceRoot` (pass `--orchestrator-root`, `--data-root`, `--workspace-root` to override). It runs once; normal task startup never reruns it.
+- **`brain-command` launcher Skill** — the canonical user-facing entry. It resolves the user-scoped config at `$CODEX_HOME/brain-command/config.json`, resolves the repo deterministically, and runs a fast preflight (no broad filesystem discovery). One-time setup (`setupBrainCommand`) installs the launcher Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and writes the config; normal execution never reinstalls it.
+- **Delta packet protocol** — `PLAN` / `REPLAN` are Brain → Orchestrator control/state operations (never forwarded to Codex); normal `TASK` / `RESULT` are compact by default; legacy text protocol stays a compatible fallback.
+- **Durable state (schema v1)** — `taskContract`, `plan`, `repoContext`, `verificationPolicy`, `stepSummaries`, `evidenceLedger`, `unresolvedRisks`, all hydrated at load time.
+- **Tiered verification** — step / milestone / final, with authority precedence (mandatory orchestrator boundary > Brain requested level > Codex local minimum).
+- **Orchestrator-owned compaction** — `reviewed -> compact` produces a durable `stepSummary`.
+- **Escalation** — after 2 failed `REVISE` on the same step, the step packet can switch to the fuller contract packet.
+- **Dogfood instrumentation** — light bootstrap/packet/verification metrics (not a cost ledger).
+
+Scope boundaries: `adopt-current` stabilization, parallel executors, multiple Brain providers, Brain Council, MCP context provider, GUI, cost ledger, and remote runtime are NOT implemented in Alpha.2.
+
+## Supported in `v0.1.0-alpha.2`
 
 - `conversation: 'new'` — the default, supported path (new ChatGPT conversation + persistent Codex thread).
 - ChatGPT Brain control loop: `TASK` / `REVISE` / `ASK_USER` / `DONE`.

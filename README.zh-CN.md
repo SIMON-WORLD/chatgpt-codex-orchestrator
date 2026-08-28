@@ -2,7 +2,7 @@
 
 一种 Agent 编排方案，让 **ChatGPT 作为规划/评审方**、**Codex 作为本地执行方**，在一条持久、可恢复的闭环上协同完成编码任务。
 
-**状态：** Alpha — `v0.1.0-alpha.1` · [English](README.md) | **简体中文**
+**状态：** Alpha — `v0.1.0-alpha.2` · [English](README.md) | **简体中文**
 
 ---
 

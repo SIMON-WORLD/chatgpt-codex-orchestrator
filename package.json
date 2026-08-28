@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-codex-orchestrator",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "private": true,
   "description": "Durable orchestration between ChatGPT as planner/reviewer and Codex as local executor.",
   "keywords": [
@@ -24,7 +24,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/atomic-turn.js && node --check src/iab-transport.js && node --check src/index.js"
+    "check": "node --check src/atomic-turn.js && node --check src/iab-transport.js && node --check src/index.js && node --check src/protocol.js && node --check src/task-state.js && node --check src/task-manager.js && node --check src/bootstrap.js && node --check src/verification.js",
+    "setup:brain-command": "node scripts/setup-brain-command.mjs"
   },
   "engines": {
     "node": ">=18"

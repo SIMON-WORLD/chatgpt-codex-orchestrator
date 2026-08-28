@@ -1,11 +1,15 @@
 ---
 name: chatgpt-codex-orchestrator
-description: "Alpha entry for the ChatGPT-command orchestrator (v0.1.0-alpha.1, dogfood). Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as executor. Commands: doctor, start, resume, status, cancel. adopt-current is EXPERIMENTAL."
+description: "Alpha entry for the ChatGPT-command orchestrator (v0.1.0-alpha.2). Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as executor. The canonical launcher Skill is `brain-command`. Commands: doctor, start, resume, status, cancel. adopt-current is EXPERIMENTAL."
 ---
 
-# ChatGPT-command orchestrator (v0.1.0-alpha.1 — dogfood)
+# ChatGPT-command orchestrator (v0.1.0-alpha.2)
 
 Drives a durable ChatGPT <-> Codex loop. The agent drives it; the user only speaks the goal.
+
+## Launcher
+
+The canonical launcher Skill is **`brain-command`** (provider-neutral by name; default Brain = ChatGPT, Executor = Codex, conversation = new). It reads `$CODEX_HOME/brain-command/config.json`, resolves the repo deterministically, runs a fast preflight, and starts this orchestrator. See `skills/brain-command/SKILL.md`. Normal startup does NOT do broad filesystem discovery.
 
 ## Commands
 
@@ -14,7 +18,14 @@ Drives a durable ChatGPT <-> Codex loop. The agent drives it; the user only spea
 - `resume` — `TaskService.resumeTask({ taskId })` (or turn-sliced `advanceTask(taskId)` loop).
 - `status` — `TaskService.getTaskStatus(taskId)`.
 - `cancel` — `TaskService.cancelTask(taskId)`.
-- `adopt-current` — **EXPERIMENTAL** (`TaskService.adoptConversation`, conversation:'current'). Not a stable promise in alpha.1 because `tabs.selected()`/selected-tab identity is unstable across node-REPL invocations in the current Codex Desktop / IAB environment. The implementation is retained (binding is frozen + resolved via the retained persisted-binding resolver), but it is not a supported feature.
+- `adopt-current` — **EXPERIMENTAL** (`TaskService.adoptConversation`, conversation:'current'). Not a stable promise in this alpha because `tabs.selected()`/selected-tab identity is unstable across node-REPL invocations in the current Codex Desktop / IAB environment.
+
+## Protocol (Alpha.2)
+
+- Structured protocol is the default: `PLAN` / `REPLAN` (Brain -> Orchestrator control/state, not forwarded to Codex), compact `TASK`, compact `RESULT`, plus the existing `REVISE` / `ASK_USER` / `DONE`. The legacy text protocol remains a compatible fallback.
+- Durable state stays schema v1 but adds `taskContract`, `plan`, `repoContext`, `verificationPolicy`, `stepSummaries`, `evidenceLedger`, `unresolvedRisks`, `currentStepId`.
+- Verification tiers: step / milestone / final, with authority precedence `mandatory orchestrator boundary > Brain requested level > Codex local minimum`.
+- Orchestrator-owned compaction when a step reaches `reviewed -> compact` (durable `stepSummary`).
 
 ## Runtime wiring (agent-side)
 
