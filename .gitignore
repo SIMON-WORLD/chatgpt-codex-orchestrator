@@ -1,0 +1,73 @@
+
+# ============================================================
+# chatgpt-codex-orchestrator — .gitignore
+# Purpose: keep runtime data, task state, logs, locks,
+# ready/token files, temp files, local data-root, and secrets
+# OUT of version control. Source (src/, scripts/, test/),
+# README.md, SKILL.md, and package.json are intentionally tracked.
+# ============================================================
+
+# --- Node / npm ---
+node_modules/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+yarn.lock
+package-lock.json
+*.tgz
+
+# --- Local durable data-root (must never be committed) ---
+# The orchestrator resolves a durable user data-root; if it is ever
+# pointed at a directory inside this repo, these guard against it.
+/orchestrator-data/
+.orchestrator-data/
+.orchdata/
+.orch-data/
+
+# --- Runtime data categories (defensive, top-level) ---
+# These are produced under dataRoot/tasks|logs|locks|projects|runtime.
+# A local data-root inside this repo would place them at repo root.
+/runtime/
+/tasks/
+/logs/
+/locks/
+/projects/
+/state/
+/.runtime/
+/.data/
+/data/
+
+# --- Per-runtime artifact extensions (any level) ---
+*.lock
+*.ready
+*.token
+*.tmp
+*.jsonl
+*.state.json
+*.task.json
+
+# --- Secrets / credentials ---
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+credentials/
+secrets/
+*.secret
+auth.json
+token.json
+service-account*.json
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.swp
+*.swo
+.vscode/
+.idea/
+
