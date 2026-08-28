@@ -2,11 +2,31 @@
   "name": "chatgpt-codex-orchestrator",
   "version": "0.1.0-alpha.1",
   "private": true,
+  "description": "Durable orchestration between ChatGPT as planner/reviewer and Codex as local executor.",
+  "keywords": [
+    "chatgpt",
+    "codex",
+    "orchestration",
+    "agent",
+    "automation",
+    "task-runner"
+  ],
+  "license": "MIT",
+  "author": "SIMON-WORLD",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues"
+  },
+  "homepage": "https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator#readme",
   "type": "module",
-  "description": "Reliable Brain Transport (M1) for ChatGPT-command orchestration via the Codex in-app browser.",
   "scripts": {
     "test": "node --test",
     "check": "node --check src/atomic-turn.js && node --check src/iab-transport.js && node --check src/index.js"
   },
-  "engines": { "node": ">=18" }
+  "engines": {
+    "node": ">=18"
+  }
 }

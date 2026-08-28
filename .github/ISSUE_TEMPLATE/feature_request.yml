@@ -1,0 +1,76 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[Feature]: "
+labels:
+  - enhancement
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting. This project is **Alpha**; roadmap items are planned, not promised.
+        Please read README.md and docs/architecture.md where relevant.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What concrete problem does this proposal solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: capability
+    attributes:
+      label: Proposed capability
+      description: What behavior or interface would you like?
+    validations:
+      required: true
+
+  - type: textarea
+    id: fit
+    attributes:
+      label: Why it belongs in this project
+      description: How does it fit the ChatGPT-planner / Codex-executor orchestration model?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Architecture impact
+      description: What does this affect?
+      options:
+        - Control protocol
+        - Task State / recovery
+        - Conversation binding
+        - Codex execution / runtime
+        - Context providers / redaction
+        - Public API
+        - Documentation / tooling only
+        - Unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: Acknowledgement
+      description: Please confirm.
+      options:
+        - label: I understand that a feature request is not a commitment or delivery promise.
+          required: true

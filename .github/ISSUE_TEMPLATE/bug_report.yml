@@ -1,0 +1,127 @@
+name: Bug report
+description: Report reproducible incorrect behavior
+title: "[Bug]: "
+labels:
+  - bug
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. This project is **Alpha** and behavior may change.
+        Please do not include secrets or private conversation contents in your report.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem description
+      description: What happened? What did you expect to happen?
+      placeholder: A clear, concise description of the incorrect behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: The smallest reproducible sequence.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / error
+      description: What actually happened. Include logs/error output.
+      placeholder: Paste logs/errors here. REDACT secrets, bearer tokens, cookies, API keys, private repository data, and private conversation content.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: "20.x"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Repository commit / version
+      placeholder: "v0.1.0-alpha.1 or commit SHA"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Conversation mode
+      description: "Which conversation mode did you use? Note that `conversation: 'current'` / `adopt-current` is experimental."
+      options:
+        - "conversation: 'new'"
+        - "conversation: 'current'"
+        - "Not applicable / unsure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Relevant component
+      description: The area you believe is involved.
+      options:
+        - Brain / IAB transport
+        - TaskService / TaskManager / state
+        - Protocol / acceptance-evidence gate
+        - Codex executor / worker / runtime host
+        - Recovery / locking
+        - Context / redaction
+        - Doctor / configuration
+        - Documentation
+        - Unsure / other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      placeholder: Anything else that may help.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: Acknowledgement
+      description: Please confirm before submitting.
+      options:
+        - label: I have removed sensitive values (credentials, bearer tokens, cookies, API keys, private repository data, and private conversation content) from this report.
+          required: true
+        - label: "I have checked that this behavior is not merely a documented experimental limitation (e.g. `conversation: 'current'` / `adopt-current`)."
+          required: true
