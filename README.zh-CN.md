@@ -88,6 +88,7 @@ await service.startTask({
 | `start` | `TaskService.startTask({ goal, repoDir, conversation: 'new' })` | 支持 |
 | `resume` | 恢复任务 / 分轮 `advanceTask` 循环 | 支持 |
 | `status` | `TaskService.getTaskStatus(taskId)` | 支持 |
+| `status:brain-command` | 只读检查：用户级 launcher Skill 是否可发现 + brain-command config 是否存在/可解析；打印 `orchestratorRoot` / `dataRoot` / `workspaceRoot` 与默认值；不输出任何 secret/token；正常退出 0，缺失或无效退出 1 | 支持 |
 | `cancel` | `TaskService.cancelTask(taskId)` | 支持 |
 | `adopt-current` | 在**当前** ChatGPT 会话中继续 | 实验性 |
 
@@ -96,6 +97,18 @@ await service.startTask({
 ```
 用 ChatGPT 指挥模式完成这个任务：<goal>
 ```
+
+## 只读状态检查（brain-command）
+
+运行 `npm run status:brain-command`（scripts/brain-command-status.mjs → `brainCommandStatus`）可只读检查 brain-command 是否已正确安装与配置。
+
+- 检查用户级 launcher Skill 是否可发现（`$HOME/.agents/skills/brain-command/SKILL.md`；兼容旧路径 `$CODEX_HOME/skills/...` 会被标记为 `WARN`）。
+- 检查 `$CODEX_HOME/brain-command/config.json` 是否存在且可解析。
+- 打印 `orchestratorRoot`、`dataRoot`、`workspaceRoot`、`defaultBrain`、`defaultExecutor`、`defaultConversationMode`。
+- 不输出任何 secret/token；整份 config 不会原样打印，仅暴露以上六个安全字段。
+- 配置缺失或无效时给出明确诊断并返回非零退出码；正常状态返回 0。
+
+该命令为只读，不改变任何编排核心语义。
 
 ## 在 `v0.1.0-alpha.1` 中支持
 

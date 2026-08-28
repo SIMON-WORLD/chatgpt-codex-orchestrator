@@ -148,6 +148,97 @@ export function setupBrainCommand({ codexHome: ch = codexHome(), home = userHome
   return { skillPath, configPath, config: merged };
 }
 
+// --- brain-command read-only status check (Alpha.2) ----------------------------
+// A deterministic, read-only self-check used by the `status:brain-command` CLI and
+// by library callers. It NEVER writes, NEVER echoes the raw config, and NEVER
+// exposes any secret/token field -- only the six known safe config fields plus
+// per-check diagnostics. Config missing/invalid yields a clear FAIL and a non-zero
+// exit code; a healthy install yields PASS and exit code 0.
+export function brainCommandStatus({ codexHome: ch = codexHome(), home = userHome() } = {}) {
+  const status = {
+    ok: false,
+    skill: { status: 'FAIL', discoverable: false, canonicalPath: null, legacyPath: null, reason: '' },
+    config: { status: 'FAIL', exists: false, parseable: false, file: null, error: null, reason: '' },
+    fields: null,
+    checks: [],
+    exitCode: 1,
+  };
+
+  // 1) user-level launcher Skill discoverable (canonical, with legacy fallback).
+  const canonical = installedBrainCommandSkillPath({ home });
+  const legacy = legacyBrainCommandSkillPath({ codexHome: ch });
+  const canonicalOk = fs.existsSync(canonical);
+  const legacyOk = fs.existsSync(legacy);
+  status.skill = {
+    status: canonicalOk ? 'PASS' : (legacyOk ? 'WARN' : 'FAIL'),
+    discoverable: canonicalOk || legacyOk,
+    canonicalPath: canonical,
+    legacyPath: legacy,
+    reason: canonicalOk ? 'canonical skill present' : (legacyOk ? 'legacy skill present (deprecated); run setup to migrate' : 'no brain-command skill found'),
+  };
+  status.checks.push({ check: 'brain-command-skill', status: status.skill.status, reason: status.skill.reason });
+
+  // 2) user-scoped config exists + parseable + valid.
+  const cfgFile = brainCommandConfigPath(ch);
+  status.config.file = cfgFile;
+  status.config.exists = fs.existsSync(cfgFile);
+  if (!status.config.exists) {
+    status.config.reason = `config not found: ${cfgFile}. Run brain-command setup (npm run setup:brain-command) first.`;
+    status.checks.push({ check: 'brain-command-config', status: 'FAIL', reason: status.config.reason });
+  } else {
+    try {
+      const cfg = loadBrainCommandConfig({ codexHome: ch });
+      status.config.status = 'PASS';
+      status.config.parseable = true;
+      status.config.reason = 'config present and parseable';
+      // Only the six safe fields are surfaced. The raw config object is never
+      // returned or printed, so any extra/secret field is intentionally excluded.
+      status.fields = {
+        orchestratorRoot: cfg.orchestratorRoot,
+        dataRoot: cfg.dataRoot,
+        workspaceRoot: cfg.workspaceRoot,
+        defaultBrain: cfg.defaultBrain,
+        defaultExecutor: cfg.defaultExecutor,
+        defaultConversationMode: cfg.defaultConversationMode,
+      };
+      status.checks.push({ check: 'brain-command-config', status: 'PASS', reason: cfgFile });
+    } catch (e) {
+      status.config.parseable = false;
+      status.config.error = e && e.message;
+      status.config.reason = e && e.message;
+      status.checks.push({ check: 'brain-command-config', status: 'FAIL', reason: status.config.reason });
+    }
+  }
+
+  status.ok = status.skill.discoverable && status.config.status === 'PASS';
+  status.exitCode = status.ok ? 0 : 1;
+  return status;
+}
+
+export function formatBrainCommandStatus(status) {
+  const lines = [];
+  lines.push('brain-command status');
+  lines.push('--------------------');
+  for (const c of (status && status.checks) || []) {
+    lines.push(String(c.status).padEnd(5) + ' ' + c.check + ' :: ' + c.reason);
+  }
+  if (status && status.config && status.config.status === 'PASS' && status.fields) {
+    lines.push('');
+    lines.push('configuration:');
+    lines.push('  orchestratorRoot: ' + status.fields.orchestratorRoot);
+    lines.push('  dataRoot:         ' + status.fields.dataRoot);
+    lines.push('  workspaceRoot:    ' + status.fields.workspaceRoot);
+    lines.push('  defaultBrain:     ' + status.fields.defaultBrain);
+    lines.push('  defaultExecutor:  ' + status.fields.defaultExecutor);
+    lines.push('  defaultConversationMode: ' + status.fields.defaultConversationMode);
+  }
+  lines.push('');
+  lines.push(status && status.ok
+    ? 'OK: brain-command is installed and configured.'
+    : 'NOT OK: see diagnostics above; run `npm run setup:brain-command` (or full doctor) to fix.');
+  return lines.join('\n');
+}
+
 // --- Broad-discovery telemetry (RFC §17 / §I) ----------------------------------
 // The fast path must contain no broad filesystem search. If any explicit fallback /
 // setup discovery path is used, it marks broadDiscoveryOccurred = true.

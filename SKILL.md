@@ -17,6 +17,7 @@ The canonical launcher Skill is **`brain-command`** (provider-neutral by name; d
 - `start` — `TaskService.startTask({ goal, repoDir, conversation: 'new' })`. New conversation + persistent Codex thread. (Default mode = `new`.)
 - `resume` — `TaskService.resumeTask({ taskId })` (or turn-sliced `advanceTask(taskId)` loop).
 - `status` — `TaskService.getTaskStatus(taskId)`.
+- `status:brain-command` — read-only check that the user-level launcher Skill is discoverable and the brain-command config exists/parses; prints `orchestratorRoot` / `dataRoot` / `workspaceRoot` and the defaults; never prints secrets; exit 0 healthy / 1 missing-or-invalid. `npm run status:brain-command` (scripts/brain-command-status.mjs).
 - `cancel` — `TaskService.cancelTask(taskId)`.
 - `adopt-current` — **EXPERIMENTAL** (`TaskService.adoptConversation`, conversation:'current'). Not a stable promise in this alpha because `tabs.selected()`/selected-tab identity is unstable across node-REPL invocations in the current Codex Desktop / IAB environment.
 

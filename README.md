@@ -89,6 +89,7 @@ These are the documented entry points (see [SKILL.md](SKILL.md) for the runtime 
 | `start` | `TaskService.startTask({ goal, repoDir, conversation: 'new' })` | Supported |
 | `resume` | Resume / turn-sliced `advanceTask` loop for a task | Supported |
 | `status` | `TaskService.getTaskStatus(taskId)` | Supported |
+| `status:brain-command` | Read-only check: user-level launcher Skill discoverable + brain-command config exists/parses; prints `orchestratorRoot` / `dataRoot` / `workspaceRoot` and the defaults; never prints secrets; exit 0 healthy, 1 missing-or-invalid | Supported |
 | `cancel` | `TaskService.cancelTask(taskId)` | Supported |
 | `adopt-current` | Continue in the *current* ChatGPT conversation | Experimental |
 
@@ -102,6 +103,7 @@ These are the documented entry points (see [SKILL.md](SKILL.md) for the runtime 
 
 - **One-time setup (user-runnable)** — run `npm run setup:brain-command` from the repository. It installs the launcher Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and creates/updates `$CODEX_HOME/brain-command/config.json`, deterministically resolving `orchestratorRoot` (repo root), `dataRoot`, and `workspaceRoot` (pass `--orchestrator-root`, `--data-root`, `--workspace-root` to override). It runs once; normal task startup never reruns it.
 - **`brain-command` launcher Skill** — the canonical user-facing entry. It resolves the user-scoped config at `$CODEX_HOME/brain-command/config.json`, resolves the repo deterministically, and runs a fast preflight (no broad filesystem discovery). One-time setup (`setupBrainCommand`) installs the launcher Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and writes the config; normal execution never reinstalls it.
+- **Read-only status check** — run `npm run status:brain-command` (scripts/brain-command-status.mjs → `brainCommandStatus`). It verifies the launcher Skill is discoverable at `$HOME/.agents/skills/brain-command/SKILL.md` (legacy `$CODEX_HOME/skills/...` is flagged as a warning), verifies `$CODEX_HOME/brain-command/config.json` exists and parses, then prints `orchestratorRoot`, `dataRoot`, `workspaceRoot`, `defaultBrain`, `defaultExecutor`, `defaultConversationMode`. It never prints secrets; exit code 0 = healthy, 1 = missing/invalid. Read-only and does not change orchestration semantics.
 - **Delta packet protocol** — `PLAN` / `REPLAN` are Brain → Orchestrator control/state operations (never forwarded to Codex); normal `TASK` / `RESULT` are compact by default; legacy text protocol stays a compatible fallback.
 - **Durable state (schema v1)** — `taskContract`, `plan`, `repoContext`, `verificationPolicy`, `stepSummaries`, `evidenceLedger`, `unresolvedRisks`, all hydrated at load time.
 - **Tiered verification** — step / milestone / final, with authority precedence (mandatory orchestrator boundary > Brain requested level > Codex local minimum).

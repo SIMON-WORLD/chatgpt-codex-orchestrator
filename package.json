@@ -24,8 +24,9 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/atomic-turn.js && node --check src/iab-transport.js && node --check src/index.js && node --check src/protocol.js && node --check src/task-state.js && node --check src/task-manager.js && node --check src/bootstrap.js && node --check src/verification.js",
-    "setup:brain-command": "node scripts/setup-brain-command.mjs"
+    "check": "node --check src/atomic-turn.js && node --check src/iab-transport.js && node --check src/index.js && node --check src/protocol.js && node --check src/task-state.js && node --check src/task-manager.js && node --check src/bootstrap.js && node --check src/verification.js && node --check scripts/brain-command-status.mjs",
+    "setup:brain-command": "node scripts/setup-brain-command.mjs",
+    "status:brain-command": "node scripts/brain-command-status.mjs"
   },
   "engines": {
     "node": ">=18"

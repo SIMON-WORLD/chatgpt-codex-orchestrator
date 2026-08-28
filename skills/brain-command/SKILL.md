@@ -94,6 +94,16 @@ This installs `$HOME/.agents/skills/brain-command/SKILL.md` (the canonical user 
 `$CODEX_HOME/brain-command/config.json`, preserving machine-local paths. Use an
 isolated `CODEX_HOME` when testing; the real user config is only written by setup.
 
+## Status check (read-only)
+
+From the orchestrator repository, verify that brain-command is correctly installed and configured:
+
+```
+npm run status:brain-command
+```
+
+Read-only. It checks that the user-level launcher Skill is discoverable at `$HOME/.agents/skills/brain-command/SKILL.md` (legacy `$CODEX_HOME/skills/...` is reported as `WARN`), checks that `$CODEX_HOME/brain-command/config.json` exists and parses, and then prints `orchestratorRoot`, `dataRoot`, `workspaceRoot`, `defaultBrain`, `defaultExecutor`, `defaultConversationMode`. It never prints secrets/tokens (the raw config is never echoed; only the six safe fields are surfaced). Exit code is 0 when healthy and non-zero when config is missing/invalid. `--json` is available for machine-readable output.
+
 ## Full doctor
 
 `fullDoctor` is used only for: initial setup, version/environment change,

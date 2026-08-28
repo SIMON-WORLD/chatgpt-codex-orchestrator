@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file. The format foll
 ## [Unreleased]
 
 No documented unreleased changes yet. Work is listed under the release it first appears in.
+### Added
+
+- Read-only brain-command status check: `npm run status:brain-command` (scripts/brain-command-status.mjs → `brainCommandStatus`). Verifies the user-level launcher Skill is discoverable and `$CODEX_HOME/brain-command/config.json` exists/parses, prints `orchestratorRoot` / `dataRoot` / `workspaceRoot` and the defaults, never prints secrets, and returns exit 0 (healthy) or 1 (missing/invalid). Does not change any orchestration core semantics.
 
 ## [0.1.0-alpha.2]
 
