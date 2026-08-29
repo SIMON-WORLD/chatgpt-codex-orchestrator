@@ -37,6 +37,39 @@ export class InAppBrowserTransport {
     return { tab, facade };
   }
 
+  // Find ChatGPT history conversation links whose accessible label matches `title`.
+  // Uses accessible name / text / ARIA and stable `a[href*="/c/"]` selectors, never a
+  // fragile fixed nth-child. Returns [{ id, href }].
+  async findConversationLinksByTitle(tab, title) {
+    return (await tab.playwright.evaluate((target) => {
+      const t = String(target || '').trim().toLowerCase();
+      const anchors = Array.from(document.querySelectorAll('a[href*="/c/"]'));
+      const seen = new Set();
+      const out = [];
+      for (const a of anchors) {
+        const label = (a.getAttribute('aria-label') || a.textContent || '').trim();
+        if (label.toLowerCase() === t) {
+          const href = a.getAttribute('href') || '';
+          const m = href.match(/\/c\/([a-zA-Z0-9-]+)/);
+          if (m && !seen.has(m[1])) { seen.add(m[1]); out.push({ id: m[1], href }); }
+        }
+      }
+      return out;
+    }, title));
+  }
+
+  // Open a found ChatGPT history conversation by clicking its link, then return the
+  // resulting page URL (used by adoptByTitle to capture the real /c/<id>).
+  async openConversationByHref(tab, href) {
+    await tab.playwright.evaluate((h) => {
+      const a = Array.from(document.querySelectorAll('a[href*="/c/"]')).find((x) => (x.getAttribute('href') || '') === h);
+      if (a) a.click();
+    }, href);
+    await tab.playwright.waitForLoadState('domcontentloaded').catch(() => {});
+    await tab.playwright.waitForTimeout(4000);
+    return await tab.url();
+  }
+
   async closeTab(tab) {
     if (!tab) return;
     try { await tab.close(); } catch (e) { /* best effort */ }

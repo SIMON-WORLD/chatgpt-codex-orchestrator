@@ -28,6 +28,8 @@ The default path is the **Direct Brain Loop**.
 
 After `DONE`, the publish gate (Brain = DONE, task completed, mandatory verification passed, no unrelated working-tree changes) allows a commit + fast-forward push.
 
+You can also adopt an existing ChatGPT history conversation as the Brain: `$brain-command --conversation "<title>"` / `--conversation-url <url>` / `--adopt-current` (no new conversation is created).
+
 **Legacy / experimental:** the detached worker / TaskService / nested-Codex runtime is retained but is no longer the default path (see `skills/brain-command/SKILL.md` and `docs/architecture.md`).
 
 ## Architecture

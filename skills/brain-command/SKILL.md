@@ -106,6 +106,43 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
 - a trusted-REPL long loop
 - a process shim
 
+## Existing ChatGPT conversation (adopt)
+
+By default `$brain-command <goal>` creates a **new** dedicated Brain conversation. To
+continue an existing ChatGPT history conversation, adopt it explicitly (no new
+conversation is created; the same conversation is reused for the whole loop):
+
+- `$brain-command --conversation "<title>"`       — find an existing conversation by title.
+- `$brain-command --conversation-url https://chatgpt.com/c/<id>` — open that conversation URL.
+- `$brain-command --adopt-current`                — adopt the currently selected IAB conversation (explicit opt-in).
+
+Natural-language equivalents: `使用 ChatGPT 历史会话 '...' 作为 Brain`, `继续我之前的 ChatGPT 对话`, `接上已有 ChatGPT conversation`.
+
+### Resolution priority (`provider.adoptConversation`)
+
+1. **conversationUrl / conversationId** — open the conversation URL and validate the real
+   `/c/<conversationId>`; on identity mismatch fail explicitly (no fallback).
+2. **title** — open `chatgpt.com`, use the existing login, locate a history conversation in the
+   ChatGPT UI (sidebar / search) by accessible name/text/ARIA and stable `a[href*="/c/"]`
+   selectors (never a fragile nth-child / UI index). Open it, capture the real `/c/<id>`,
+   and bind to the ID thereafter (not the title). Unique match -> open; no match -> report
+   without creating a new conversation; multiple matches -> `ASK_USER` / ambiguity (never guess).
+3. **explicit `--adopt-current`** — only when the user explicitly asks; reuses
+   `captureCurrentConversation()`.
+
+### Login
+
+Reuse the existing ChatGPT session/cookies in the built-in browser. Do not pre-block on a
+possible login; only `ASK_USER` to sign in when a real login page / session-expired / no-access
+is detected.
+
+### Takeover message
+
+After binding an existing conversation, send `DEFAULT_TAKEOVER_MESSAGE` from `src/direct-mode.js`
+(do **not** dump the full history — the conversation already owns it). Then enter the normal
+Direct Brain Loop. Persist `conversationId` / `conversationUrl` / `conversationTitle` in the
+minimal task state so a later resume reuses the same conversation directly.
+
 ## Legacy / experimental runtime
 
 The detached runtime is **legacy / experimental**, not the default:
@@ -126,6 +163,8 @@ interface BrainProvider {
   send(message)            // -> { reply, conversationId, conversationUrl }
   identifyConversation()   // -> { conversationId, conversationUrl, tabId } | null
   resume({ tabId, conversationId, conversationUrl })  // -> BrainProvider
+  adoptConversation({ conversationUrl?, conversationId?, title? })  // -> identity (no new conversation)
+  adoptCurrent()           // -> identity (adopt the currently selected IAB conversation)
 }
 ```
 
@@ -133,7 +172,7 @@ Canonical implementation: `ChatGPTBrowserProvider` (`createChatGPTBrowserProvide
 
 ## Minimal state
 
-Normal Direct Mode does not require a daemon. If a minimal task record is useful, `newDirectTaskState` keeps only: `taskId`, `repoDir`, `brainProvider`, `executor`, `conversationId`, `conversationUrl`, `plan`, `currentStepId`, `completedSteps`, `evidenceLedger`, `publishPolicy`. State persistence must never block the normal run; complex crash recovery is a later enhancement, not a P0.
+Normal Direct Mode does not require a daemon. If a minimal task record is useful, `newDirectTaskState` keeps only: `taskId`, `repoDir`, `brainProvider`, `executor`, `conversationId`, `conversationUrl`, `conversationTitle`, `plan`, `currentStepId`, `completedSteps`, `evidenceLedger`, `publishPolicy`. State persistence must never block the normal run; complex crash recovery is a later enhancement, not a P0.
 
 ## Scope boundaries (current Batch)
 

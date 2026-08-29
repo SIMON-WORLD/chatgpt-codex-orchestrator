@@ -11,6 +11,8 @@ Drives a ChatGPT <-> Codex loop. The agent drives it; the user only speaks the g
 
 The canonical launcher Skill is **`brain-command`**. Its default path is the **Direct Brain Loop**: the current Codex agent uses the built-in browser to open/reuse one ChatGPT conversation, sends the goal + governance contract, receives `PLAN` / `TASK`, executes the `TASK` itself, sends a compact `RESULT` back to the same conversation, and repeats until `DONE` (then runs the publish gate). Provider-neutral by name; **Default Brain = ChatGPT**, **Default Executor = the current Codex agent**. See `skills/brain-command/SKILL.md`. Normal startup does NOT inspect orchestrator source and does NOT do broad filesystem discovery.
 
+**Existing conversation:** `$brain-command --conversation "<title>"` / `--conversation-url <url>` / `--adopt-current` continue an existing ChatGPT conversation (no new conversation). By default a new dedicated Brain conversation is created.
+
 ## Legacy / experimental runtime (not the default)
 
 The detached worker/TaskService runtime is legacy / experimental, retained for compatibility:

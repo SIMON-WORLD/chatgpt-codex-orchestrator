@@ -28,6 +28,8 @@
 
 `DONE` 后经发布门禁（Brain=DONE、任务完成、强制验证通过、工作树无无关改动）才 commit 并 fast-forward push。
 
+也可接管已有 ChatGPT 历史会话作为 Brain：`$brain-command --conversation "<标题>"` / `--conversation-url <url>` / `--adopt-current`（不新建会话）。
+
 **Legacy / experimental：** 分离的 worker / TaskService / 嵌套 Codex runtime 保留，但不再是默认路径（见 `skills/brain-command/SKILL.md` 与 `docs/architecture.md`）。
 
 ## 架构
