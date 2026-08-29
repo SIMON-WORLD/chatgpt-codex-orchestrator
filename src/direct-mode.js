@@ -71,6 +71,8 @@ export const DEFAULT_TAKEOVER_MESSAGE = [
   '- Codex returns compact RESULT evidence.',
   '- No force push or rewrite of published history; publish only after DONE + publish gate.',
   'Governance: PLAN comprehensively once, then prefer milestone-sized TASKs that combine coherent implementation work that can be executed and reviewed together; return to the Brain only at meaningful review/decision boundaries. REVISE remains available whenever evidence fails.',
+  'Bootstrap evidence (read-only): repoDir, currentBranch, HEAD, git status --short summary, origin/main divergence.',
+  'Lifecycle: PUBLISH (publication transaction + external observable readback) precedes terminal DONE; DONE is terminal and no further control is valid.',
   'Provide the next control for continuing the project.',
 ].join('\n');
 

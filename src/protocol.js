@@ -6,10 +6,21 @@
 import crypto from 'node:crypto';
 import { parseControl as legacyParseControl, extractDirective } from './directives.js';
 
-export const CONTROLS = ['TASK', 'REVISE', 'ASK_USER', 'DONE', 'PLAN', 'REPLAN'];
+export const CONTROLS = ['TASK', 'REVISE', 'ASK_USER', 'DONE', 'PLAN', 'REPLAN', 'PUBLISH'];
+export const TERMINAL_CONTROLS = ['DONE'];
 export const RESULT_STATUSES = ['success', 'failure', 'unknown'];
 export const EVIDENCE_KINDS = ['command', 'test', 'file', 'diff', 'verify'];
 export const VERIFICATION_LEVELS = ['step', 'milestone', 'final'];
+
+// Lifecycle: PUBLISH is a non-terminal control used between TASK/REVISE and the
+// terminal DONE. DONE is terminal: after it, TASK / REVISE / REPLAN / PUBLISH are
+// invalid (a new control is never accepted, and DONE is never authorization to publish).
+export function isTerminalControl(control) { return TERMINAL_CONTROLS.includes(String(control)); }
+
+export function validateLifecycleAfterDone(control) {
+  if (isTerminalControl(control)) return { ok: true, terminal: true };
+  return { ok: false, terminal: true, reason: 'DONE is terminal; TASK / REVISE / REPLAN / PUBLISH are invalid after DONE' };
+}
 
 export class ProtocolError extends Error {
   constructor(msg) { super(msg); this.name = 'ProtocolError'; }

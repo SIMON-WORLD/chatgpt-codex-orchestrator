@@ -45,6 +45,34 @@ Established once per task; the Brain does not repeat these defaults inside every
 - Publish only after `DONE` + publish gate.
 
 
+## Acceptance, proof ledger & verification
+
+- `acceptance[]` on a structured `TASK` / `REVISE` is a machine contract. Every `RESULT` evidence item must carry an `acceptanceId`.
+- A TASK / milestone is only `reviewed`/`completed` when EVERY required `acceptanceId` has evidence `status === 'pass'` (`evaluateDirectAcceptanceGate`). The executor's natural-language summary does NOT override the gate; unknown / missing evidence is not pass, and evidence is never invented.
+- A Direct Mode `proofLedger` (`createProofLedger`) records reusable proofs (`acceptanceId`, `status`, kind/summary, verification command/test identity, relevant file fingerprints, `createdAt`/`stepId`). A proof stays fresh only while its relevant dependencies are byte-for-byte unchanged (`isReusable`); a changed dependency makes it stale, and stale/missing/failed required proofs must be verified again before a milestone/final gate.
+- Verification tiers use the ledger (`planVerification` / `verifyTierPrecondition`): STEP = targeted/syntax; MILESTONE = milestone gate + reusable fresh proofs; FINAL = all required proofs fresh/pass. Do NOT blindly rerun a fresh proof whose inputs are unchanged (the Brain may always escalate verification).
+
+## Terminal lifecycle (PUBLISH before DONE)
+
+```
+PLAN
+→ TASK / REVISE / REPLAN
+→ PUBLISH
+→ publication transaction → publish RESULT (external observable evidence)
+→ external readback → Brain review
+→ REVISE if needed
+→ terminal DONE
+```
+
+- `PUBLISH` is a non-terminal control. `DONE` is **terminal**: after `DONE`, `TASK` / `REVISE` / `REPLAN` / `PUBLISH` are invalid (`validateLifecycleAfterDone`).
+- Use `createPublicationTransaction` for the safe sequence: final acceptance gate → identity preflight → fetch → verify `origin/main` baseline → create commit → re-check remote race → require fast-forward → push (no force) → optional tag / GitHub Release → external readback. If `origin/main` moves unexpectedly, STOP/REPLAN; never force.
+- `publicationReadyForDone` requires external observable evidence (remote main SHA, tag SHA, Release existence/draft/prerelease, title/body) before a terminal `DONE`.
+
+## Bootstrap evidence & metrics
+
+- On the first Brain takeover, send a small read-only bootstrap packet (`buildBootstrapEvidence`): `repoDir`, `currentBranch`, `HEAD`, `git status --short` summary, `origin/main` divergence. Keep it compact; do not require a separate standalone baseline TASK unless the project really needs deeper inspection.
+- Track minimal in-memory Direct run metrics (`createDirectMetrics`): duration, timeToFirstBrainControl, brainTurns, taskCount, reviseCount, replanCount, askUserCount, publishCount, replyTimeoutCount, browserRecoveryCount, conversationSwitchCount, reusedProofCount, staleProofCount, verificationRuns, publishRetryCount. No telemetry backend / no prompt or raw-log persistence.
+
 ## Run (canonical default path)
 
 For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do not inspect the orchestrator's implementation source during normal startup.** The goal is to get ChatGPT guiding as fast as possible — the only delays should be the browser/tool and ChatGPT's own response latency.
@@ -76,7 +104,7 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
 
    Do **not** dump large repo history/source on the first message.
 
-5. **Parse the Brain's control.** Use `parseBrainOutput` / `parseEvidenceBlock` from `src/protocol.js` to turn the reply into a structured control (`PLAN`, `TASK`, `REVISE`, `ASK_USER`, `DONE`, `REPLAN`). A `PLAN` is followed by a concrete `TASK`.
+5. **Parse the Brain's control.** Use `parseBrainOutput` / `parseEvidenceBlock` from `src/protocol.js` to turn the reply into a structured control (`PLAN`, `TASK`, `REVISE`, `ASK_USER`, `DONE`, `REPLAN`, `PUBLISH`). A `PLAN` is followed by a concrete `TASK`.
 
 6. **Execute the TASK in the current Codex agent.** Do **not** start a nested Codex, do not start a worker, do not wait on a ready file. The current Codex agent is the executor. Do the work, collect real evidence, and verify.
 
@@ -92,9 +120,9 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
 
    The RESULT should carry only what the Brain needs for its next decision: `stepId`, `status`, `summary`, `changed`, `evidence`, `blockers`.
 
-8. **Review loop.** The same ChatGPT conversation returns the next control (`TASK` / `REVISE` / `REPLAN` / `ASK_USER` / `DONE`). Keep the same conversation; do not resend the full goal/plan/raw logs each turn.
+8. **Review loop.** The same ChatGPT conversation returns the next control (`TASK` / `REVISE` / `REPLAN` / `PUBLISH` / `ASK_USER` / `DONE`). Keep the same conversation; do not resend the full goal/plan/raw logs each turn.
 
-9. **DONE + publish gate.** On `DONE`, run mandatory verification, a repo final check, and a working-tree scope check, then use the publish gate:
+9. **PUBLISH then terminal DONE.** On `PUBLISH`, run the publication transaction (`createPublicationTransaction`), collect external observable evidence, and have the Brain review. On `DONE`, run mandatory verification, a repo final check, and a working-tree scope check, then use the publish gate: On `DONE`, run mandatory verification, a repo final check, and a working-tree scope check, then use the publish gate:
 
    ```js
    const { evaluatePublishGate } = await import('<orchestratorRoot>/src/direct-mode.js');

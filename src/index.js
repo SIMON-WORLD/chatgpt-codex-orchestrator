@@ -35,6 +35,8 @@ export { loadBrainCommandConfig, writeBrainCommandConfig, codexHome, brainComman
 export { resolveVerificationLevel, shouldRunFullSuite, resolveVerificationCommands, buildVerificationPlan, normalizeVerificationPolicy, canDowngrade, VERIFICATION_TIERS, TIER_RANK, VerificationPolicyError, isMandatoryBoundary, assertMandatoryVerification } from './verification.js';
 
 export * as publish from './publish-policy.js';
+export { evaluateDirectAcceptanceGate, createProofLedger, planVerification, verifyTierPrecondition, buildBootstrapEvidence, createDirectMetrics, attemptLateReplyRecovery } from './direct-governance.js';
+export { createPublicationTransaction, publicationReadyForDone, buildExternalEvidence, parseRemoteRef } from './publication-transaction.js';
 
 export { CodexWorkerClient } from './worker-client.js';
 export { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, BRAIN_PROVIDERS, DEFAULT_TAKEOVER_MESSAGE, ConversationNotFoundError, ConversationAmbiguityError, newDirectTaskState, evaluatePublishGate, isPublishForbiddenState } from './direct-mode.js';
