@@ -1,9 +1,10 @@
 // chatgpt-codex-orchestrator: brain-command CANONICAL IAB/REPL launcher (Alpha.2).
 //
 // Deterministic sequence for `$brain-command <goal>`:
-//   load config -> deterministic repo resolution -> fast preflight -> (worker is
-//   started by the ordinary-node entrypoint) -> open ChatGPT Brain ->
-//   TaskService.createTask -> advanceTask loop -> DONE / ASK_USER / recovery_required.
+//   load config -> deterministic repo resolution -> fast preflight (trusted-REPL
+//   aware) -> (worker is started by the ordinary-node entrypoint) -> open ChatGPT
+//   Brain -> TaskService.createTask -> advanceTask loop -> DONE / ASK_USER /
+//   recovery_required.
 //
 // Runs in the Codex node-REPL (owns the in-app-browser BrainSession). It does NOT
 // inspect implementation source: it only uses the public bootstrap + TaskService API.
@@ -11,25 +12,25 @@
 // scripts/brain-command-worker.mjs (it writes the deterministic ready file). On every
 // terminal/error path the worker is shut down automatically.
 //
-// Durable state: TaskService/TaskManager persistence is async and backed by the
-// Codex worker host, so task state lives under config.dataRoot (the worker owns the
-// data root). The launcher binds the worker client to the generated taskId so every
-// request carries the task identity.
+// Runtime environment: the REPL may not expose a global `process`. All env/cwd/home
+// access goes through the runtime-env adapter (src/runtime-env.js) which reads the real
+// process in normal Node and the safe nodeRepl surface in the trusted REPL. The agent
+// never shims `process`, never passes preflight:false, and never supplies a ready file.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { loadBrainCommandConfig, resolveRepoDir, fastPreflight } from '../src/bootstrap.js';
 import { TaskService } from '../src/task-service.js';
 import { CodexWorkerClient } from '../src/worker-client.js';
 import { InAppBrowserTransport, openBrainSession, openBrainSessionExisting } from '../src/iab-transport.js';
-import { runtimePaths } from '../src/runtime-paths.js';
+import { runtimePaths, canonicalReadyFile } from '../src/runtime-paths.js';
+import { getCwd, getCodexHome, isTrustedRepl } from '../src/runtime-env.js';
 
 export class BrainCommandLaunchError extends Error {
   constructor(msg, extra = {}) { super(msg); this.name = 'BrainCommandLaunchError'; Object.assign(this, extra); }
 }
 
-export function codexHomePath(env = process.env, homeDir = os.homedir()) {
-  return env.CODEX_HOME || path.join(homeDir, '.codex');
+export function codexHomePath(scope = undefined) {
+  return getCodexHome(scope);
 }
 
 export function loadConfig(configPath = null, codexHome = codexHomePath()) {
@@ -38,8 +39,9 @@ export function loadConfig(configPath = null, codexHome = codexHomePath()) {
   return loadBrainCommandConfig({ codexHome });
 }
 
+// Deterministic worker ready-file path (shared with the worker bootstrap).
 export function defaultReadyFile(dataRoot) {
-  return path.join(runtimePaths(dataRoot).runtime, 'brain-command.ready.json');
+  return canonicalReadyFile(dataRoot);
 }
 
 // `executor` facade used by TaskService; forwards to the worker.
@@ -106,8 +108,9 @@ export async function runTaskLoop({ svc, taskId, brain, executor, maxRounds = In
 }
 
 // Canonical brain-command launcher. `worker`/`brainSession` may be injected for
-// offline tests; otherwise the worker is read from the ready file and the Brain is
-// opened in the in-app browser.
+// offline tests; otherwise the worker is read from the canonical ready file and the
+// Brain is opened in the in-app browser. `envScope` may be injected in tests to
+// simulate a trusted-REPL-like environment (no global process); normal callers omit it.
 export async function runBrainCommand({
   goal,
   config = null,
@@ -120,11 +123,13 @@ export async function runBrainCommand({
   maxRounds = Infinity,
   turnOptions = {},
   preflight = true,
+  envScope = undefined,
 } = {}) {
   if (!goal) throw new BrainCommandLaunchError('goal is required');
 
-  const cfg = config || loadConfig(configPath, codexHomePath());
-  const r = resolveRepoDir({ cwd: process.cwd(), explicitRepoPath: null, explicitGitHubRepo: null, config: cfg });
+  const trustedRepl = isTrustedRepl(envScope);
+  const cfg = config || loadConfig(configPath, getCodexHome(envScope));
+  const r = resolveRepoDir({ cwd: getCwd(envScope), explicitRepoPath: null, explicitGitHubRepo: null, config: cfg });
   if (!r.repoDir) throw new BrainCommandLaunchError('repo not resolvable: ' + r.source);
   const targetRepo = repoDir || r.repoDir;
 
@@ -142,12 +147,15 @@ export async function runBrainCommand({
   }
 
   if (preflight) {
-    // data-root writability is owned/checked by the worker bootstrap (it writes there).
+    // For the trusted REPL, data-root writability is owned/checked by the worker
+    // bootstrap (it writes there); the launcher must NOT fail because it personally
+    // cannot write the data root. We pass dataRootWritable=true to reflect that the
+    // worker already verified+owns it. IAB is probed here.
     const pre = fastPreflight({
       config: cfg,
-      probes: { cwd: process.cwd(), repoDir: r.repoDir, repoExists: true, dataRootWritable: true, iabCallable },
+      probes: { cwd: getCwd(envScope), repoDir: r.repoDir, repoExists: true, dataRootWritable: true, iabCallable },
     });
-    if (!pre.pass) throw new BrainCommandLaunchError('fast preflight failed', { checks: pre.checks, iabCallable });
+    if (!pre.pass) throw new BrainCommandLaunchError('fast preflight failed', { checks: pre.checks, iabCallable, trustedRepl });
   }
 
   const dataRoot = cfg.dataRoot;
@@ -156,7 +164,7 @@ export async function runBrainCommand({
     const rf = readyFile || defaultReadyFile(dataRoot);
     if (!fs.existsSync(rf)) {
       throw new BrainCommandLaunchError(
-        'worker not started: run the worker bootstrap first (node <orchestratorRoot>/scripts/brain-command-worker.mjs --config "<config>" --ready-file "<readyFile>")',
+        'worker not started: run the worker bootstrap first (node <orchestratorRoot>/scripts/brain-command-worker.mjs --config "<config>")',
         { readyFile: rf }
       );
     }

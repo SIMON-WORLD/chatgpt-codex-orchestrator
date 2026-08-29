@@ -4,18 +4,18 @@
 // does NOT perform broad filesystem discovery, search for old bridge Skills, or
 // rediscover the orchestrator installation. Full doctor is kept for setup/failure.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { probeWritable } from './data-root.js';
 import { doctorStatic, DEFAULT_CODEX_JS } from './doctor.js';
+import { getEnv, getHomeDir } from './runtime-env.js';
 
 export class BrainCommandConfigError extends Error {
   constructor(msg) { super(msg); this.name = 'BrainCommandConfigError'; }
 }
 
 // $CODEX_HOME defaults to ~/.codex when not configured.
-export function codexHome(env = (typeof process !== 'undefined' ? process.env : {}), homeDir = os.homedir()) {
+export function codexHome(env = getEnv(), homeDir = getHomeDir()) {
   return env.CODEX_HOME || path.join(homeDir, '.codex');
 }
 
@@ -89,7 +89,7 @@ export function inferRepoRoot(metaUrl = import.meta.url) {
 // machine config stays at $CODEX_HOME/brain-command/config.json.
 
 // Resolve the user home without hard-coding a platform-specific absolute path.
-export function userHome(env = (typeof process !== 'undefined' ? process.env : {}), homeDir = os.homedir()) {
+export function userHome(env = getEnv(), homeDir = getHomeDir()) {
   return env.HOME || env.USERPROFILE || homeDir;
 }
 

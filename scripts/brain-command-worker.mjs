@@ -2,38 +2,39 @@
 // Run by the ENVIRONMENT (exec_command), NOT by the node REPL, so the worker is not a
 // sandboxed descendant. It derives repoDir/dataRoot from the user config (resolveRepoDir)
 // and starts the long-lived worker host, writing the deterministic ready file. Because
-// the caller only passes --config and --ready-file (no repo path with spaces), no manual
-// Start-Process quoting is needed.
+// the caller only passes --config (no --repo, no --ready-file, no path quoting) the
+// canonical ready-file path is derived automatically and always matches the IAB launcher.
 import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
 import { loadBrainCommandConfig, resolveRepoDir, fastPreflight } from '../src/bootstrap.js';
+import { getCodexHome, getCwd } from '../src/runtime-env.js';
+import { canonicalReadyFile } from '../src/runtime-paths.js';
 import { startWorkerHost } from './codex-worker-host.mjs';
 
 function arg(n){ const i = process.argv.indexOf(n); return i >= 0 ? process.argv[i+1] : null; }
 const has = (n) => process.argv.includes(n);
 
 async function main() {
-  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
   const configPath = arg('--config');
+  const codexHome = arg('--codex-home') || getCodexHome();
   const config = configPath
     ? JSON.parse(fs.readFileSync(configPath, 'utf8'))
     : loadBrainCommandConfig({ codexHome });
 
-  const r = resolveRepoDir({ cwd: process.cwd(), explicitRepoPath: null, explicitGitHubRepo: null, config });
+  const r = resolveRepoDir({ cwd: getCwd(), explicitRepoPath: null, explicitGitHubRepo: null, config });
   if (!r.repoDir) throw new Error('repo not resolvable: ' + r.source);
 
   // Worker side cannot probe the in-app-browser; that is the IAB launcher's job (it
   // probes the transport next). So the iab-callable check is left DEFERRED here, which
-  // is honest and does not block startup.
-  const pre = fastPreflight({ config, probes: { cwd: process.cwd(), repoDir: r.repoDir, repoExists: true } });
+  // is honest and does not block startup. The worker DOES own data-root writability,
+  // the Codex executable check, and the runtime dirs.
+  const pre = fastPreflight({ config, probes: { cwd: getCwd(), repoDir: r.repoDir, repoExists: true } });
   if (!pre.pass) {
     const fails = pre.checks.filter((c) => c.status !== 'PASS' && c.status !== 'DEFERRED').map((c) => `${c.check}: ${c.reason}`).join('; ');
     throw new Error('fast preflight failed: ' + fails);
   }
 
   const dataRoot = arg('--data-root') || config.dataRoot;
-  const readyFile = arg('--ready-file') || path.join(dataRoot, 'runtime', 'brain-command.ready.json');
+  const readyFile = arg('--ready-file') || canonicalReadyFile(dataRoot);
 
   const { info, shutdown } = await startWorkerHost({
     repoDir: r.repoDir,

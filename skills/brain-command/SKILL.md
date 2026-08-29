@@ -23,7 +23,10 @@ Do **not** trigger for ordinary local-only coding.
 For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do not
 inspect or read the orchestrator's `bootstrap.js` / `runtime-host.mjs` /
 `worker-host.mjs` source during normal startup** — the launcher does that wiring for
-you. You only need the two fixed entrypoints below.
+you. You only need the two fixed entrypoints below. The runtime environment is
+abstracted by `src/runtime-env.js` (real `process` in normal Node; the safe
+`nodeRepl` surface in the trusted Codex REPL), so you never create a `process` shim
+and never pass `preflight: false`.
 
 1. **Load config (always).** The user-scoped config is `$CODEX_HOME/brain-command/config.json`
    (`$CODEX_HOME` defaults to `~/.codex`). It defines `orchestratorRoot`, `dataRoot`,
@@ -33,13 +36,14 @@ you. You only need the two fixed entrypoints below.
    ordinary Node process (via the environment, not the node REPL):
 
    ```
-   node "<orchestratorRoot>/scripts/brain-command-worker.mjs" --config "<configPath>" --ready-file "<readyFile>"
+   node "<orchestratorRoot>/scripts/brain-command-worker.mjs" --config "<configPath>"
    ```
 
-   This resolves the repo + data root from config, runs the fast preflight, and starts
-   the long-lived Codex worker, writing a deterministic ready file. It requires no
-   `--repo` (paths with spaces are handled internally) and no manual quoting hacks.
-   Optional: `--bypass`, `--session <codexSessionId>`, `--port N`.
+   Do **not** pass `--ready-file` or `--repo`. The worker resolves the repo + data root
+   from config, runs the worker-side preflight (data-root writability, Codex executable,
+   runtime dirs), and writes the deterministic ready file at
+   `<config.dataRoot>/runtime/brain-command.ready.json`. Optional: `--bypass`,
+   `--session <codexSessionId>`, `--port N`.
 
 3. **Invoke the canonical launcher (IAB/REPL entrypoint).** In the Codex node REPL:
 
@@ -49,11 +53,13 @@ you. You only need the two fixed entrypoints below.
    nodeRepl.write(JSON.stringify(result, null, 2));
    ```
 
-   The launcher loads config, resolves the repo, runs fast preflight, reads the worker's
-   ready file, opens the ChatGPT Brain, and drives `TaskService.createTask` → repeated
-   `advanceTask` until `DONE` / `ASK_USER` / `recovery_required`. It shuts the worker
-   down automatically on every terminal/error path and returns
+   The launcher loads config, resolves the repo, probes the in-app-browser (IAB), reads
+   the canonical worker ready file, opens the ChatGPT Brain, and drives
+   `TaskService.createTask` → repeated `advanceTask` until `DONE` / `ASK_USER` /
+   `recovery_required`. It binds the worker client to the generated `taskId` and shuts
+   the worker down automatically on every terminal/error path. Returns
    `{ taskId, status, lastControl, rounds, conversationId, conversationUrl, ownedTabId, repoDir }`.
+   No `process` shim, no `preflight:false`, no source inspection.
 
 4. **Defaults.** `conversation = 'new'` is the default; `Brain = ChatGPT`, `Executor = Codex`.
 
@@ -96,6 +102,10 @@ when extending the launcher. Not part of normal startup.
   `resolveOrchestratorRoot`, `fastPreflight`, `fullDoctor`, `setupBrainCommand`,
   `brainCommandStatus`. `fastPreflight` checks: install resolvable, repo resolvable,
   Codex executable available, data root writable, IAB/Brain transport callable.
+- Runtime environment adapter (`src/runtime-env.js`): `getRuntimeEnv`, `getCwd`,
+  `getEnv`, `getHomeDir`, `getCodexHome`, `isTrustedRepl`. Normal Node uses the real
+  `process`; the trusted Codex REPL uses the safe `nodeRepl` surface (no `process`
+  shim). `canonicalReadyFile()` lives in `src/runtime-paths.js`.
 - `fullDoctor` is only for initial setup, environment change, fast-preflight failure,
   or an explicit request — not required on every task.
 - Canonical launcher (`scripts/brain-command-launcher.mjs`): `runBrainCommand`,

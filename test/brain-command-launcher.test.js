@@ -78,3 +78,69 @@ test('launcher source uses TaskService/advanceTask and does NOT import LoopContr
   assert.ok(src.includes('createTask'));
   assert.ok(!src.includes('loop-controller'), 'launcher must not import legacy LoopController');
 });
+
+// --- trusted-REPL runtime adapter coverage (no process shim, no preflight:false) ---
+import { canonicalReadyFile, runtimePaths } from '../src/runtime-paths.js';
+import { isTrustedRepl } from '../src/runtime-env.js';
+import { fastPreflight } from '../src/bootstrap.js';
+import { defaultReadyFile, codexHomePath } from '../scripts/brain-command-launcher.mjs';
+
+// Mimics the Codex trusted REPL: nodeRepl.rpc available, but scope exposes NO process.
+function trustedLauncherScope({ cwd }) {
+  return { nodeRepl: { rpc() { return null; }, env: {}, cwd, homeDir: null } };
+}
+
+test('worker bootstrap and launcher agree on the canonical ready-file path automatically', () => {
+  const dataRoot = path.join(os.tmpdir(), 'bc-ready-' + Date.now());
+  const expected = path.join(runtimePaths(dataRoot).runtime, 'brain-command.ready.json');
+  assert.strictEqual(canonicalReadyFile(dataRoot), expected);
+  assert.strictEqual(defaultReadyFile(dataRoot), expected, 'launcher defaultReadyFile === canonicalReadyFile');
+  // Worker bootstrap derives the same canonical path when --ready-file is omitted.
+  const workerSrc = fs.readFileSync(path.join(process.cwd(), 'scripts', 'brain-command-worker.mjs'), 'utf8');
+  assert.ok(workerSrc.includes('canonicalReadyFile(dataRoot)'), 'worker derives the canonical ready file');
+});
+
+test('preflight ownership: trusted-REPL launcher passes dataRootWritable=true and does not require preflight:false', () => {
+  const repo = tmpRepo();
+  const cfg2 = cfg(repo);
+  cfg2.codexJs = path.join(repo, 'codex.js');
+  fs.mkdirSync(path.dirname(cfg2.codexJs), { recursive: true });
+  fs.writeFileSync(cfg2.codexJs, '//', 'utf8');
+  // Trusted-REPL probe set: IAB callable, data root owned by worker -> PASS.
+  const ok = fastPreflight({ config: cfg2, probes: { cwd: repo, repoDir: repo, repoExists: true, dataRootWritable: true, iabCallable: true } });
+  assert.strictEqual(ok.pass, true, JSON.stringify(ok.checks));
+  const dr = ok.checks.find((c) => c.check === 'data-root-writable');
+  assert.strictEqual(dr.status, 'PASS', 'worker-owned data root does not fail the REPL');
+  // A genuinely broken IAB is still reported honestly.
+  const ko = fastPreflight({ config: cfg2, probes: { cwd: repo, repoDir: repo, repoExists: true, dataRootWritable: true, iabCallable: false } });
+  assert.strictEqual(ko.pass, false);
+  assert.ok(ko.checks.some((c) => c.check === 'iab-callable' && c.status === 'FAIL'));
+});
+
+test('runBrainCommand initializes in a trusted-REPL-like scope without a process global shim', async () => {
+  const repo = tmpRepo();
+  const cfgPath = path.join(repo, 'bc-config.json');
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg(repo)), 'utf8');
+  const worker = new MockWorker();
+  const brain = new MockBrain([TASK, 'DONE']);
+  const envScope = trustedLauncherScope({ cwd: repo });
+  const r = await runBrainCommand({ goal: 'g', config: null, configPath: cfgPath, repoDir: repo, worker, brainSession: brain, preflight: false, envScope });
+  assert.strictEqual(r.status, 'completed');
+  assert.strictEqual(r.terminal, true);
+  assert.strictEqual(isTrustedRepl(envScope), true, 'scope is detected as trusted REPL');
+  assert.strictEqual(r.repoDir, repo);
+});
+
+test('launcher codexHomePath resolves without a process global', () => {
+  const scope = trustedLauncherScope({ cwd: 'C:\\x' });
+  assert.strictEqual(path.basename(codexHomePath(scope)), '.codex');
+});
+
+test('launcher uses the runtime-env adapter and never monkey-patches globalThis.process', () => {
+  const src = fs.readFileSync(path.join(process.cwd(), 'scripts', 'brain-command-launcher.mjs'), 'utf8');
+  assert.ok(src.includes('getCwd'), 'launcher uses runtime env cwd');
+  assert.ok(src.includes('getCodexHome'), 'launcher uses runtime env codex home');
+  assert.ok(!src.includes('globalThis.process'), 'no globalThis.process monkey-patch');
+  assert.ok(!/\bprocess\s*=/.test(src), 'no process assignment');
+  assert.ok(/preflight = true/.test(src), 'preflight stays default-true for the canonical path');
+});
