@@ -7,6 +7,10 @@ import { AtomicTurnController, extractConversationId } from './atomic-turn.js';
 const DEFAULT_BROWSER_CLIENT_PATH =
   'file:///C:/Users/Administrator/.codex/plugins/cache/openai-bundled/chrome/26.820.71523/scripts/browser-client.mjs';
 
+export class IABUnavailableError extends Error {
+  constructor(msg) { super(msg); this.name = 'IABUnavailableError'; }
+}
+
 export class InAppBrowserTransport {
   constructor({ browserClientPath } = {}) {
     this.browserClientPath = browserClientPath || DEFAULT_BROWSER_CLIENT_PATH;
@@ -18,12 +22,18 @@ export class InAppBrowserTransport {
     if (this.agent) return this;
     const { setupBrowserRuntime } = await import(this.browserClientPath);
     this.agent = await setupBrowserRuntime();
+    // Canonical brain-command Direct Mode uses the Codex in-app browser (iab) ONLY.
+    // There is no fallback to getForUrl / Edge / Chrome / any external browser.
+    let browser = null;
     try {
-      this.browser = await this.agent.browsers.get('iab');
+      browser = await this.agent.browsers.get('iab');
     } catch (e) {
-      this.browser = await this.agent.browsers.getForUrl('https://chatgpt.com/');
+      browser = null;
     }
-    if (!this.browser) throw new Error('no browser available: could not get the Codex in-app browser');
+    if (!browser) {
+      throw new IABUnavailableError('Codex in-app browser (iab) is unavailable; brain-command Direct Mode requires the IAB and will NOT fall back to an external browser (Edge/Chrome)');
+    }
+    this.browser = browser;
     return this;
   }
 

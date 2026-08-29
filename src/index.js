@@ -2,7 +2,7 @@ export {
   BrainSession,
   InAppBrowserTransport,
   createTabFacade,
-  openBrainSession, openBrainSessionExisting, openCurrentConversation, captureCurrentConversation, reopenConversationFromBinding, ConversationIdentityMismatchError,
+  openBrainSession, openBrainSessionExisting, openCurrentConversation, captureCurrentConversation, reopenConversationFromBinding, ConversationIdentityMismatchError, IABUnavailableError,
 } from './iab-transport.js';
 export {
   AtomicTurnController,

@@ -47,7 +47,7 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
    const identity = await provider.open({ url: 'https://chatgpt.com/' });
    ```
 
-   If ChatGPT is already signed in, continue. Only if you actually detect a real login page / auth failure: `ASK_USER` to sign in, then continue. Do not pause pre-emptively because login *might* be needed. Keep the same conversation across turns (`provider.identifyConversation()` / `provider.resume(...)`); never restart a new conversation mid-task.
+   Canonical Direct Mode uses the **Codex in-app browser (iab) only** — it never attaches to or manipulates the user's Edge/Chrome/external browser, and there is no fallback. If the IAB is unavailable, stop and report (`IABUnavailableError`) instead of switching browser backend. If ChatGPT is already signed in, continue. Only if you actually detect a real login page / auth failure: `ASK_USER` to sign in, then continue. Do not pause pre-emptively because login *might* be needed. Keep the same conversation across turns (`provider.identifyConversation()` / `provider.resume(...)`); never restart a new conversation mid-task.
 
 4. **First Brain message.** Send the user goal + repo identity/path + a concise governance contract. The contract must say:
 
@@ -105,6 +105,7 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
 - an auth-token handshake
 - a trusted-REPL long loop
 - a process shim
+- an external browser: Direct Mode uses the Codex in-app browser (iab) **only**; there is no Edge/Chrome/external-browser fallback. If the IAB is unavailable, stop and report rather than switch browser backend.
 
 ## Existing ChatGPT conversation (adopt)
 
