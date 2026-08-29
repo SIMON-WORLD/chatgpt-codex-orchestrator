@@ -339,13 +339,16 @@ export function fastPreflight({ config = null, probes = {} } = {}) {
     add('data-root-writable', ok, cfg.dataRoot);
   } else add('data-root-writable', false, 'no dataRoot');
 
-  // IAB / Brain transport callable
+  // IAB / Brain transport callable. Reported PASS only when actually probed,
+  // otherwise DEFERRED (the IAB launcher probes it next) or FAIL.
   {
-    const ok = probes.iabCallable != null ? !!probes.iabCallable : false;
-    add('iab-callable', ok, ok ? 'iab transport callable' : 'iab transport not probed (runtime)');
+    let iab = 'DEFERRED', reason = 'iab transport not probed (deferred to launcher)';
+    if (probes.iabCallable === true) { iab = 'PASS'; reason = 'iab transport callable'; }
+    else if (probes.iabCallable === false) { iab = 'FAIL'; reason = 'iab transport not callable'; }
+    checks.push({ check: 'iab-callable', status: iab, reason });
   }
 
-  return { pass: checks.every((c) => c.status === 'PASS'), checks };
+  return { pass: checks.every((c) => c.status === 'PASS' || c.status === 'DEFERRED'), checks };
 }
 
 // Full doctor (RFC §7): only for setup / env change / preflight failure / explicit use.

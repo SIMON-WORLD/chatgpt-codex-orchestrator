@@ -29,24 +29,24 @@ export class TaskManager {
     fs.mkdirSync(this.stateDir, { recursive: true });
   }
 
-  persist(state) { this.dataStore.save(state); }
-  load(taskId) { return this.dataStore.load(taskId); }
+  async persist(state) { await this.dataStore.save(state); }
+  async load(taskId) { return await this.dataStore.load(taskId); }
 
   async startTask({ goal, repoDir, brain, executor, sessionFactory = null, maxRounds = Infinity, taskId, conversationMode = 'new', adopted = false }) {
     const state = newTaskState({ taskId, repoDir, goal, conversationMode, adopted });
-    this.persist(state);
+    await this.persist(state);
     const ctx = { brain, executor, sessionFactory };
     await this._engine(state, ctx, { maxRounds });
     return { taskId: state.taskId, state };
   }
 
   async resumeTask({ taskId, brain, executor, sessionFactory = null, maxRounds = Infinity }) {
-    const state = this.load(taskId);
+    const state = await this.load(taskId);
     if (state.status === 'completed' || state.status === 'cancelled') return { taskId, state, result: { done: true } };
 
     if (this._needsRecovery(state)) {
       state.status = 'recovery_required';
-      this.persist(state);
+      await this.persist(state);
       return { taskId, state, result: { done: false, recoveryRequired: true } };
     }
 
@@ -55,15 +55,15 @@ export class TaskManager {
     return { taskId, state };
   }
 
-  getTaskStatus(taskId) {
-    const s = this.load(taskId);
+  async getTaskStatus(taskId) {
+    const s = await this.load(taskId);
     return { taskId, status: s.status, round: s.round, lastControl: s.lastControl };
   }
 
   async cancelTask(taskId) {
-    const s = this.load(taskId);
+    const s = await this.load(taskId);
     s.status = 'cancelled';
-    this.persist(s);
+    await this.persist(s);
     return { taskId, status: s.status };
   }
 
@@ -125,37 +125,37 @@ export class TaskManager {
       state.metrics.firstValidPlanTaskAt = Date.now();
       state.metrics.bootstrapToolCount = (state.metrics.bootstrapToolCount || 0) + 1;
       state.metrics.broadDiscoveryOccurred = false;
-      this.persist(state);
+      await this.persist(state);
       return false;
     }
 
     const ctrl = state.pendingControl || { control: state.lastControl };
     const control = ctrl.control;
     if (control === 'DONE') return this._handleDone(state);
-    if (control === 'ASK_USER') { state.status = 'awaiting_user'; this.persist(state); return true; }
+    if (control === 'ASK_USER') { state.status = 'awaiting_user'; await this.persist(state); return true; }
     if (control === 'PLAN') return this._handlePlan(state, ctx, ctrl);
     if (control === 'REPLAN') return this._handleReplan(state, ctx, ctrl);
     if (control === 'TASK' || control === 'REVISE') return this._handleTask(state, ctx, ctrl);
     state.status = 'recovery_required';
-    this.persist(state);
+    await this.persist(state);
     return true;
   }
 
-  _handleDone(state) {
+  async _handleDone(state) {
     const gate = checkAcceptanceGate(state.acceptanceRegistry);
     if (gate.allPass) {
       const blocks = this._mandatoryVerificationBlocked(state);
-      if (!blocks.length) { state.status = 'completed'; state.lastControl = 'DONE'; this.persist(state); return true; }
+      if (!blocks.length) { state.status = 'completed'; state.lastControl = 'DONE'; await this.persist(state); return true; }
       state.status = 'awaiting_user';
       state.lastControl = 'DONE';
       state.verificationBlock = blocks;
-      this.persist(state);
+      await this.persist(state);
       return true;
     }
     state.status = 'awaiting_user';
     state.lastControl = 'DONE';
     state.acceptanceBlock = gate.failures.map((f) => ({ id: f.id, status: f.status, text: f.text }));
-    this.persist(state);
+    await this.persist(state);
     return true;
   }
 
@@ -188,7 +188,7 @@ export class TaskManager {
     state.currentStepId = null;
     state.status = 'running';
     state.lastControl = 'PLAN';
-    this.persist(state);
+    await this.persist(state);
     await this._requestNextControl(state, ctx);
     return false;
   }
@@ -202,7 +202,7 @@ export class TaskManager {
     state.repoContext = await this._buildRepoContext(state);
     state.currentStepId = null;
     state.lastControl = 'REPLAN';
-    this.persist(state);
+    await this.persist(state);
     await this._requestNextControl(state, ctx);
     return false;
   }
@@ -214,7 +214,7 @@ export class TaskManager {
     const parsed = await this._parseOrRepair(state, ctx, r.reply);
     state.lastControl = parsed.control;
     state.pendingControl = parsed;
-    this.persist(state);
+    await this.persist(state);
   }
 
   // --- Plan step identity (canonical stepId) -----------------------------------
@@ -349,7 +349,7 @@ export class TaskManager {
     const step = active;
     if (step.status === 'received') {
       step.status = 'executing';
-      this.persist(state);
+      await this.persist(state);
       const evReq = (step.acceptance || []).map((a) => `acceptanceId="${a.id}"`).join(' ');
       let prompt = step.instruction + (evReq ? `\n\nWhen done, output a line starting with EVIDENCE: followed by a JSON array of {acceptanceId,status,kind,summary} for each of: ${evReq}.` : '');
       if (step.verification && Array.isArray(step.verification.commands) && step.verification.commands.length) {
@@ -359,7 +359,7 @@ export class TaskManager {
       state.codexSessionId = res.sessionId || state.codexSessionId;
       step.result = res;
       step.status = 'executed';
-      this.persist(state);
+      await this.persist(state);
       return false;
     }
     if (step.status === 'executed') {
@@ -379,7 +379,7 @@ export class TaskManager {
       if (!state.metrics) state.metrics = {};
       state.metrics.resultPacketBytes = packetSize(result);
       step.status = 'result_recorded';
-      this.persist(state);
+      await this.persist(state);
       return false;
     }
     if (step.status === 'result_recorded' || step.status === 'result_sent') {
@@ -392,14 +392,14 @@ export class TaskManager {
       state.lastControl = parsed.control;
       state.pendingControl = parsed;
       state.currentStepId = null;
-      this.persist(state);
+      await this.persist(state);
       return false;
     }
     return false;
   }
 
   // Start a fresh step or re-open a reviewed plan step. Returns false (continue).
-  _startOrReopenStep(state, ctx, ctrl, { stepId, planMode, milestoneId, milestone, active, existing }) {
+  async _startOrReopenStep(state, ctx, ctrl, { stepId, planMode, milestoneId, milestone, active, existing }) {
     const isRevise = ctrl.control === 'REVISE';
     let reviseCount;
     if (isRevise) {
@@ -431,7 +431,7 @@ export class TaskManager {
       state.currentStepId = stepId;
       registerAcceptances(state, ctrl);
       this._recordMetrics(state, packet, escalate, vp);
-      this.persist(state);
+      await this.persist(state);
       return false;
     }
 
@@ -444,7 +444,7 @@ export class TaskManager {
       state.currentStepId = stepId;
       registerAcceptances(state, ctrl);
       this._recordMetrics(state, packet, escalate, vp);
-      this.persist(state);
+      await this.persist(state);
       return false;
     }
     return false;

@@ -19,7 +19,7 @@ export class TaskService {
 
   async startTask({ goal, repoDir, conversation = 'new', maxRounds = Infinity, allowCloseOwnedTab = true } = {}) {
     const taskId = makeTaskId();
-    const releaseLock = this._acquireLock(taskId);
+    const releaseLock = await this._acquireLock(taskId);
     let worker = null, brain = null;
     try {
       worker = this.runtime && typeof this.runtime.startWorker === 'function' ? await this.runtime.startWorker(taskId) : null;
@@ -32,7 +32,7 @@ export class TaskService {
       this._teardown(worker, null, allowCloseOwnedTab);
       throw e;
     } finally {
-      this._releaseLock(releaseLock);
+      await this._releaseLock(releaseLock);
     }
   }
 
@@ -58,7 +58,7 @@ export class TaskService {
       state.conversationUrl = cap.conversationUrl;
       state.ownedTabId = cap.tabId;
     }
-    this.persist(state);
+    await this.persist(state);
     return { taskId, state };
   }
 
@@ -76,8 +76,8 @@ export class TaskService {
   }
 
   async resumeTask({ taskId, maxRounds = Infinity }) {
-    const state = this.mgr.load(taskId);
-    const releaseLock = this._acquireLock(taskId);   // throws TaskLockedError if held
+    const state = await this.mgr.load(taskId);
+    const releaseLock = await this._acquireLock(taskId);   // throws TaskLockedError if held
     let worker = null;
     try {
       worker = this.runtime ? await this.runtime.connectWorker(taskId, state) : null;
@@ -91,7 +91,7 @@ export class TaskService {
       this._teardown(worker, null);
       throw e;
     } finally {
-      this._releaseLock(releaseLock);
+      await this._releaseLock(releaseLock);
     }
   }
 
@@ -99,16 +99,16 @@ export class TaskService {
   // status. Each unit is a single Brain send or a single Codex exec or a state
   // transition, so a single node-REPL call stays well under the tool time cap.
   async advanceTask(taskId, { brain = null, executor = null, sessionFactory = null } = {}) {
-    const state = this.mgr.load(taskId);
+    const state = await this.mgr.load(taskId);
     if (state.status === 'completed' || state.status === 'cancelled') {
       return { taskId, status: state.status, progressed: false, nextAction: state.pendingControl?.control || state.lastControl };
     }
     if (this.mgr._needsRecovery(state)) {
       state.status = 'recovery_required';
-      this.mgr.persist(state);
+      await this.mgr.persist(state);
       return { taskId, status: state.status, progressed: false, nextAction: 'recovery_required' };
     }
-    const lock = this._acquireLock(taskId);
+    const lock = await this._acquireLock(taskId);
     try {
       let ctx = { brain, executor, sessionFactory };
       if (state.conversationId && this.runtime && typeof this.runtime.rebindBrain === 'function') {
@@ -118,25 +118,25 @@ export class TaskService {
         ctx.brain = await this.mgr._bindBrain(ctx.brain, ctx.sessionFactory, state);
       }
       const stop = await this.mgr.advanceOne(state, ctx);
-      this.mgr.persist(state);
+      await this.mgr.persist(state);
       return { taskId, status: state.status, progressed: !stop, nextAction: state.pendingControl?.control || state.lastControl };
-    } finally { this._releaseLock(lock); }
+    } finally { await this._releaseLock(lock); }
   }
 
-  getTaskStatus(taskId) { return this.mgr.getTaskStatus(taskId); }
+  async getTaskStatus(taskId) { return this.mgr.getTaskStatus(taskId); }
 
   async cancelTask(taskId) {
     this.locks.release(taskId);
     return this.mgr.cancelTask(taskId);
   }
 
-  persist(state) { this.mgr.persist(state); }
+  async persist(state) { await this.mgr.persist(state); }
 
-  _acquireLock(taskId) {
-    if (this.dataStore && typeof this.dataStore.acquireLock === 'function') return this.dataStore.acquireLock(taskId);
+  async _acquireLock(taskId) {
+    if (this.dataStore && typeof this.dataStore.acquireLock === 'function') return await this.dataStore.acquireLock(taskId);
     return this.locks.acquire(taskId);
   }
-  _releaseLock(releaseLock) { if (typeof releaseLock === 'function') releaseLock(); else if (this.dataStore && typeof this.dataStore.releaseLock === 'function') this.dataStore.releaseLock(); }
+  async _releaseLock(releaseLock) { if (typeof releaseLock === 'function') await releaseLock(); else if (this.dataStore && typeof this.dataStore.releaseLock === 'function') await this.dataStore.releaseLock(); }
 
   _teardown(worker, state, allowCloseOwnedTab = true) {
     if (worker && this.runtime && typeof this.runtime.teardownWorker === 'function') {

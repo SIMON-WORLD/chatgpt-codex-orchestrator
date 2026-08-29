@@ -49,7 +49,7 @@ test('resume after one round (state persisted) continues without re-running step
   const mgr = new TaskManager({ stateDir: d });
   const { taskId } = await mgr.startTask({ repoDir: 'r', goal: 'g', brain: brain1, executor: ex1, maxRounds: 1 });
   // state should be at round 1, not completed
-  const s1 = mgr.load(taskId);
+  const s1 = await mgr.load(taskId);
   assert.strictEqual(s1.status, 'running');
   assert.strictEqual(s1.round, 1);
   assert.strictEqual(ex1.calls.length, 1);

@@ -34,7 +34,7 @@ test('PLAN: validates, applies state, and is NOT forwarded to Codex', async () =
   let r, guard = 0;
   do { r = await svc.advanceTask(taskId, { brain, executor: ex }); guard++; } while (r.status === 'running' && guard < 30);
   assert.strictEqual(ex.calls, 0, 'PLAN must not be forwarded to Codex as an execution task');
-  const st = svc.mgr.load(taskId);
+  const st = await svc.mgr.load(taskId);
   assert.strictEqual(st.plan.planId, 'p-1');
   assert.strictEqual(st.taskContract.goal, 'refactor stats');
   assert.strictEqual(st.verificationPolicy.defaultLevel, 'step');
@@ -49,7 +49,7 @@ test('PLAN -> TASK -> RESULT -> DONE executes the step and records evidenceLedge
   const { taskId } = await svc.createTask({ goal: 'g', repoDir: 'r', conversation: 'new' });
   let r, guard = 0;
   do { r = await svc.advanceTask(taskId, { brain, executor: ex }); guard++; } while (r.status === 'running' && guard < 40);
-  const st = svc.mgr.load(taskId);
+  const st = await svc.mgr.load(taskId);
   assert.strictEqual(st.status, 'completed');
   assert.strictEqual(ex.calls, 1, 'exactly the single TASK reached Codex');
   assert.ok(st.evidenceLedger.length >= 1, 'real evidence appended to ledger');
@@ -69,7 +69,7 @@ test('REPLAN: applies patch and does not forward to Codex before a concrete TASK
   const { taskId } = await svc.createTask({ goal: 'g', repoDir: 'r', conversation: 'new' });
   let r, guard = 0;
   do { r = await svc.advanceTask(taskId, { brain, executor: ex }); guard++; } while (r.status === 'running' && guard < 40);
-  const st = svc.mgr.load(taskId);
+  const st = await svc.mgr.load(taskId);
   assert.strictEqual(ex.calls, 0, 'REPLAN is a control/state op, not a Codex execution');
   assert.strictEqual(st.plan.steps.length, 2, 'planPatch applied');
   assert.strictEqual(st.lastControl, 'DONE');
@@ -159,7 +159,7 @@ test('2-REVISE escalation: after 2 failed REVISE, the step packet is the fuller 
   const { taskId } = await svc.createTask({ goal: 'g', repoDir: 'r', conversation: 'new' });
   let r, guard = 0;
   do { r = await svc.advanceTask(taskId, { brain, executor: ex }); guard++; } while (r.status === 'running' && guard < 60);
-  const st = svc.mgr.load(taskId);
+  const st = await svc.mgr.load(taskId);
   const escalated = st.steps.find((s) => s.reviseCount >= 2);
   assert.ok(escalated, 'a step recorded reviseCount >= 2');
   assert.strictEqual(st.metrics.stepPacketEscalated, true);
@@ -192,6 +192,6 @@ test('existing conversation:new path remains working (no PLAN, pure TASK loop)',
   do { r = await svc.advanceTask(taskId, { brain, executor: ex }); guard++; } while (r.status === 'running' && guard < 30);
   assert.strictEqual(r.status, 'completed');
   assert.strictEqual(ex.calls, 1);
-  const st = svc.mgr.load(taskId);
+  const st = await svc.mgr.load(taskId);
   assert.strictEqual(st.plan, null);
 });

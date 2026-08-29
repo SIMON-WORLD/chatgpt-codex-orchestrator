@@ -32,3 +32,5 @@ export * as verification from './verification.js';
 export * as bootstrap from './bootstrap.js';
 export { loadBrainCommandConfig, writeBrainCommandConfig, codexHome, brainCommandConfigPath, DEFAULT_BRAIN_COMMAND_CONFIG, BrainCommandConfigError, resolveRepoDir, resolveOrchestratorRoot, fastPreflight, fullDoctor, isBrainCommandTrigger, newBootstrapMetrics, recordBootstrapMetric, bootstrapElapsedMs, setupBrainCommand, installBrainCommandSkill, brainCommandInstalled, installedBrainCommandSkillPath, legacyBrainCommandSkillPath, sourceBrainCommandSkillPath, userHome, inferRepoRoot, discoverBroadRepoDir, markBroadDiscovery, brainCommandStatus, formatBrainCommandStatus } from './bootstrap.js';
 export { resolveVerificationLevel, shouldRunFullSuite, resolveVerificationCommands, buildVerificationPlan, normalizeVerificationPolicy, canDowngrade, VERIFICATION_TIERS, TIER_RANK, VerificationPolicyError, isMandatoryBoundary, assertMandatoryVerification } from './verification.js';
+
+export { CodexWorkerClient } from './worker-client.js';

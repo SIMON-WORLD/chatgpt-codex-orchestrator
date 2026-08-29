@@ -30,6 +30,9 @@ export const DEFAULT_TURN_OPTIONS = {
   replySettleMs: 2500,
   composerSettleMs: 400,
   replyStableReads: 4,
+  // Bounded window to confirm a send actually dispatched after a press/click
+  // transport exception (e.g. a false CDP deadline that still delivered the msg).
+  dispatchConfirmMs: 6000,
 };
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -85,6 +88,47 @@ export class AtomicTurnController {
     catch (e) { throw new TabLostError('current url failed: ' + e.message); }
   }
 
+  // Send the user message. If the transport press/click throws, it may be a false
+  // CDP deadline: the message often still dispatches (composer clears, conversation
+  // URL materialises, or the assistant reply begins). Confirm dispatch with BOUNDED
+  // evidence; if confirmed, keep waiting for the reply. Never blindly resend (which
+  // could duplicate the user message) and never create a second send.
+  async _dispatch(text, beforeCount) {
+    try {
+      await this.page.sendMessage(text);
+      return;
+    } catch (err) {
+      const confirmed = await this._dispatchConfirmed(beforeCount);
+      if (!confirmed) throw err;
+    }
+  }
+
+  // Bounded, non-destructive confirmation that a send actually dispatched. Returns
+  // true as soon as ONE reliable signal appears; never resends or re-submits.
+  async _dispatchConfirmed(beforeCount) {
+    const deadline = Date.now() + this.options.dispatchConfirmMs;
+    let sawConversation = false;
+    while (Date.now() < deadline) {
+      // 1) Composer cleared => the typed message was consumed and dispatched.
+      if (typeof this.page.isComposerIdle === 'function') {
+        try { if (await this.page.isComposerIdle()) return true; } catch (e) {}
+      }
+      // 2) First send: a new /c/<id> conversation URL materialises on dispatch.
+      try {
+        const u = await this.currentUrl();
+        if (extractConversationId(u)) sawConversation = true;
+      } catch (e) {}
+      if (beforeCount === 0 && sawConversation) return true;
+      // 3) Assistant response began.
+      try {
+        const n = await this.count();
+        if (n >= 0 && n > beforeCount) return true;
+      } catch (e) {}
+      await sleep(this.options.pollIntervalMs);
+    }
+    return false;
+  }
+
   // One atomic turn. Because ChatGPT can replace old messages once a conversation
   // grows, we do NOT rely on count increasing. Instead we detect "the LAST
   // assistant message changed from what it was before the send" and then wait
@@ -96,7 +140,7 @@ export class AtomicTurnController {
     let beforeLast = '';
     if (beforeCount > 0) beforeLast = await this.replyText(beforeCount - 1);
 
-    await this.page.sendMessage(text);
+    await this._dispatch(text, beforeCount);
 
     const deadline = Date.now() + this.options.replyTimeoutMs;
     let afterCount = beforeCount;

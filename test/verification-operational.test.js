@@ -47,7 +47,7 @@ test('verification is operational: step/milestone/final commands are injected pe
   const ex = new E();
   const { taskId } = await svc.createTask({ goal: 'g', repoDir: 'r', conversation: 'new' });
   const r = await drive(svc, taskId, brain, ex);
-  const st = svc.mgr.load(taskId);
+  const st = await svc.mgr.load(taskId);
   assert.strictEqual(r.status, 'completed');
   assert.strictEqual(ex.prompts.length, 3, 'one prompt per executed step');
 
@@ -123,7 +123,7 @@ test('no silent DONE after a missing mandatory verification boundary (DONE is bl
   const ex = new E();
   const { taskId } = await svc.createTask({ goal: 'g', repoDir: 'r', conversation: 'new' });
   const r = await drive(svc, taskId, brain, ex, 30);
-  const st = svc.mgr.load(taskId);
+  const st = await svc.mgr.load(taskId);
   assert.strictEqual(r.status, 'awaiting_user', 'DONE must NOT pass while a mandatory boundary is incomplete');
   assert.ok(st.verificationBlock && st.verificationBlock.length >= 1, 'verification block recorded');
   assert.strictEqual(st.verificationBlock[0].milestoneId, 'm1');

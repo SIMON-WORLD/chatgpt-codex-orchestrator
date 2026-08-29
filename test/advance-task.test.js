@@ -23,6 +23,6 @@ test('advanceTask is turn-sliced: advances one unit each call, persists, no dupl
   } while (r.status === 'running' && guard < 20);
   assert.strictEqual(r.status, 'completed');
   assert.strictEqual(ex.calls, 1, 'codex ran exactly once (no duplicate)');
-  const reloaded = svc.mgr.load(taskId);
+  const reloaded = await svc.mgr.load(taskId);
   assert.strictEqual(reloaded.status, 'completed');
 });

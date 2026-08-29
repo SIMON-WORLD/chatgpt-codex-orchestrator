@@ -54,7 +54,7 @@ test('PLAN canonical step identity: s1/m1, s2/m1, s3/m2 preserved across run/rev
   const ex = new E();
   const { taskId } = await svc.createTask({ goal: 'g', repoDir: 'r', conversation: 'new' });
   const r = await drive(svc, taskId, brain, ex);
-  const st = svc.mgr.load(taskId);
+  const st = await svc.mgr.load(taskId);
   assert.strictEqual(r.status, 'completed');
   assert.deepStrictEqual(st.steps.map((s) => s.stepId), ['s1', 's2', 's3'], 'step ids are canonical plan ids');
   assert.deepStrictEqual(st.completedSteps, ['s1', 's2', 's3'], 'completedSteps use canonical plan ids');
@@ -91,7 +91,7 @@ test('REVISE on a planned step reuses the same canonical stepId (no duplicate st
   const ex = new E();
   const { taskId } = await svc.createTask({ goal: 'g', repoDir: 'r', conversation: 'new' });
   const r = await drive(svc, taskId, brain, ex);
-  const st = svc.mgr.load(taskId);
+  const st = await svc.mgr.load(taskId);
   assert.strictEqual(r.status, 'completed');
   assert.strictEqual(st.steps.length, 1, 'exactly one step object for the canonical s1 step');
   assert.strictEqual(st.steps[0].stepId, 's1');
@@ -110,7 +110,7 @@ test('legacy no-PLAN step generation still works (step-1, step-2, ...)', async (
   const ex = new E();
   const { taskId } = await svc.createTask({ goal: 'g', repoDir: 'r', conversation: 'new' });
   const r = await drive(svc, taskId, brain, ex);
-  const st = svc.mgr.load(taskId);
+  const st = await svc.mgr.load(taskId);
   assert.strictEqual(r.status, 'completed');
   assert.deepStrictEqual(st.steps.map((s) => s.stepId), ['step-1', 'step-2']);
   assert.strictEqual(st.plan, null);

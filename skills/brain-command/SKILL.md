@@ -18,47 +18,47 @@ Trigger on natural-language requests such as:
 
 Do **not** trigger for ordinary local-only coding.
 
-## Bootstrap (fast, deterministic)
+## Run (canonical normal path)
 
-The orchestrator repo exposes `src/bootstrap.js`. Normal startup must NOT do broad
-filesystem discovery, search for old bridge/router skills, or rediscover the
-orchestrator installation. It reads the user-scoped config directly.
+For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do not
+inspect or read the orchestrator's `bootstrap.js` / `runtime-host.mjs` /
+`worker-host.mjs` source during normal startup** — the launcher does that wiring for
+you. You only need the two fixed entrypoints below.
 
-1. Resolve the user-scoped config:
+1. **Load config (always).** The user-scoped config is `$CODEX_HOME/brain-command/config.json`
+   (`$CODEX_HOME` defaults to `~/.codex`). It defines `orchestratorRoot`, `dataRoot`,
+   `workspaceRoot`, `defaultBrain`, `defaultExecutor`, `defaultConversationMode`.
 
-   ```js
-   import { loadBrainCommandConfig, fastPreflight, fullDoctor } from '<orchestrator-root>/src/bootstrap.js';
-   const config = loadBrainCommandConfig(); // reads $CODEX_HOME/brain-command/config.json
+2. **Start the worker (ordinary-node entrypoint).** Run the worker bootstrap in an
+   ordinary Node process (via the environment, not the node REPL):
+
+   ```
+   node "<orchestratorRoot>/scripts/brain-command-worker.mjs" --config "<configPath>" --ready-file "<readyFile>"
    ```
 
-   `$CODEX_HOME` defaults to `~/.codex`. The config defines at least:
-   `orchestratorRoot`, `dataRoot`, `workspaceRoot`, `defaultBrain='chatgpt'`,
-   `defaultExecutor='codex'`, `defaultConversationMode='new'`.
+   This resolves the repo + data root from config, runs the fast preflight, and starts
+   the long-lived Codex worker, writing a deterministic ready file. It requires no
+   `--repo` (paths with spaces are handled internally) and no manual quoting hacks.
+   Optional: `--bypass`, `--session <codexSessionId>`, `--port N`.
 
-2. If config is **absent / invalid / points at an unavailable install**:
-   - Do **not** perform broad discovery.
-   - Fail fast into setup / full-doctor guidance: `fullDoctor({ config })`.
-
-3. Run the **fast preflight** (every task):
+3. **Invoke the canonical launcher (IAB/REPL entrypoint).** In the Codex node REPL:
 
    ```js
-   const pre = fastPreflight({ config });
-   if (!pre.pass) { /* fall back to full doctor / setup */ }
+   const { runBrainCommand } = await import('file:///<orchestratorRoot>/scripts/brain-command-launcher.mjs');
+   const result = await runBrainCommand({ goal: '<goal>' });
+   nodeRepl.write(JSON.stringify(result, null, 2));
    ```
 
-   Fast preflight checks: orchestrator install resolvable, repo resolvable,
-   Codex executable available, durable data root available, IAB/Brain transport callable.
+   The launcher loads config, resolves the repo, runs fast preflight, reads the worker's
+   ready file, opens the ChatGPT Brain, and drives `TaskService.createTask` → repeated
+   `advanceTask` until `DONE` / `ASK_USER` / `recovery_required`. It shuts the worker
+   down automatically on every terminal/error path and returns
+   `{ taskId, status, lastControl, rounds, conversationId, conversationUrl, ownedTabId, repoDir }`.
 
-4. Resolve the repo deterministically:
+4. **Defaults.** `conversation = 'new'` is the default; `Brain = ChatGPT`, `Executor = Codex`.
 
-   ```js
-   import { resolveRepoDir } from '<orchestrator-root>/src/bootstrap.js';
-   const r = resolveRepoDir({ cwd: process.cwd(), explicitRepoPath, explicitGitHubRepo, config });
-   ```
-
-5. Start the orchestrator via `TaskService.startTask` (defaults: Brain=ChatGPT,
-   Executor=Codex, conversation='new'). See the orchestrator `SKILL.md` for the
-   worker / Brain wiring.
+No repo/skill discovery is required: config is read from the known path, the repo is
+resolved deterministically, and the two entrypoints above are fixed.
 
 ## Setup / one-time install
 
@@ -68,31 +68,10 @@ From the orchestrator repository, run the one-time setup command:
 npm run setup:brain-command
 ```
 
-Optional overrides: `--orchestrator-root <dir> --data-root <dir> --workspace-root <dir>`. It installs the Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and writes `$CODEX_HOME/brain-command/config.json`. Equivalent to calling `setupBrainCommand` (see below).
-
-
-
-Install the launcher Skill and write the user-scoped bootstrap config once (does NOT
-run on every task; normal execution only reads config):
-
-```js
-import { setupBrainCommand } from '<orchestrator-root>/src/bootstrap.js';
-setupBrainCommand({
-  codexHome: process.env.CODEX_HOME, // optional; defaults to ~/.codex
-  config: {
-    orchestratorRoot: '<orchestrator-root>',
-    dataRoot: '<durable-data-root>',
-    workspaceRoot: '<workspace-root>',
-    defaultBrain: 'chatgpt',
-    defaultExecutor: 'codex',
-    defaultConversationMode: 'new',
-  },
-});
-```
-
-This installs `$HOME/.agents/skills/brain-command/SKILL.md` (the canonical user Skill root) and creates/updates
-`$CODEX_HOME/brain-command/config.json`, preserving machine-local paths. Use an
-isolated `CODEX_HOME` when testing; the real user config is only written by setup.
+Optional overrides: `--orchestrator-root <dir> --data-root <dir> --workspace-root <dir>`.
+It installs the Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and writes
+`$CODEX_HOME/brain-command/config.json`. Equivalent to calling `setupBrainCommand`
+(see Developer section).
 
 ## Status check (read-only)
 
@@ -102,12 +81,32 @@ From the orchestrator repository, verify that brain-command is correctly install
 npm run status:brain-command
 ```
 
-Read-only. It checks that the user-level launcher Skill is discoverable at `$HOME/.agents/skills/brain-command/SKILL.md` (legacy `$CODEX_HOME/skills/...` is reported as `WARN`), checks that `$CODEX_HOME/brain-command/config.json` exists and parses, and then prints `orchestratorRoot`, `dataRoot`, `workspaceRoot`, `defaultBrain`, `defaultExecutor`, `defaultConversationMode`. It never prints secrets/tokens (the raw config is never echoed; only the six safe fields are surfaced). Exit code is 0 when healthy and non-zero when config is missing/invalid. `--json` is available for machine-readable output.
+Read-only. It checks that the user-level launcher Skill is discoverable at
+`$HOME/.agents/skills/brain-command/SKILL.md`, checks that `$CODEX_HOME/brain-command/config.json`
+exists and parses, and prints `orchestratorRoot`, `dataRoot`, `workspaceRoot`, `defaultBrain`,
+`defaultExecutor`, `defaultConversationMode`. Never prints secrets/tokens. Exit code is 0
+when healthy, non-zero when config is missing/invalid. `--json` is available.
 
-## Full doctor
+## Developer / troubleshooting (source + API)
 
-`fullDoctor` is used only for: initial setup, version/environment change,
-fast-preflight failure, or an explicit user request. It is NOT required on every task.
+Only needed when the normal path fails and you are diagnosing the install itself, or
+when extending the launcher. Not part of normal startup.
+
+- Bootstrap API (`src/bootstrap.js`): `loadBrainCommandConfig`, `resolveRepoDir`,
+  `resolveOrchestratorRoot`, `fastPreflight`, `fullDoctor`, `setupBrainCommand`,
+  `brainCommandStatus`. `fastPreflight` checks: install resolvable, repo resolvable,
+  Codex executable available, data root writable, IAB/Brain transport callable.
+- `fullDoctor` is only for initial setup, environment change, fast-preflight failure,
+  or an explicit request — not required on every task.
+- Canonical launcher (`scripts/brain-command-launcher.mjs`): `runBrainCommand`,
+  `buildRuntime`, `createDataStore`, `runTaskLoop` — all built on `TaskService`
+  (`createTask` / `advanceTask`). It intentionally does **not** use the legacy
+  `LoopController` / `runRuntimeHost` path.
+- Worker bootstrap (`scripts/brain-command-worker.mjs`) → `startWorkerHost`
+  (`scripts/codex-worker-host.mjs`). The worker owns all durable data
+  (tasks / logs / projects / locks / runtime) under `config.dataRoot`.
+- The legacy `runRuntimeHost` (`scripts/runtime-host.mjs`) remains available for
+  compatibility / smoke tests only; it is NOT the canonical brain-command path.
 
 ## Scope boundaries (Alpha.2)
 
