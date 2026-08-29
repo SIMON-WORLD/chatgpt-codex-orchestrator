@@ -2,7 +2,7 @@
 // Default transport = the Codex in-app browser (iab).
 // One BrainSession owns exactly one tab and one ChatGPT conversation (/c/<id>).
 // It never touches the user's other IAB tabs; it creates its own owned tab.
-import { AtomicTurnController, extractConversationId } from './atomic-turn.js';
+import { AtomicTurnController, extractConversationId, ComposerUnavailableError } from './atomic-turn.js';
 
 const DEFAULT_BROWSER_CLIENT_PATH =
   'file:///C:/Users/Administrator/.codex/plugins/cache/openai-bundled/chrome/26.820.71523/scripts/browser-client.mjs';
@@ -86,35 +86,62 @@ export class InAppBrowserTransport {
   }
 }
 
+// Locate the REAL ChatGPT composer (the prompt textarea) — never a historical
+// user/assistant editable block. Returns a Playwright locator for exactly one
+// confident composer, or null (fail closed) when it is ambiguous / not uniquely
+// found. Relies on the stable structural id (#prompt-textarea) and an optional
+// composer-scoped fallback; it never guesses with a bare [contenteditable].first().
+async function resolveComposer(w) {
+  try {
+    const byId = w.locator('#prompt-textarea');
+    const n = await byId.count();
+    if (n === 1) {
+      const insideMsg = await byId.evaluate((el) => !!el.closest('[data-message-author-role]')).catch(() => false);
+      if (!insideMsg) return byId;
+    }
+    const scoped = w.locator('[data-testid*="composer"] [contenteditable="true"]');
+    const sn = await scoped.count();
+    if (sn === 1) {
+      const insideMsg = await scoped.evaluate((el) => !!el.closest('[data-message-author-role]')).catch(() => false);
+      if (!insideMsg) return scoped;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Wraps a Playwright tab into a PageFacade consumed by AtomicTurnController.
 export function createTabFacade(tab) {
   const w = tab.playwright;
   return {
     async isComposerReady() {
-      try { return (await w.locator('[contenteditable="true"]').count()) > 0; }
-      catch (e) { return false; }
+      return !!(await resolveComposer(w));
     },
     async isComposerIdle() {
+      const c = await resolveComposer(w);
+      if (!c) return false; // fail closed: no confident composer => not idle
       try {
-        const editor = w.locator('[contenteditable="true"]').first();
-        const txt = (await editor.innerText()) || '';
+        const txt = (await c.innerText()) || '';
         return txt.trim() === '';
       } catch (e) { return false; }
     },
     async sendMessage(text) {
-      const editor = w.locator('[contenteditable="true"]').first();
-      await editor.fill('');
+      const c = await resolveComposer(w);
+      if (!c) {
+        throw new ComposerUnavailableError('ChatGPT composer not uniquely found; refusing to target a historical editable block');
+      }
+      await c.fill('');
       await w.waitForTimeout(200);
-      await editor.fill(text);
+      await c.fill(text);
       await w.waitForTimeout(400);
-      // Confirm the text actually landed (React re-render safety) before submitting.
       let cur = '';
-      try { cur = await editor.innerText(); } catch (e) { cur = ''; }
+      try { cur = await c.innerText(); } catch (e) { cur = ''; }
       if (!cur.includes(text.slice(0, 20))) {
-        await editor.fill(text);
+        await c.fill(text);
         await w.waitForTimeout(400);
       }
-      await editor.press('Enter');
+      await c.press('Enter');
     },
     async getAssistantCount() {
       try { return await w.locator('[data-message-author-role="assistant"]').count(); }

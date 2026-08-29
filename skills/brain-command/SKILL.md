@@ -55,6 +55,9 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
    - Codex executes only bounded TASKs.
    - Return structured `PLAN` / `TASK` / `REVISE` / `ASK_USER` / `DONE`.
    - Use compact packets after the initial `PLAN`.
+   - PLAN comprehensively once, then prefer **milestone-sized** TASKs that combine coherent implementation work that can be executed and reviewed together.
+   - Codex may run normal implementation/debug/test iterations inside one TASK; return to the Brain only at meaningful review/decision boundaries.
+   - `REVISE` remains available whenever evidence fails.
 
    Do **not** dump large repo history/source on the first message.
 
@@ -89,11 +92,14 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
    ```
 
    Publish only when `gate.ok && gate.reason === 'publish gate passed'`:
+   - run a publish identity preflight first: if an expected git identity (`name` / `email`) is configured, set it repo-local **before** committing (never wait for a push failure to amend) — see `src/publish-policy.js` (`configureGitIdentity` / `checkPublishIdentity`);
    - ensure a meaningful commit,
    - `fetch origin`, confirm a clean fast-forward,
-   - `push origin/main` (never force-push).
+   - `push origin/main` (never force-push; never rewrite published history).
 
    Never publish on `REVISE`, `ASK_USER`, failure, or `recovery_required`.
+
+   **Post-DONE boundary:** after Brain `DONE`, the target repo must NOT receive new product modifications that were not Brain-reviewed. Independent workspace bookkeeping/logging is allowed only if it does not change the already-accepted target-repo outcome.
 
 ## Direct Mode guarantees
 

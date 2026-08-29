@@ -7,6 +7,7 @@ export {
 export {
   AtomicTurnController,
   ComposerTimeoutError,
+  ComposerUnavailableError,
   ReplyTimeoutError,
   ConversationMismatchError,
   TabLostError,
@@ -32,6 +33,8 @@ export * as verification from './verification.js';
 export * as bootstrap from './bootstrap.js';
 export { loadBrainCommandConfig, writeBrainCommandConfig, codexHome, brainCommandConfigPath, DEFAULT_BRAIN_COMMAND_CONFIG, BrainCommandConfigError, resolveRepoDir, resolveOrchestratorRoot, fastPreflight, fullDoctor, isBrainCommandTrigger, newBootstrapMetrics, recordBootstrapMetric, bootstrapElapsedMs, setupBrainCommand, installBrainCommandSkill, brainCommandInstalled, installedBrainCommandSkillPath, legacyBrainCommandSkillPath, sourceBrainCommandSkillPath, userHome, inferRepoRoot, discoverBroadRepoDir, markBroadDiscovery, brainCommandStatus, formatBrainCommandStatus } from './bootstrap.js';
 export { resolveVerificationLevel, shouldRunFullSuite, resolveVerificationCommands, buildVerificationPlan, normalizeVerificationPolicy, canDowngrade, VERIFICATION_TIERS, TIER_RANK, VerificationPolicyError, isMandatoryBoundary, assertMandatoryVerification } from './verification.js';
+
+export * as publish from './publish-policy.js';
 
 export { CodexWorkerClient } from './worker-client.js';
 export { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, BRAIN_PROVIDERS, DEFAULT_TAKEOVER_MESSAGE, ConversationNotFoundError, ConversationAmbiguityError, newDirectTaskState, evaluatePublishGate, isPublishForbiddenState } from './direct-mode.js';

@@ -31,7 +31,8 @@ The detached worker/TaskService runtime is legacy / experimental, retained for c
 
 - Structured protocol is the default: `PLAN` / `REPLAN` (Brain -> Orchestrator control/state, not forwarded to Codex), compact `TASK`, compact `RESULT`, plus the existing `REVISE` / `ASK_USER` / `DONE`. The legacy text protocol remains a compatible fallback.
 - Verification tiers: step / milestone / final, with authority precedence `mandatory orchestrator boundary > Brain requested level > Codex local minimum`.
-- DONE only publishes after the publish gate: Brain = `DONE`, task completed, mandatory verification passed, working tree has no unrelated changes.
+- DONE only publishes after the publish gate: Brain = `DONE`, task completed, mandatory verification passed, working tree has no unrelated changes, and the git identity preflight (repo-local identity set before commit) is satisfied.
+- Governance prefers milestone-sized TASKs: PLAN comprehensively once, combine coherent implementation work, let Codex iterate inside one TASK, return to the Brain only at meaningful review/decision boundaries. After `DONE`, the target repo must not receive non-Brain-reviewed product changes.
 
 ## Runtime wiring (agent-side, legacy)
 

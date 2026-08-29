@@ -64,6 +64,7 @@ export const DEFAULT_TAKEOVER_MESSAGE = [
   'The current Codex conversation is the executor.',
   'Use the existing conversation context; do not restart completed work from zero.',
   'Ask Codex only for missing current repository facts.',
+  'Governance: PLAN comprehensively once, then prefer milestone-sized TASKs that combine coherent implementation work that can be executed and reviewed together. Codex may run normal implementation/debug/test iterations inside one TASK; return to the Brain only at meaningful review/decision boundaries. REVISE remains available whenever evidence fails.',
   'Provide the next control for continuing the project.',
 ].join('\n');
 

@@ -16,6 +16,10 @@ export class ComposerTimeoutError extends Error {
 export class ReplyTimeoutError extends Error {
   constructor(msg) { super(msg); this.name = 'ReplyTimeoutError'; }
 }
+export class ComposerUnavailableError extends Error {
+  constructor(msg) { super(msg); this.name = 'ComposerUnavailableError'; }
+}
+
 export class ConversationMismatchError extends Error {
   constructor(msg) { super(msg); this.name = 'ConversationMismatchError'; }
 }
