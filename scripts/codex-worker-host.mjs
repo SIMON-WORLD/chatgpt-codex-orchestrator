@@ -1,4 +1,4 @@
-// chatgpt-codex-orchestrator: long-lived Codex worker host (data owner).
+// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT on the canonical Direct Brain Loop\n// path. The default \\-command\ uses the current Codex agent + built-in browser\n// (see src/direct-mode.js). Retained for compatibility/experimental use only.\n// chatgpt-codex-orchestrator: long-lived Codex worker host (data owner).
 // Runs in an ORDINARY Node process (started by the environment), so it can write the
 // user-level data root. It owns ALL persistent runtime data: tasks, logs, projects,
 // locks, runtime. The node REPL / IAB side talks to it over localhost IPC and never

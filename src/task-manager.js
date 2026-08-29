@@ -1,4 +1,4 @@
-// chatgpt-codex-orchestrator: TaskManager / lifecycle entry (Batch A, Gate B + D).
+// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT on the canonical Direct Brain Loop\n// path. The default \\-command\ uses the current Codex agent + built-in browser\n// (see src/direct-mode.js). Retained for compatibility/experimental use only.\n// chatgpt-codex-orchestrator: TaskManager / lifecycle entry (Batch A, Gate B + D).
 // startTask / resumeTask / getTaskStatus / cancelTask. Owns the task-state store and
 // a resumable, idempotent engine that drives Brain <-> Codex, persists after every
 // mutation, and never silently re-runs a confirmed side-effect.

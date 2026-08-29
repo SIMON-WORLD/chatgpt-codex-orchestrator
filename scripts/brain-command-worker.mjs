@@ -1,4 +1,4 @@
-// chatgpt-codex-orchestrator: brain-command WORKER bootstrap (ordinary-node entrypoint).
+// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT on the canonical Direct Brain Loop\n// path. The default \\-command\ uses the current Codex agent + built-in browser\n// (see src/direct-mode.js). Retained for compatibility/experimental use only.\n// chatgpt-codex-orchestrator: brain-command WORKER bootstrap (ordinary-node entrypoint).
 // Run by the ENVIRONMENT (exec_command), NOT by the node REPL, so the worker is not a
 // sandboxed descendant. It derives repoDir/dataRoot from the user config (resolveRepoDir)
 // and starts the long-lived worker host, writing the deterministic ready file. Because

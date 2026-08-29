@@ -1,4 +1,4 @@
-// chatgpt-codex-orchestrator: CodexWorkerClient - localhost JSON-line client for the
+// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT on the canonical Direct Brain Loop\n// path. The default \\-command\ uses the current Codex agent + built-in browser\n// (see src/direct-mode.js). Retained for compatibility/experimental use only.\n// chatgpt-codex-orchestrator: CodexWorkerClient - localhost JSON-line client for the
 // long-lived Codex worker host. Every authenticated request automatically carries the
 // per-process auth token (and taskId when bound) so the worker's auth check always
 // passes. The caller never needs runtime monkey-patching. The client also redacts its

@@ -20,13 +20,15 @@ Driving a coding task with ChatGPT as the planner and Codex as the executor is e
 
 ## How it works
 
-The project is built on a fixed role split.
+The default path is the **Direct Brain Loop**.
 
-- **ChatGPT** is the planner and reviewer. It reads the goal, issues tasks, evaluates results, and decides when the work is done.
-- **Codex** is the local executor. It runs each task, modifies files, runs tests, and reports real evidence.
-- **The orchestrator** is the durable glue. It persists state, keeps one Codex thread per task, enforces an acceptance/evidence gate, and recovers from crashes.
+- **ChatGPT** is the Brain (planner/reviewer): plans, issues tasks, reviews results, and decides when the work is done.
+- **The current Codex agent** is the executor: it talks to one dedicated ChatGPT conversation through the Codex built-in browser, executes each `TASK`, collects real evidence, and sends back a compact `RESULT`.
+- **The same ChatGPT conversation** is reused throughout: `PLAN` → `TASK` → `RESULT` → `REVISE` / `TASK` / `DONE`.
 
-The loop runs until ChatGPT emits `DONE` or `ASK_USER`.
+After `DONE`, the publish gate (Brain = DONE, task completed, mandatory verification passed, no unrelated working-tree changes) allows a commit + fast-forward push.
+
+**Legacy / experimental:** the detached worker / TaskService / nested-Codex runtime is retained but is no longer the default path (see `skills/brain-command/SKILL.md` and `docs/architecture.md`).
 
 ## Architecture
 

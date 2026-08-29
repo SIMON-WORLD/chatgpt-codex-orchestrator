@@ -1,17 +1,19 @@
 ---
 name: chatgpt-codex-orchestrator
-description: "Alpha entry for the ChatGPT-command orchestrator (v0.1.0-alpha.2). Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as executor. The canonical launcher Skill is `brain-command`. Commands: doctor, start, resume, status, cancel. adopt-current is EXPERIMENTAL."
+description: "Alpha entry for the ChatGPT-command orchestrator (v0.1.0-alpha.2). Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as executor. The canonical launcher Skill is `brain-command`; its default path is the Direct Brain Loop (current Codex agent + built-in browser + ChatGPT). The detached worker/TaskService runtime is legacy/experimental."
 ---
 
 # ChatGPT-command orchestrator (v0.1.0-alpha.2)
 
-Drives a durable ChatGPT <-> Codex loop. The agent drives it; the user only speaks the goal.
+Drives a ChatGPT <-> Codex loop. The agent drives it; the user only speaks the goal.
 
-## Launcher
+## Default: Direct Brain Loop
 
-The canonical launcher Skill is **`brain-command`** (provider-neutral by name; default Brain = ChatGPT, Executor = Codex, conversation = new). It reads `$CODEX_HOME/brain-command/config.json`, resolves the repo deterministically, runs a fast preflight, and starts this orchestrator. See `skills/brain-command/SKILL.md`. Normal startup does NOT do broad filesystem discovery.
+The canonical launcher Skill is **`brain-command`**. Its default path is the **Direct Brain Loop**: the current Codex agent uses the built-in browser to open/reuse one ChatGPT conversation, sends the goal + governance contract, receives `PLAN` / `TASK`, executes the `TASK` itself, sends a compact `RESULT` back to the same conversation, and repeats until `DONE` (then runs the publish gate). Provider-neutral by name; **Default Brain = ChatGPT**, **Default Executor = the current Codex agent**. See `skills/brain-command/SKILL.md`. Normal startup does NOT inspect orchestrator source and does NOT do broad filesystem discovery.
 
-## Commands
+## Legacy / experimental runtime (not the default)
+
+The detached worker/TaskService runtime is legacy / experimental, retained for compatibility:
 
 - `doctor` — preflight checks (IAB runtime, ChatGPT composer/login, codex CLI, git, state/log dirs, localhost IPC, context provider; prints chosen dataRoot + source).
 - `start` — `TaskService.startTask({ goal, repoDir, conversation: 'new' })`. New conversation + persistent Codex thread. (Default mode = `new`.)
@@ -24,13 +26,12 @@ The canonical launcher Skill is **`brain-command`** (provider-neutral by name; d
 ## Protocol (Alpha.2)
 
 - Structured protocol is the default: `PLAN` / `REPLAN` (Brain -> Orchestrator control/state, not forwarded to Codex), compact `TASK`, compact `RESULT`, plus the existing `REVISE` / `ASK_USER` / `DONE`. The legacy text protocol remains a compatible fallback.
-- Durable state stays schema v1 but adds `taskContract`, `plan`, `repoContext`, `verificationPolicy`, `stepSummaries`, `evidenceLedger`, `unresolvedRisks`, `currentStepId`.
 - Verification tiers: step / milestone / final, with authority precedence `mandatory orchestrator boundary > Brain requested level > Codex local minimum`.
-- Orchestrator-owned compaction when a step reaches `reviewed -> compact` (durable `stepSummary`).
+- DONE only publishes after the publish gate: Brain = `DONE`, task completed, mandatory verification passed, working tree has no unrelated changes.
 
-## Runtime wiring (agent-side)
+## Runtime wiring (agent-side, legacy)
 
-The worker runs in an ordinary Node process (started by the environment via exec_command); the IAB BrainSession runs in the node REPL. The agent:
+The detached worker runtime runs an ordinary Node process; the IAB BrainSession runs in the node REPL. This is **legacy / experimental** and not the canonical startup path. The agent:
 
 1. starts the worker once (non-elevated, `--data-root <durable>`): `node scripts/codex-worker-host.mjs --repo <repoDir> --port 0 [--bypass] [--session <codexSessionId>] [--data-root <dir>] [--ready-file <file>]`.
 2. reads the ready file for `{ port, token }`.

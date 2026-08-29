@@ -1,4 +1,4 @@
-// chatgpt-codex-orchestrator: brain-command CANONICAL IAB/REPL launcher (Alpha.2).
+// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT on the canonical Direct Brain Loop\n// path. The default \\-command\ uses the current Codex agent + built-in browser\n// (see src/direct-mode.js). Retained for compatibility/experimental use only.\n// chatgpt-codex-orchestrator: brain-command CANONICAL IAB/REPL launcher (Alpha.2).
 //
 // Deterministic sequence for `$brain-command <goal>`:
 //   load config -> deterministic repo resolution -> fast preflight (trusted-REPL

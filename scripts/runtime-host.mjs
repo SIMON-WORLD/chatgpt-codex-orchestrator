@@ -1,4 +1,4 @@
-// chatgpt-codex-orchestrator: M2.1 Runtime Host (legacy single-shot entry).
+// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT on the canonical Direct Brain Loop\n// path. The default \\-command\ uses the current Codex agent + built-in browser\n// (see src/direct-mode.js). Retained for compatibility/experimental use only.\n// chatgpt-codex-orchestrator: M2.1 Runtime Host (legacy single-shot entry).
 // NOTE: The canonical brain-command path is scripts/brain-command-launcher.mjs
 // (TaskService + createTask/advanceTask). runRuntimeHost is retained for backward
 // compatibility and live-smoke/harness usage only; it is NOT the canonical path.

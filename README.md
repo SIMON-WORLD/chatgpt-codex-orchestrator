@@ -20,13 +20,15 @@
 
 ## 它如何工作
 
-核心是一个固定的角色分工。
+默认路径是 **Direct Brain Loop**。
 
-- **ChatGPT** 是规划者与评审者：它读取目标、下发任务、评估结果，并决定何时完成。
-- **Codex** 是本地执行者：它运行每个任务、修改文件、执行测试，并汇报真实的证据。
-- **编排器** 是持久的“胶水”：它持久化状态、为每个任务保留一个 Codex 线程、强制执行验收/证据门禁，并在崩溃后恢复。
+- **ChatGPT** 是 Brain（规划者与评审者）：规划、下发任务、评审结果，并决定何时完成。
+- **当前 Codex agent** 是执行者：通过 Codex 内置浏览器与本项目专用的一条 ChatGPT 会话通信，执行每个 `TASK`，收集真实证据，并回传紧凑的 `RESULT`。
+- **同一条 ChatGPT conversation** 全程复用：`PLAN` → `TASK` → `RESULT` → `REVISE` / `TASK` / `DONE`。
 
-闭环会一直运行，直到 ChatGPT 输出 `DONE` 或 `ASK_USER`。
+`DONE` 后经发布门禁（Brain=DONE、任务完成、强制验证通过、工作树无无关改动）才 commit 并 fast-forward push。
+
+**Legacy / experimental：** 分离的 worker / TaskService / 嵌套 Codex runtime 保留，但不再是默认路径（见 `skills/brain-command/SKILL.md` 与 `docs/architecture.md`）。
 
 ## 架构
 

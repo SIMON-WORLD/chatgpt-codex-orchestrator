@@ -1,11 +1,24 @@
 ---
 name: brain-command
-description: "Canonical launcher for the ChatGPT-command orchestrator (v0.1.0-alpha.2). Use when the user wants to run a coding task with ChatGPT as the planner/brain and Codex as the local executor, e.g. '用 ChatGPT 指挥模式完成...', '让 ChatGPT 指挥 Codex...', or 'Use ChatGPT as the brain and Codex as executor...'. Provider-neutral name; default Brain = ChatGPT, default Executor = Codex."
+description: "Canonical launcher for the ChatGPT-command orchestrator. Default = Direct Brain Loop: the current Codex agent talks to ChatGPT via the built-in browser, executes the Brain TASKs itself, and publishes on DONE. Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as the local executor, e.g. '用 ChatGPT 指挥模式完成...', '让 ChatGPT 指挥 Codex...', or 'Use ChatGPT as the brain and Codex as executor...'. Default Brain = ChatGPT, default Executor = the current Codex agent. The detached worker/nested-Codex runtime is kept as legacy/experimental."
 ---
 
-# brain-command (Alpha.2 launcher)
+# brain-command (Direct Brain Loop)
 
-Provider-neutral launcher skill. Default: **Brain = ChatGPT**, **Executor = Codex**, **conversation = new**.
+The default production path is the **Direct Brain Loop**.
+
+```
+User
+→ current Codex agent
+→ Codex built-in browser
+→ ChatGPT Brain
+→ current Codex agent executes TASK
+→ compact RESULT back to the same ChatGPT conversation
+→ REVISE / TASK / DONE
+→ publish on DONE
+```
+
+Defaults: **Brain = ChatGPT**, **Executor = the current Codex agent**, **conversation = one dedicated ChatGPT conversation reused across the whole task**.
 
 ## When to use
 
@@ -18,108 +31,112 @@ Trigger on natural-language requests such as:
 
 Do **not** trigger for ordinary local-only coding.
 
-## Run (canonical normal path)
+## Run (canonical default path)
 
-For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do not
-inspect or read the orchestrator's `bootstrap.js` / `runtime-host.mjs` /
-`worker-host.mjs` source during normal startup** — the launcher does that wiring for
-you. You only need the two fixed entrypoints below. The runtime environment is
-abstracted by `src/runtime-env.js` (real `process` in normal Node; the safe
-`nodeRepl` surface in the trusted Codex REPL), so you never create a `process` shim
-and never pass `preflight: false`.
+For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do not inspect the orchestrator's implementation source during normal startup.** The goal is to get ChatGPT guiding as fast as possible — the only delays should be the browser/tool and ChatGPT's own response latency.
 
-1. **Load config (always).** The user-scoped config is `$CODEX_HOME/brain-command/config.json`
-   (`$CODEX_HOME` defaults to `~/.codex`). It defines `orchestratorRoot`, `dataRoot`,
-   `workspaceRoot`, `defaultBrain`, `defaultExecutor`, `defaultConversationMode`.
+1. **Load config.** Read only `$CODEX_HOME/brain-command/config.json` (`$CODEX_HOME` defaults to `~/.codex`). Read the needed fields (`orchestratorRoot`, `dataRoot`, `workspaceRoot`, `defaultBrain`, `defaultExecutor`, `defaultConversationMode`). Do not traverse `~/.codex`, skills, or repo source beyond the config.
 
-2. **Start the worker (ordinary-node entrypoint).** Run the worker bootstrap in an
-   ordinary Node process (via the environment, not the node REPL):
+2. **Resolve repo.** Prefer, in order: an explicit repo/path the user gave; the current cwd if it is the target repo; otherwise `config.workspaceRoot` / the deterministic configured location. No broad recursive filesystem discovery.
 
-   ```
-   node "<orchestratorRoot>/scripts/brain-command-worker.mjs" --config "<configPath>"
-   ```
-
-   Do **not** pass `--ready-file` or `--repo`. The worker resolves the repo + data root
-   from config, runs the worker-side preflight (data-root writability, Codex executable,
-   runtime dirs), and writes the deterministic ready file at
-   `<config.dataRoot>/runtime/brain-command.ready.json`. Optional: `--bypass`,
-   `--session <codexSessionId>`, `--port N`.
-
-3. **Invoke the canonical launcher (IAB/REPL entrypoint).** In the Codex node REPL:
+3. **Open / reuse the Brain.** Use the current Codex agent's **built-in browser** capability. Default provider is ChatGPT (`brainProvider: 'chatgpt'`). Open or reuse one dedicated brain-command ChatGPT tab/conversation using `createChatGPTBrowserProvider` from `src/direct-mode.js`:
 
    ```js
-   const { runBrainCommand } = await import('file:///<orchestratorRoot>/scripts/brain-command-launcher.mjs');
-   const result = await runBrainCommand({ goal: '<goal>' });
-   nodeRepl.write(JSON.stringify(result, null, 2));
+   const { createChatGPTBrowserProvider } = await import('<orchestratorRoot>/src/direct-mode.js');
+   const provider = createChatGPTBrowserProvider();
+   const identity = await provider.open({ url: 'https://chatgpt.com/' });
    ```
 
-   The launcher loads config, resolves the repo, probes the in-app-browser (IAB), reads
-   the canonical worker ready file, opens the ChatGPT Brain, and drives
-   `TaskService.createTask` → repeated `advanceTask` until `DONE` / `ASK_USER` /
-   `recovery_required`. It binds the worker client to the generated `taskId` and shuts
-   the worker down automatically on every terminal/error path. Returns
-   `{ taskId, status, lastControl, rounds, conversationId, conversationUrl, ownedTabId, repoDir }`.
-   No `process` shim, no `preflight:false`, no source inspection.
+   If ChatGPT is already signed in, continue. Only if you actually detect a real login page / auth failure: `ASK_USER` to sign in, then continue. Do not pause pre-emptively because login *might* be needed. Keep the same conversation across turns (`provider.identifyConversation()` / `provider.resume(...)`); never restart a new conversation mid-task.
 
-4. **Defaults.** `conversation = 'new'` is the default; `Brain = ChatGPT`, `Executor = Codex`.
+4. **First Brain message.** Send the user goal + repo identity/path + a concise governance contract. The contract must say:
 
-No repo/skill discovery is required: config is read from the known path, the repo is
-resolved deterministically, and the two entrypoints above are fixed.
+   - ChatGPT owns planning, review, and decisions.
+   - Codex executes only bounded TASKs.
+   - Return structured `PLAN` / `TASK` / `REVISE` / `ASK_USER` / `DONE`.
+   - Use compact packets after the initial `PLAN`.
 
-## Setup / one-time install
+   Do **not** dump large repo history/source on the first message.
 
-From the orchestrator repository, run the one-time setup command:
+5. **Parse the Brain's control.** Use `parseBrainOutput` / `parseEvidenceBlock` from `src/protocol.js` to turn the reply into a structured control (`PLAN`, `TASK`, `REVISE`, `ASK_USER`, `DONE`, `REPLAN`). A `PLAN` is followed by a concrete `TASK`.
 
+6. **Execute the TASK in the current Codex agent.** Do **not** start a nested Codex, do not start a worker, do not wait on a ready file. The current Codex agent is the executor. Do the work, collect real evidence, and verify.
+
+7. **Send a compact RESULT back to the same conversation.** Build it with `buildCompactResult` / `normalizeResult` from `src/protocol.js`:
+
+   ```js
+   const { buildCompactResult } = await import('<orchestratorRoot>/src/protocol.js');
+   const msg = JSON.stringify(buildCompactResult({
+     stepId, status: 'success', summary, changed, evidence, blockers,
+   }));
+   const r = await provider.send(msg);
+   ```
+
+   The RESULT should carry only what the Brain needs for its next decision: `stepId`, `status`, `summary`, `changed`, `evidence`, `blockers`.
+
+8. **Review loop.** The same ChatGPT conversation returns the next control (`TASK` / `REVISE` / `REPLAN` / `ASK_USER` / `DONE`). Keep the same conversation; do not resend the full goal/plan/raw logs each turn.
+
+9. **DONE + publish gate.** On `DONE`, run mandatory verification, a repo final check, and a working-tree scope check, then use the publish gate:
+
+   ```js
+   const { evaluatePublishGate } = await import('<orchestratorRoot>/src/direct-mode.js');
+   const gate = evaluatePublishGate({
+     brainControl: 'DONE',
+     taskStatus: 'completed',
+     mandatoryVerificationOk: true,
+     workingTreeScopeOk: true,
+   });
+   ```
+
+   Publish only when `gate.ok && gate.reason === 'publish gate passed'`:
+   - ensure a meaningful commit,
+   - `fetch origin`, confirm a clean fast-forward,
+   - `push origin/main` (never force-push).
+
+   Never publish on `REVISE`, `ASK_USER`, failure, or `recovery_required`.
+
+## Direct Mode guarantees
+
+`src/direct-mode.js` (`DIRECT_MODE_REQUIRES`) documents that the default path does **not** require:
+- worker bootstrap
+- a ready file
+- a nested Codex executor
+- localhost TCP
+- an auth-token handshake
+- a trusted-REPL long loop
+- a process shim
+
+## Legacy / experimental runtime
+
+The detached runtime is **legacy / experimental**, not the default:
+- `scripts/brain-command-launcher.mjs` + `scripts/brain-command-worker.mjs` + `scripts/codex-worker-host.mjs`
+- `scripts/runtime-host.mjs` (`LoopController`)
+- `src/task-service.js` / `src/task-manager.js` / `src/worker-client.js`
+- durable recovery machinery
+
+These are retained for compatibility/experimental use and are not part of the canonical startup path.
+
+## Provider abstraction (thin)
+
+Only a thin contract is reserved for future providers; only **ChatGPT** is canonical today.
+
+```ts
+interface BrainProvider {
+  open({ url })            // -> { conversationId, conversationUrl, tabId }
+  send(message)            // -> { reply, conversationId, conversationUrl }
+  identifyConversation()   // -> { conversationId, conversationUrl, tabId } | null
+  resume({ tabId, conversationId, conversationUrl })  // -> BrainProvider
+}
 ```
-npm run setup:brain-command
-```
 
-Optional overrides: `--orchestrator-root <dir> --data-root <dir> --workspace-root <dir>`.
-It installs the Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and writes
-`$CODEX_HOME/brain-command/config.json`. Equivalent to calling `setupBrainCommand`
-(see Developer section).
+Canonical implementation: `ChatGPTBrowserProvider` (`createChatGPTBrowserProvider`), built on the built-in browser. Claude / DeepSeek / GLM are **not** implemented in this Batch.
 
-## Status check (read-only)
+## Minimal state
 
-From the orchestrator repository, verify that brain-command is correctly installed and configured:
+Normal Direct Mode does not require a daemon. If a minimal task record is useful, `newDirectTaskState` keeps only: `taskId`, `repoDir`, `brainProvider`, `executor`, `conversationId`, `conversationUrl`, `plan`, `currentStepId`, `completedSteps`, `evidenceLedger`, `publishPolicy`. State persistence must never block the normal run; complex crash recovery is a later enhancement, not a P0.
 
-```
-npm run status:brain-command
-```
+## Scope boundaries (current Batch)
 
-Read-only. It checks that the user-level launcher Skill is discoverable at
-`$HOME/.agents/skills/brain-command/SKILL.md`, checks that `$CODEX_HOME/brain-command/config.json`
-exists and parses, and prints `orchestratorRoot`, `dataRoot`, `workspaceRoot`, `defaultBrain`,
-`defaultExecutor`, `defaultConversationMode`. Never prints secrets/tokens. Exit code is 0
-when healthy, non-zero when config is missing/invalid. `--json` is available.
-
-## Developer / troubleshooting (source + API)
-
-Only needed when the normal path fails and you are diagnosing the install itself, or
-when extending the launcher. Not part of normal startup.
-
-- Bootstrap API (`src/bootstrap.js`): `loadBrainCommandConfig`, `resolveRepoDir`,
-  `resolveOrchestratorRoot`, `fastPreflight`, `fullDoctor`, `setupBrainCommand`,
-  `brainCommandStatus`. `fastPreflight` checks: install resolvable, repo resolvable,
-  Codex executable available, data root writable, IAB/Brain transport callable.
-- Runtime environment adapter (`src/runtime-env.js`): `getRuntimeEnv`, `getCwd`,
-  `getEnv`, `getHomeDir`, `getCodexHome`, `isTrustedRepl`. Normal Node uses the real
-  `process`; the trusted Codex REPL uses the safe `nodeRepl` surface (no `process`
-  shim). `canonicalReadyFile()` lives in `src/runtime-paths.js`.
-- `fullDoctor` is only for initial setup, environment change, fast-preflight failure,
-  or an explicit request — not required on every task.
-- Canonical launcher (`scripts/brain-command-launcher.mjs`): `runBrainCommand`,
-  `buildRuntime`, `createDataStore`, `runTaskLoop` — all built on `TaskService`
-  (`createTask` / `advanceTask`). It intentionally does **not** use the legacy
-  `LoopController` / `runRuntimeHost` path.
-- Worker bootstrap (`scripts/brain-command-worker.mjs`) → `startWorkerHost`
-  (`scripts/codex-worker-host.mjs`). The worker owns all durable data
-  (tasks / logs / projects / locks / runtime) under `config.dataRoot`.
-- The legacy `runRuntimeHost` (`scripts/runtime-host.mjs`) remains available for
-  compatibility / smoke tests only; it is NOT the canonical brain-command path.
-
-## Scope boundaries (Alpha.2)
-
-Do NOT implement: `adopt-current` stabilization, parallel executors, multiple Brain
-providers, Brain Council, MCP context provider, GUI, cost ledger, remote runtime.
-Default remains Brain=ChatGPT, Executor=Codex, conversation=new.
+- Do not add: `execute.start` / `execute.poll`, nested Codex executor, a long-lived REPL driver, a recovery job protocol, or a new worker daemon architecture.
+- Do not delete the existing worker / TaskService / recovery code; keep it as legacy / experimental.
+- Do not start a second Codex session; the current Codex agent is the executor.

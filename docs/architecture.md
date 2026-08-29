@@ -5,6 +5,10 @@
 
 ---
 
+> **Default path (current Batch): Direct Brain Loop.** The default `$brain-command` uses the current Codex agent + the Codex built-in browser to talk to ChatGPT (one dedicated conversation), executes each `TASK` directly, sends a compact `RESULT`, and publishes on `DONE`. It does **not** start a worker, a ready file, or a nested Codex executor (see `skills/brain-command/SKILL.md` and `src/direct-mode.js`).
+>
+> **The rest of this document describes the LEGACY / EXPERIMENTAL detached runtime** (worker host, TaskService / TaskManager, durable recovery). It is retained for compatibility and is **not** the canonical startup path.
+
 ## Design Model
 
 The project is built on a fixed responsibility split that gives every turn an explicit owner.
