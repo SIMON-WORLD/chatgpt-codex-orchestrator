@@ -164,5 +164,5 @@ test('normal new-conversation mode unchanged; adoptConversation requires an argu
 test('takeover message exists and does not dump full history', () => {
   assert.ok(DEFAULT_TAKEOVER_MESSAGE.includes('Continue this existing project conversation.'));
   assert.ok(DEFAULT_TAKEOVER_MESSAGE.includes('ChatGPT now owns PLAN / TASK / REVISE / DONE.'));
-  assert.ok(DEFAULT_TAKEOVER_MESSAGE.length < 900, 'takeover message is short (governance included, no history dump)');
+  assert.ok(DEFAULT_TAKEOVER_MESSAGE.length < 1600, 'takeover message is compact (contract + governance, no history dump)');
 });

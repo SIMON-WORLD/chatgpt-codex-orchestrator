@@ -8,6 +8,25 @@ No documented unreleased changes yet. Work is listed under the release it first 
 ### Added
 
 - Read-only brain-command status check: `npm run status:brain-command` (scripts/brain-command-status.mjs → `brainCommandStatus`). Verifies the user-level launcher Skill is discoverable and `$CODEX_HOME/brain-command/config.json` exists/parses, prints `orchestratorRoot` / `dataRoot` / `workspaceRoot` and the defaults, never prints secrets, and returns exit 0 (healthy) or 1 (missing/invalid). Does not change any orchestration core semantics.
+## [0.1.0-alpha.3]
+
+Alpha.3 — Direct Brain Loop dogfood baseline. The default `$brain-command` path is the Direct Brain Loop: the current Codex agent talks to ChatGPT through the Codex in-app browser (`iab`) only, executes each milestone-sized Brain TASK itself, sends a compact RESULT back to the same conversation, and publishes on DONE after the publish gate. Existing-conversation adoption (by title / URL / `--adopt-current`), composer fail-closed safety, publish identity preflight, and the post-DONE boundary are part of the frozen baseline. The detached worker / TaskService / nested-Codex runtime is retained as experimental, not the default.
+
+### Added
+
+- Direct Brain Loop (default): current Codex agent ↔ ChatGPT via the Codex in-app browser (`iab`); the current Codex agent is the executor.
+- Existing ChatGPT conversation adoption: `adoptConversation({ conversationUrl | conversationId | title })` and `adoptCurrent()`; title lookup by accessible name/text/ARIA + stable `a[href*="/c/"]`; unique match opens, no-match fails without creating a conversation, duplicate returns ambiguity/ASK_USER; real `/c/<id>` captured and bound.
+- Composer safety: `resolveComposer` targets only the real composer (`#prompt-textarea` / composer-scoped contenteditable), fails closed (`ComposerUnavailableError`) instead of targeting a historical editable block, and never modifies history.
+- Milestone-sized Brain TASK governance in the takeover/governance prompt.
+- Publish identity preflight (`src/publish-policy.js`): configures repo-local git identity before commit only when an expected `name`/`email` is configured; default no-force-push / no-history-rewrite.
+- Post-DONE boundary: after `DONE` the target repo must not receive non-Brain-reviewed product changes.
+- Browser isolation: `InAppBrowserTransport.connect()` requires the `iab` browser and fails clearly (`IABUnavailableError`) without falling back to `getForUrl`/Edge/Chrome.
+
+### Changed
+
+- Default path removed from the detached worker runtime; worker/TaskService/nested-Codex + durable recovery are marked legacy / experimental (comments + docs).
+- Version bumped to `0.1.0-alpha.3`.
+
 
 ## [0.1.0-alpha.2]
 

@@ -1,8 +1,8 @@
 # chatgpt-codex-orchestrator
 
-Agentic orchestration that keeps **ChatGPT as the planner/reviewer** and **Codex as the local executor** in one durable, recoverable loop.
+An agentic orchestration scheme that keeps **ChatGPT as the Brain (planner/reviewer)** and **the current Codex agent as the local executor** in one Direct Brain Loop.
 
-**Status:** Alpha — `v0.1.0-alpha.2` · [简体中文](README.md) · **English**
+**Status:** Alpha — `v0.1.0-alpha.3` · [简体中文](README.md) · **English**
 
 ---
 
@@ -10,12 +10,12 @@ Agentic orchestration that keeps **ChatGPT as the planner/reviewer** and **Codex
 
 Driving a coding task with ChatGPT as the planner and Codex as the executor is easy on the first turn, but hard to keep going. Conversations drift, executor context resets, process failures lose progress, and there is no clean contract between *what ChatGPT asked for* and *what Codex actually did*.
 
-`chatgpt-codex-orchestrator` turns that loop into something durable:
+`chatgpt-codex-orchestrator` makes that loop controllable:
 
 - One user goal, then **ChatGPT plans** and issues a `TASK`.
-- **Codex executes** locally and returns a structured result with evidence.
+- **The current Codex agent executes locally** and returns a compact `RESULT` with evidence.
 - **ChatGPT reviews** and replies `TASK` / `REVISE` / `ASK_USER` / `DONE`.
-- Task state, a persistent Codex thread, and recovery/resume keep the loop consistent across turns and recoverable runtime failures.
+- The same ChatGPT conversation is reused throughout; if no unique composer is found it fails closed and never touches history.
 - Secrets are redacted from persisted and logged context.
 
 ## How it works
@@ -23,26 +23,68 @@ Driving a coding task with ChatGPT as the planner and Codex as the executor is e
 The default path is the **Direct Brain Loop**.
 
 - **ChatGPT** is the Brain (planner/reviewer): plans, issues tasks, reviews results, and decides when the work is done.
-- **The current Codex agent** is the executor: it talks to one dedicated ChatGPT conversation through the Codex built-in browser, executes each `TASK`, collects real evidence, and sends back a compact `RESULT`.
+- **The current Codex agent** is the executor: it talks to one dedicated ChatGPT conversation through the Codex in-app browser (`iab`), executes each `TASK`, collects real evidence, and sends back a compact `RESULT`.
 - **The same ChatGPT conversation** is reused throughout: `PLAN` → `TASK` → `RESULT` → `REVISE` / `TASK` / `DONE`.
 
-After `DONE`, the publish gate (Brain = DONE, task completed, mandatory verification passed, no unrelated working-tree changes) allows a commit + fast-forward push.
+After `DONE`, the publish gate (Brain = DONE, task completed, mandatory verification passed, no unrelated working-tree changes, publish identity preflight passed) allows a commit + fast-forward push.
 
 You can also adopt an existing ChatGPT history conversation as the Brain: `$brain-command --conversation "<title>"` / `--conversation-url <url>` / `--adopt-current` (no new conversation is created).
 
-**Legacy / experimental:** the detached worker / TaskService / nested-Codex runtime is retained but is no longer the default path (see `skills/brain-command/SKILL.md` and `docs/architecture.md`).
+**Legacy / experimental:** the detached worker / TaskService / nested-Codex runtime is retained as experimental and is no longer the default path (see `skills/brain-command/SKILL.md` and `docs/architecture.md`).
+
+## Default execution contract
+
+Established once per task; the Brain does not repeat these defaults inside every TASK (unless an exception/override is needed):
+
+- ChatGPT owns `PLAN` / architecture / review / `DONE`.
+- Codex stays within Brain-approved scope.
+- Codex may run normal edit/debug/test iterations inside one milestone TASK.
+- Mandatory verification applies.
+- Protect secrets; fail closed on ambiguity.
+- Return compact `RESULT` evidence.
+- No force push or published-history rewrite.
+- Publish only after `DONE` + publish gate.
+
+## Dogfood status (facts)
+
+Alpha.3 Direct Brain Loop has completed a real long-running dogfood:
+
+`agent-credentials-skill v0.3.0`
+- existing ChatGPT conversation adopted;
+- current Codex conversation retained;
+- autonomous Brain ↔ Executor loop;
+- 16 Brain TASKs in the pre-milestone-batching version;
+- zero manual TASK/RESULT relay;
+- commit / push / tag / GitHub Release completed;
+- final Brain `DONE`.
+
+Note: milestone-sized batching was added afterward and still needs validation across additional real projects. No performance improvement percentages are claimed until measured.
+
+## Freeze policy / roadmap
+
+Alpha.3 is the current frozen dogfood baseline.
+
+For the next 3–5 real projects:
+- no architecture changes unless there is a real blocker or repeated failure;
+- collect operational metrics first.
+
+Track: total duration, time to first Brain control, Brain TASK count, REVISE count, ASK_USER count, manual relay count, browser recovery/error count, conversation switches, publish retries, DONE success/failure.
+
+Future ideas (not Alpha.3 requirements): native ChatGPT Desktop Brain transport if a supported interface becomes available; Claude / DeepSeek BrainProvider; long-running feature-branch checkpoint policy. Do not implement them now.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    U[User goal] --> BRAIN[ChatGPT Brain]
-    BRAIN <--> IAB[IAB BrainSession]
-    IAB <--> CTX[Brain Context / PacketContextProvider]
-    CTX <--> PROTO[Structured Protocol + Acceptance/Evidence Gate]
-    PROTO <--> TM[TaskManager / durable Task State]
-    TM <--> RH[Runtime Host]
-    RH <--> CX[persistent Codex worker / thread]
+    U[User goal] --> CDX[current Codex agent]
+    CDX <--> IAB[Codex in-app browser / IAB]
+    IAB <--> BRAIN[ChatGPT Brain]
+    BRAIN <--> PROTO[Structured Protocol + Acceptance/Evidence Gate]
+    PROTO <--> TASK[milestone TASK]
+    TASK --> EXEC[current Codex executes]
+    EXEC --> RESULT[compact RESULT]
+    RESULT --> BRAIN
+    EXEC --> REPO[Target repo]
 ```
 
 ## Quick Start
@@ -51,7 +93,7 @@ flowchart TD
 
 - Node.js `>= 18`
 - ESM project (`"type": "module"`)
-- A Codex in-app browser (IAB) runtime and a worker process for a **real** ChatGPT-Brain run — see [SKILL.md](SKILL.md)
+- A Codex in-app browser (`iab`) runtime for a **real** ChatGPT-Brain run — see [SKILL.md](SKILL.md)
 
 ### Install and test
 
@@ -62,40 +104,20 @@ npm install
 npm test
 ```
 
-### Use the library
+### Library / entrypoints
 
-```js
-import { TaskService } from './src/index.js';
-
-// A runtime must be supplied for a live ChatGPT-Brain run.
-// It provides the durable store, the brain-session openers, and the
-// Codex executor used by the loop. See SKILL.md for the worker/brain
-// wiring and the data-root resolver.
-const service = new TaskService({ stateDir });
-
-await service.startTask({
-  goal,              // e.g. "Refactor the stats module and add tests"
-  repoDir,           // absolute path to the target repository
-  conversation: 'new',        // supported (default)
-  // conversation: 'current', // EXPERIMENTAL
-});
-```
-
-A real ChatGPT-Brain execution requires the in-app browser session plus a Codex worker running in an ordinary Node process (the node-REPL sandbox cannot spawn a descendant `codex`). The public API is library-oriented; this repository does **not** ship a polished global CLI.
+- `npm run setup:brain-command` — one-time install of the launcher Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and `$CODEX_HOME/brain-command/config.json`.
+- `npm run status:brain-command` — read-only check of the launcher Skill and config.
 
 ## Core workflow and commands
 
-These are the documented entry points (see [SKILL.md](SKILL.md) for the runtime wiring).
+These are the documented entry points (see [SKILL.md](SKILL.md) for runtime wiring).
 
 | Command | Purpose | Status |
 |---|---|---|
-| `doctor` | Preflight checks (IAB runtime, ChatGPT login, codex CLI, git, state/log dirs, IPC, context provider) | Supported |
-| `start` | `TaskService.startTask({ goal, repoDir, conversation: 'new' })` | Supported |
-| `resume` | Resume / turn-sliced `advanceTask` loop for a task | Supported |
-| `status` | `TaskService.getTaskStatus(taskId)` | Supported |
 | `status:brain-command` | Read-only check: user-level launcher Skill discoverable + brain-command config exists/parses; prints `orchestratorRoot` / `dataRoot` / `workspaceRoot` and the defaults; never prints secrets; exit 0 healthy, 1 missing-or-invalid | Supported |
-| `cancel` | `TaskService.cancelTask(taskId)` | Supported |
-| `adopt-current` | Continue in the *current* ChatGPT conversation | Experimental |
+| `doctor` | Preflight checks (IAB runtime, ChatGPT login, codex CLI, git, state/log dirs, IPC, context provider) | Supported |
+| `setup:brain-command` | One-time install of launcher Skill + config | Supported |
 
 ### Natural-language entry
 
@@ -103,66 +125,42 @@ These are the documented entry points (see [SKILL.md](SKILL.md) for the runtime 
 用 ChatGPT 指挥模式完成这个任务：<goal>
 ```
 
-## Alpha.2 — Delta Packets + Fast Bootstrap
+## Supported in `v0.1.0-alpha.3`
 
-- **One-time setup (user-runnable)** — run `npm run setup:brain-command` from the repository. It installs the launcher Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and creates/updates `$CODEX_HOME/brain-command/config.json`, deterministically resolving `orchestratorRoot` (repo root), `dataRoot`, and `workspaceRoot` (pass `--orchestrator-root`, `--data-root`, `--workspace-root` to override). It runs once; normal task startup never reruns it.
-- **`brain-command` launcher Skill** — the canonical user-facing entry. It resolves the user-scoped config at `$CODEX_HOME/brain-command/config.json`, resolves the repo deterministically, and runs a fast preflight (no broad filesystem discovery). One-time setup (`setupBrainCommand`) installs the launcher Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and writes the config; normal execution never reinstalls it.
-- **Read-only status check** — run `npm run status:brain-command` (scripts/brain-command-status.mjs → `brainCommandStatus`). It verifies the launcher Skill is discoverable at `$HOME/.agents/skills/brain-command/SKILL.md` (legacy `$CODEX_HOME/skills/...` is flagged as a warning), verifies `$CODEX_HOME/brain-command/config.json` exists and parses, then prints `orchestratorRoot`, `dataRoot`, `workspaceRoot`, `defaultBrain`, `defaultExecutor`, `defaultConversationMode`. It never prints secrets; exit code 0 = healthy, 1 = missing/invalid. Read-only and does not change orchestration semantics.
-- **Delta packet protocol** — `PLAN` / `REPLAN` are Brain → Orchestrator control/state operations (never forwarded to Codex); normal `TASK` / `RESULT` are compact by default; legacy text protocol stays a compatible fallback.
-- **Durable state (schema v1)** — `taskContract`, `plan`, `repoContext`, `verificationPolicy`, `stepSummaries`, `evidenceLedger`, `unresolvedRisks`, all hydrated at load time.
-- **Tiered verification** — step / milestone / final, with authority precedence (mandatory orchestrator boundary > Brain requested level > Codex local minimum).
-- **Orchestrator-owned compaction** — `reviewed -> compact` produces a durable `stepSummary`.
-- **Escalation** — after 2 failed `REVISE` on the same step, the step packet can switch to the fuller contract packet.
-- **Dogfood instrumentation** — light bootstrap/packet/verification metrics (not a cost ledger).
-
-Scope boundaries: `adopt-current` stabilization, parallel executors, multiple Brain providers, Brain Council, MCP context provider, GUI, cost ledger, and remote runtime are NOT implemented in Alpha.2.
-
-## Supported in `v0.1.0-alpha.2`
-
-- `conversation: 'new'` — the default, supported path (new ChatGPT conversation + persistent Codex thread).
-- ChatGPT Brain control loop: `TASK` / `REVISE` / `ASK_USER` / `DONE`.
-- Structured `acceptance[]` and `evidence[]`, with an Acceptance Gate on `DONE` (a required acceptance must have real `pass` evidence, never inferred from the Codex exit code alone).
-- Durable Task State (schema v1) with turn-sliced `advanceTask`.
-- Persistent Codex worker/thread integration (the same thread is reused across turns).
-- `resumeTask` / `recovery_required` — crash-safe continuation.
-- Crash-safe `TaskLock` (owner pid + heartbeat; stale locks reclaimed).
-- Brain Project Profile / project binding (`bindProject` / `getProjectBinding`).
-- `PacketContextProvider` — bounded, secret-redacted repository context.
-- `doctor` diagnostics and safe defaults (no dangerous bypass by default).
+- Direct Brain Loop: current Codex agent ↔ ChatGPT (via the in-app browser `iab`).
+- ChatGPT Brain control loop: `PLAN` / `TASK` / `REVISE` / `ASK_USER` / `DONE`.
+- Existing ChatGPT conversation adoption: by title / URL / explicit `--adopt-current`, capturing the real `/c/<id>`, without creating a new conversation.
+- Composer safety: only the real composer (`#prompt-textarea` / composer-scoped) is targeted, failing closed (`ComposerUnavailableError`) and never touching history.
+- Structured `acceptance[]` / `evidence[]` and a `DONE` acceptance gate (required acceptance must have real `pass` evidence).
+- Milestone-sized Brain TASK governance (one comprehensive `PLAN`, prefers combining coherent executable/reviewable work).
+- Compact `RESULT` protocol.
+- Publish identity preflight (repo-local identity set before commit when an expected identity is configured) and publish gate (no force push / no rewrite of published history).
+- Post-DONE boundary: after `DONE` the target repo must not receive non-Brain-reviewed product changes.
+- Retained as experimental: detached worker / TaskService / nested-Codex runtime / durable recovery.
 
 ## Experimental
 
-- `conversation: 'current'` / `adopt-current` — retained, but **not** a stability promise in this alpha. Selected-tab identity is unstable across node-REPL invocations in the current Codex Desktop / IAB environment.
+- `adopt-current` is implemented and retained, used only when the user explicitly asks (selected-tab identity is unstable across node-REPL invocations in the current IAB environment).
+- Legacy detached worker / TaskService / TaskManager / durable recovery machinery is retained as experimental, not the default path.
 
 ## Limitations
 
-- The Codex worker must run in an ordinary Node process; the node-REPL sandbox cannot spawn a descendant `codex`.
-- The default `%LOCALAPPDATA%` data root may not be writable from the sandbox; callers may need a durable writable root via the resolver or `CHATGPT_ORCHESTRATOR_DATA_ROOT`.
-- The local governor currently passes its bearer token on the Codex child argv. It is redacted from logs/state but not removed from the process argv.
-- Depends on the ChatGPT web DOM; selectors/placeholders may need maintenance if the UI changes.
-- No cross-process automatic recovery beyond `resumeTask`; no concurrent task queue; no cost ledger.
+- Direct Mode depends on the Codex in-app browser (`iab`); if `iab` is unavailable it fails clearly (`IABUnavailableError`) and does not fall back to an external browser (Edge/Chrome).
+- Depends on the ChatGPT web DOM; composer/history selectors may need maintenance if the UI changes.
+- Milestone batching still needs validation across more real projects; no performance improvement percentages are measured.
 
 ## Safety and durability
 
 The current protections are structural, not guarantees:
 
-- Durable Task State with atomic writes (and a `.bak` fallback).
-- Crash-safe per-task lock with owner heartbeat.
+- Composer locates only the real composer and fails closed when not found.
+- Existing-conversation adoption creates no new conversation; the real `/c/<id>` is captured and bound.
 - Acceptance/evidence gate before `DONE`.
 - Bounded, secret-redacted context (no whole-repo dump).
-- Recovery / resume that reuses the same conversation, tab, and Codex thread.
+- Publish identity preflight + no force push / no rewrite of published history.
+- Post-DONE boundary: does not change the accepted target-repo outcome.
 
 Do not interpret these as production-ready security guarantees — see [Limitations](#limitations).
-
-## Roadmap
-
-Planned, not promised:
-
-- Stabilize `adopt-current` (identity binding via an explicit `tabId` instead of `tabs.selected()`).
-- Cloudflare / remote runtime.
-- Cost ledger.
-- Richer context providers.
-- GUI-free daily entry.
 
 ## Documentation
 

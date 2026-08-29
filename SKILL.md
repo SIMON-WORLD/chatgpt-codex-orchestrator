@@ -1,9 +1,9 @@
 ---
 name: chatgpt-codex-orchestrator
-description: "Alpha entry for the ChatGPT-command orchestrator (v0.1.0-alpha.2). Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as executor. The canonical launcher Skill is `brain-command`; its default path is the Direct Brain Loop (current Codex agent + built-in browser + ChatGPT). The detached worker/TaskService runtime is legacy/experimental."
+description: "Alpha entry for the ChatGPT-command orchestrator (v0.1.0-alpha.3). Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as executor. The canonical launcher Skill is `brain-command`; its default path is the Direct Brain Loop (current Codex agent + built-in browser + ChatGPT). The detached worker/TaskService runtime is legacy/experimental."
 ---
 
-# ChatGPT-command orchestrator (v0.1.0-alpha.2)
+# ChatGPT-command orchestrator (v0.1.0-alpha.3)
 
 Drives a ChatGPT <-> Codex loop. The agent drives it; the user only speaks the goal.
 

@@ -1,6 +1,6 @@
 # Architecture
 
-> Scope: current architecture of **v0.1.0-alpha.2** (delta packets + fast bootstrap).
+> Scope: current architecture of **v0.1.0-alpha.3** (Direct Brain Loop baseline; legacy detached runtime retained as experimental).
 > [`README.md`](../README.md) is the project overview; [`README.zh-CN.md`](../README.zh-CN.md) is its Chinese counterpart. [`development-history.md`](development-history.md) holds the historical implementation notes that predate the public-polish pass.
 
 ---

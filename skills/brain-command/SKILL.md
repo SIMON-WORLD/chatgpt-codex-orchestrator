@@ -31,6 +31,20 @@ Trigger on natural-language requests such as:
 
 Do **not** trigger for ordinary local-only coding.
 
+## Default execution contract
+
+Established once per task; the Brain does not repeat these defaults inside every `TASK` (unless an exception/override is needed):
+
+- ChatGPT owns `PLAN` / architecture / review / `DONE`.
+- Codex stays within Brain-approved scope.
+- Codex may run normal edit/debug/test iterations inside one milestone TASK.
+- Mandatory verification applies.
+- Protect secrets; fail closed on ambiguity.
+- Return compact `RESULT` evidence.
+- No force push or published-history rewrite.
+- Publish only after `DONE` + publish gate.
+
+
 ## Run (canonical default path)
 
 For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do not inspect the orchestrator's implementation source during normal startup.** The goal is to get ChatGPT guiding as fast as possible — the only delays should be the browser/tool and ChatGPT's own response latency.
@@ -58,6 +72,7 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
    - PLAN comprehensively once, then prefer **milestone-sized** TASKs that combine coherent implementation work that can be executed and reviewed together.
    - Codex may run normal implementation/debug/test iterations inside one TASK; return to the Brain only at meaningful review/decision boundaries.
    - `REVISE` remains available whenever evidence fails.
+   - Establish the DEFAULT EXECUTION CONTRACT once (see the Default execution contract section); do not repeat these defaults in every `TASK` unless an exception/override is needed.
 
    Do **not** dump large repo history/source on the first message.
 
