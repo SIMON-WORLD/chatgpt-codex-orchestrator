@@ -1,6 +1,6 @@
 ---
 name: brain-command
-description: "Canonical launcher for the ChatGPT-command orchestrator. Default = Direct Brain Loop: the current Codex agent talks to ChatGPT via the built-in browser, executes the Brain TASKs itself, and publishes on DONE. Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as the local executor, e.g. '用 ChatGPT 指挥模式完成...', '让 ChatGPT 指挥 Codex...', or 'Use ChatGPT as the brain and Codex as executor...'. Default Brain = ChatGPT, default Executor = the current Codex agent. The detached worker/nested-Codex runtime is kept as legacy/experimental."
+description: "Canonical launcher for the ChatGPT-command orchestrator. Default = Direct Brain Loop: the current Codex agent talks to ChatGPT via the built-in browser, executes the Brain TASKs itself, and runs the PUBLISH -> publication transaction -> external readback -> terminal DONE lifecycle. Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as the local executor, e.g. '用 ChatGPT 指挥模式完成...', '让 ChatGPT 指挥 Codex...', or 'Use ChatGPT as the brain and Codex as executor...'. Default Brain = ChatGPT, default Executor = the current Codex agent. The detached worker/nested-Codex runtime is kept as legacy/experimental."
 ---
 
 # brain-command (Direct Brain Loop)
@@ -14,8 +14,10 @@ User
 → ChatGPT Brain
 → current Codex agent executes TASK
 → compact RESULT back to the same ChatGPT conversation
-→ REVISE / TASK / DONE
-→ publish on DONE
+→ REVISE / TASK / REPLAN
+→ PUBLISH
+→ publication transaction → publish RESULT → external readback → Brain review
+→ terminal DONE
 ```
 
 Defaults: **Brain = ChatGPT**, **Executor = the current Codex agent**, **conversation = one dedicated ChatGPT conversation reused across the whole task**.
@@ -42,7 +44,7 @@ Established once per task; the Brain does not repeat these defaults inside every
 - Protect secrets; fail closed on ambiguity.
 - Return compact `RESULT` evidence.
 - No force push or published-history rewrite.
-- Publish only after `DONE` + publish gate.
+- Publish only after `PUBLISH` + publication gate; `DONE` is terminal.
 
 
 ## Acceptance, proof ledger & verification
@@ -122,25 +124,22 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
 
 8. **Review loop.** The same ChatGPT conversation returns the next control (`TASK` / `REVISE` / `REPLAN` / `PUBLISH` / `ASK_USER` / `DONE`). Keep the same conversation; do not resend the full goal/plan/raw logs each turn.
 
-9. **PUBLISH then terminal DONE.** On `PUBLISH`, run the publication transaction (`createPublicationTransaction`), collect external observable evidence, and have the Brain review. On `DONE`, run mandatory verification, a repo final check, and a working-tree scope check, then use the publish gate: On `DONE`, run mandatory verification, a repo final check, and a working-tree scope check, then use the publish gate:
+9. **Machine acceptance transition, then PUBLISH, then terminal DONE.** Before a milestone advances, run the machine acceptance transition (`createDirectGovernance().transition(...)` then `.markStepReviewed(...)`); a milestone only advances when EVERY required acceptance has a `pass` evidence item (`evaluateDirectAcceptanceGate`). The executor's natural-language summary never overrides the gate; missing/unknown/failed required evidence is returned to the Brain as structured `missing`/`failed` ids and is never silently advanced.
+
+   On `PUBLISH`, confirm the publication gate (`evaluatePublicationGate`), which requires `brainControl === 'PUBLISH'` — `DONE` never authorizes publishing:
 
    ```js
-   const { evaluatePublishGate } = await import('<orchestratorRoot>/src/direct-mode.js');
-   const gate = evaluatePublishGate({
-     brainControl: 'DONE',
-     taskStatus: 'completed',
-     mandatoryVerificationOk: true,
-     workingTreeScopeOk: true,
-   });
+   const { evaluatePublicationGate, evaluateDoneGate } = await import('<orchestratorRoot>/src/direct-mode.js');
+   const gate = evaluatePublicationGate({ brainControl: 'PUBLISH', acceptanceGateOk, identityPreflightOk, workingTreeScopeOk });
    ```
 
-   Publish only when `gate.ok && gate.reason === 'publish gate passed'`:
-   - run a publish identity preflight first: if an expected git identity (`name` / `email`) is configured, set it repo-local **before** committing (never wait for a push failure to amend) — see `src/publish-policy.js` (`configureGitIdentity` / `checkPublishIdentity`);
-   - ensure a meaningful commit,
-   - `fetch origin`, confirm a clean fast-forward,
-   - `push origin/main` (never force-push; never rewrite published history).
+   Then run the publication transaction (`createPublicationTransaction`): identity preflight -> `fetch origin` -> verify `origin/main` baseline -> create commit -> re-check remote race -> require fast-forward -> push `HEAD:refs/heads/main` (never force) -> optional tag -> externally supplied Release action/readback. Only after `publicationReadyForDone` (external observable evidence, including declared Release properties when a Release is required) may the Brain issue a terminal `DONE`.
 
-   Never publish on `REVISE`, `ASK_USER`, failure, or `recovery_required`.
+   ```js
+   const doneGate = evaluateDoneGate({ publicationReady, finalVerificationOk, workingTreeScopeOk });
+   ```
+
+   `DONE` is terminal: after `DONE`, `TASK` / `REVISE` / `REPLAN` / `PUBLISH` are invalid (`validateLifecycleAfterDone`).
 
    **Post-DONE boundary:** after Brain `DONE`, the target repo must NOT receive new product modifications that were not Brain-reviewed. Independent workspace bookkeeping/logging is allowed only if it does not change the already-accepted target-repo outcome.
 

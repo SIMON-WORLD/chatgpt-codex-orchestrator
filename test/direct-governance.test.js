@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateDirectAcceptanceGate, createProofLedger, planVerification, verifyTierPrecondition, buildBootstrapEvidence, createDirectMetrics, attemptLateReplyRecovery } from '../src/direct-governance.js';
+import { evaluateDirectAcceptanceGate, createProofLedger, createDirectGovernance, planVerification, verifyTierPrecondition, buildBootstrapEvidence, createDirectMetrics, attemptLateReplyRecovery, normalizeRelevantPath } from '../src/direct-governance.js';
 import { createPublicationTransaction, publicationReadyForDone, buildExternalEvidence, parseRemoteRef } from '../src/publication-transaction.js';
 import { CONTROLS, isTerminalControl, validateLifecycleAfterDone, parseBrainOutput } from '../src/protocol.js';
-import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES } from '../src/direct-mode.js';
+import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, evaluatePublicationGate, evaluateDoneGate } from '../src/direct-mode.js';
 import { createTabFacade } from '../src/iab-transport.js';
 
 test('missing acceptance evidence blocks completion', () => {
@@ -179,7 +179,8 @@ test('late reply recovered with no resend', async () => {
     beforeCount: 0, beforeLast: '', maxSlices: 2, sliceMs: 1,
   });
   assert.equal(reply, 'late reply');
-  assert.equal(calls.read, 1, 'only reads, never resends');
+  assert.ok(calls.read >= 1, 'reads to confirm stability; the helper never sends');
+  assert.equal(typeof reply, 'string');
 });
 
 test('direct metrics snapshot exposes the tracked fields', () => {
@@ -207,4 +208,120 @@ test('Alpha.3 guarantees unchanged: existing-conversation / IAB / composer', asy
   // composer resolve uses the structural #prompt-textarea, never a bare first.
   const facade = createTabFacade({ id: 't', playwright: { locator: (s) => ({ count: async () => s === '#prompt-textarea' ? 1 : 0, evaluate: async () => false, fill: async () => {}, press: async () => {}, innerText: async () => '' }), waitForTimeout: async () => {} } });
   assert.equal(await facade.isComposerReady(), true);
+});
+
+
+function okGit() {
+  return async (args) => {
+    if (args[0] === 'ls-remote') return 'base-sha\trefs/heads/main';
+    if (args[0] === 'config') return args.length === 3 ? '' : (args[2] === 'user.name' ? 'SIMON-WORLD' : 'noreply');
+    if (args[0] === 'rev-parse' && args.includes('--abbrev-ref')) return 'main';
+    if (args[0] === 'rev-parse') return 'head-sha';
+    if (args[0] === 'merge-base') return '';
+    return '';
+  };
+}
+
+test('unused natural-language summary cannot bypass a real Direct state transition', () => {
+  const g = createDirectGovernance();
+  const t = g.transition({ stepId: 's1', acceptance: ['U1', 'U2', 'U13'], result: { summary: 'all passed', status: 'success', evidence: [{ acceptanceId: 'U1', status: 'pass' }, { acceptanceId: 'U2', status: 'pass' }] } });
+  assert.equal(t.blocked, true);
+  assert.ok(t.missing.includes('U13'), 'missing evidence is not pass');
+  const mr = g.markStepReviewed({ stepId: 's1' });
+  assert.equal(mr.ok, false, 'milestone must not advance with missing acceptance');
+});
+
+test('no-dependency proof is not reusable by default; explicit dependencyFree is', () => {
+  const ledger = createProofLedger({ computeFingerprint: (f) => 'h-' + f });
+  ledger.record({ acceptanceId: 'M1', relevantFiles: [], status: 'pass' });
+  assert.equal(ledger.isReusable('M1'), false, 'relevantFiles=[] must not be reusable forever');
+  const ledger2 = createProofLedger({ computeFingerprint: (f) => 'h-' + f });
+  ledger2.record({ acceptanceId: 'M2', relevantFiles: [], dependencyFree: true, status: 'pass' });
+  assert.equal(ledger2.isReusable('M2'), true);
+});
+
+test('fingerprint failure is stale (never null==null freshness)', () => {
+  let fail = false;
+  const compute = (f) => { if (fail) throw new Error('io'); return 'h-' + f; };
+  const ledger = createProofLedger({ computeFingerprint: compute });
+  ledger.record({ acceptanceId: 'M1', relevantFiles: ['a.txt'], status: 'pass' });
+  assert.equal(ledger.isReusable('M1'), true);
+  fail = true;
+  assert.equal(ledger.isReusable('M1'), false, 'fingerprint read failure must make the proof stale');
+});
+
+test('path normalization invalidates correctly', () => {
+  const ledger = createProofLedger({ computeFingerprint: (f) => 'h-' + f });
+  ledger.record({ acceptanceId: 'M1', relevantFiles: ['./a.txt'], status: 'pass' });
+  assert.equal(ledger.isReusable('M1'), true);
+  ledger.invalidateOnChange(['a.txt']); // normalized form matches
+  assert.equal(ledger.isReusable('M1'), false);
+  assert.equal(normalizeRelevantPath('./a.txt'), 'a.txt');
+});
+
+test('changed verification identity invalidates proof', () => {
+  const ledger = createProofLedger({ computeFingerprint: (f) => 'h-' + f });
+  ledger.record({ acceptanceId: 'M1', relevantFiles: ['a.txt'], verification: 'cmd-a', status: 'pass' });
+  assert.equal(ledger.isReusable('M1', { verification: 'cmd-a' }), true);
+  assert.equal(ledger.isReusable('M1', { verification: 'cmd-b' }), false, 'changed verification identity invalidates reuse');
+});
+
+test('feature branch publication explicitly targets main', async () => {
+  const pushes = [];
+  const gitRun = async (args) => {
+    if (args[0] === 'push') { pushes.push(args); return ''; }
+    if (args[0] === 'ls-remote') return 'base-sha\trefs/heads/main';
+    if (args[0] === 'config') return args.length === 3 ? '' : (args[2] === 'user.name' ? 'SIMON-WORLD' : 'noreply');
+    if (args[0] === 'rev-parse' && args.includes('--abbrev-ref')) return 'feature-x';
+    if (args[0] === 'rev-parse') return 'head-sha';
+    if (args[0] === 'merge-base') return '';
+    return '';
+  };
+  const tx = createPublicationTransaction({ gitRun });
+  const res = await tx.run({ repoDir: '/x', expectedOriginMain: 'base-sha', commitMessage: 'm', acceptanceGateOk: true });
+  assert.deepEqual(pushes[0], ['push', 'origin', 'HEAD:refs/heads/main']);
+  assert.equal(res.currentBranch, 'feature-x');
+  assert.equal(res.targetBranch, 'main');
+});
+
+test('required Release metadata mismatch blocks terminal readiness', async () => {
+  const requiredRelease = { exists: true, draft: false, prerelease: false, title: 'Release T', bodyContains: ['Direct Brain Loop'] };
+  // title wrong
+  const tx1 = createPublicationTransaction({ gitRun: okGit(), readback: () => buildExternalEvidence({ remoteMainSha: 'head-sha', tagSha: 'head-sha', release: { exists: true, draft: false, prerelease: false, title: 'Wrong', body: 'Direct Brain Loop baseline' } }) });
+  const r1 = await tx1.run({ repoDir: '/x', expectedOriginMain: 'base-sha', commitMessage: 'm', tag: 'v1', requiredRelease, acceptanceGateOk: true });
+  assert.equal(publicationReadyForDone(r1), false, 'Release title mismatch must block terminal readiness');
+  // correct metadata
+  const tx2 = createPublicationTransaction({ gitRun: okGit(), readback: () => buildExternalEvidence({ remoteMainSha: 'head-sha', tagSha: 'head-sha', release: { exists: true, draft: false, prerelease: false, title: 'Release T', body: 'Direct Brain Loop baseline' } }) });
+  const r2 = await tx2.run({ repoDir: '/x', expectedOriginMain: 'base-sha', commitMessage: 'm', tag: 'v1', requiredRelease, acceptanceGateOk: true });
+  assert.equal(publicationReadyForDone(r2), true);
+});
+
+test('PUBLISH -> publication -> readback -> DONE works; DONE never starts publication', async () => {
+  assert.equal(evaluatePublicationGate({ brainControl: 'PUBLISH', acceptanceGateOk: true, identityPreflightOk: true, workingTreeScopeOk: true }).ok, true);
+  assert.equal(evaluatePublicationGate({ brainControl: 'DONE', acceptanceGateOk: true, identityPreflightOk: true, workingTreeScopeOk: true }).ok, false, 'DONE may not start publication');
+  const tx = createPublicationTransaction({ gitRun: okGit(), readback: () => buildExternalEvidence({ remoteMainSha: 'head-sha', tagSha: 'head-sha', release: { exists: true, draft: false, prerelease: false, title: 'Release T', body: 'Direct Brain Loop' } }) });
+  const res = await tx.run({ repoDir: '/x', expectedOriginMain: 'base-sha', commitMessage: 'm', tag: 'v1', acceptanceGateOk: true });
+  assert.equal(publicationReadyForDone(res), true);
+  assert.equal(evaluateDoneGate({ publicationReady: publicationReadyForDone(res), finalVerificationOk: true, workingTreeScopeOk: true }).ok, true);
+});
+
+test('late-reply recovery never duplicates send and preserves conversation identity', async () => {
+  let reads = 0;
+  const reply = await attemptLateReplyRecovery({
+    readReply: async () => { reads++; return 'late reply'; },
+    getCount: async () => 1,
+    expectedConversationId: 'conv-1',
+    getConversationId: async () => 'conv-1',
+    beforeCount: 0, beforeLast: '', maxSlices: 2, sliceMs: 1,
+  });
+  assert.equal(reply, 'late reply');
+  assert.ok(reads >= 1, 'reads to confirm stability; the helper never sends');
+    assert.equal(typeof reply, 'string');
+  // identity mismatch => bail (never continue on a different conversation)
+  const reply2 = await attemptLateReplyRecovery({
+    readReply: async () => 'x', getCount: async () => 1,
+    expectedConversationId: 'conv-1', getConversationId: async () => 'conv-2',
+    maxSlices: 1, sliceMs: 1,
+  });
+  assert.equal(reply2, null);
 });

@@ -24,6 +24,7 @@
 
 import { InAppBrowserTransport, openBrainSession, openBrainSessionExisting, createTabFacade, BrainSession, captureCurrentConversation, ConversationIdentityMismatchError } from './iab-transport.js';
 import { extractConversationId } from './atomic-turn.js';
+import { createDirectGovernance } from './direct-governance.js';
 
 // Thin BrainProvider contract (reserved for future providers; only ChatGPT is
 // canonical in this Batch):
@@ -219,22 +220,30 @@ export function newDirectTaskState({ taskId, repoDir, brainProvider = DEFAULT_DI
     completedSteps: [],
     evidenceLedger: [],
     publishPolicy,
+    governance: createDirectGovernance(),
     startedAt: new Date().toISOString(),
   };
 }
 
-// DONE publish gate. Publish only when:
-//   - Brain returned DONE
-//   - the task is completed
-//   - mandatory verification passed
-//   - working tree has no unrelated changes
-// Never publish on REVISE / ASK_USER / failure / recovery_required.
-export function evaluatePublishGate({ brainControl, taskStatus = 'completed', mandatoryVerificationOk = true, workingTreeScopeOk = true } = {}) {
-  if (brainControl !== 'DONE') return { ok: false, reason: `brain control is ${String(brainControl)}; only DONE may publish` };
-  if (taskStatus !== 'completed') return { ok: false, reason: `task status is ${String(taskStatus)}; only completed may publish` };
-  if (!mandatoryVerificationOk) return { ok: false, reason: 'mandatory verification not passed' };
+// PUBLISH authorizes publication; DONE never authorizes publishing. A new
+// control is only passed to publication via PUBLISH, and a terminal DONE only
+// accepts an already-verified final state.
+export function evaluatePublicationGate({ brainControl, acceptanceGateOk = true, identityPreflightOk = true, workingTreeScopeOk = true } = {}) {
+  if (brainControl !== 'PUBLISH') return { ok: false, reason: `brain control is ${String(brainControl)}; only PUBLISH may start publication` };
+  if (!acceptanceGateOk) return { ok: false, reason: 'final acceptance gate not passed' };
+  if (!identityPreflightOk) return { ok: false, reason: 'publish identity preflight not passed' };
   if (!workingTreeScopeOk) return { ok: false, reason: 'working tree has unrelated changes' };
-  return { ok: true, reason: 'publish gate passed' };
+  return { ok: true, reason: 'publication gate passed' };
+}
+
+// DONE is terminal. It is only valid after the publication transaction completed
+// with external observable evidence AND final verification passed. DONE itself
+// never starts publication.
+export function evaluateDoneGate({ publicationReady = false, finalVerificationOk = true, workingTreeScopeOk = true } = {}) {
+  if (!publicationReady) return { ok: false, reason: 'publication not ready (need PUBLISH -> transaction -> external readback)' };
+  if (!finalVerificationOk) return { ok: false, reason: 'final verification not passed' };
+  if (!workingTreeScopeOk) return { ok: false, reason: 'working tree has unrelated changes' };
+  return { ok: true, reason: 'terminal DONE gate passed' };
 }
 
 // Convenience: forbid publishing for the known non-publish states.

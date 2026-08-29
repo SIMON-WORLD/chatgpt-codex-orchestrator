@@ -8,6 +8,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { normalizeEvidence } from './protocol.js';
+import { isPlaceholder } from './atomic-turn.js';
 
 // --- 1) Acceptance gate ------------------------------------------------------
 // A TASK / milestone is only "passing" when EVERY required acceptanceId has an
@@ -31,21 +32,103 @@ export function evaluateDirectAcceptanceGate({ acceptance = [], evidence = [] } 
   return { ok: allPass, missing, failed, passed, required };
 }
 
-// --- 2) Proof ledger ---------------------------------------------------------
+// --- Canonical Direct governance state + transition --------------------------
+// Carries the machine state needed by the loop (acceptance registry, proof
+// ledger snapshot, metrics) and exposes ONE transition function. The natural
+// language summary can never bypass the gate.
+export function createDirectGovernance({ proofLedger = createProofLedger(), metrics = createDirectMetrics() } = {}) {
+  const state = {
+    acceptanceRegistry: [],   // [{ id, required, text, status }]
+    proofLedger,
+    metrics,
+    currentStepId: null,
+    completedSteps: [],
+  };
+
+  function registerAcceptance(acceptance = []) {
+    for (const a of acceptance) {
+      const id = typeof a === 'string' ? a : (a.id || a.text);
+      if (!id) continue;
+      const required = typeof a === 'string' ? true : (a.required !== false);
+      if (!state.acceptanceRegistry.some((x) => x.id === id)) {
+        state.acceptanceRegistry.push({ id, required, text: (typeof a === 'string' ? a : (a.text || a.id || '')), status: 'missing' });
+      }
+    }
+  }
+
+  function applyResultEvidence(evidence = []) {
+    for (const e of (evidence || []).map((x) => normalizeEvidence(x))) {
+      const reg = state.acceptanceRegistry.find((x) => x.id === e.acceptanceId);
+      if (reg) reg.status = e.status;
+      else state.acceptanceRegistry.push({ id: e.acceptanceId, required: false, text: e.acceptanceId, status: e.status });
+    }
+  }
+
+  function gate() {
+    return evaluateDirectAcceptanceGate({
+      acceptance: state.acceptanceRegistry.map((a) => ({ id: a.id, required: a.required })),
+      // A never-evidenced acceptance keeps status 'missing' and is excluded from
+      // evidence, so the gate reports it as MISSING (not failed/unknown).
+      evidence: state.acceptanceRegistry.filter((a) => a.status !== 'missing').map((a) => ({ acceptanceId: a.id, status: a.status })),
+    });
+  }
+
+  return {
+    state,
+    // ONE canonical transition: begin/advance a step, register acceptance, apply
+    // RESULT evidence, and compute the gate. Returns structured missing/failed ids.
+    transition({ stepId, acceptance = [], result = null }) {
+      if (stepId) state.currentStepId = stepId;
+      registerAcceptance(acceptance);
+      if (result) applyResultEvidence(Array.isArray(result.evidence) ? result.evidence : (result.evidence ? [result.evidence] : []));
+      const g = gate();
+      return { gate: g, blocked: !g.ok, missing: g.missing, failed: g.failed, stepId: state.currentStepId };
+    },
+    // Only mark reviewed/completed when the gate passes; never silently advance.
+    markStepReviewed({ stepId }) {
+      const g = gate();
+      if (!g.ok) return { ok: false, blocked: true, missing: g.missing, failed: g.failed, stepId };
+      const s = stepId || state.currentStepId;
+      if (s && !state.completedSteps.includes(s)) state.completedSteps.push(s);
+      state.currentStepId = null;
+      return { ok: true, completed: true, stepId: s };
+    },
+    registerAcceptance,
+    gate,
+  };
+}
+
+// --- 2) Proof ledger (fail closed) -------------------------------------------
 function defaultFingerprint(file) {
   const buf = fs.readFileSync(file);
   return crypto.createHash('sha256').update(buf).digest('hex');
 }
 
-export function createProofLedger({ computeFingerprint = null } = {}) {
+// Deterministic canonical path (repo-relative-ish): forward slashes, no leading ./,
+// no duplicate slashes.
+export function normalizeRelevantPath(p) {
+  if (!p) return '';
+  return String(p).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/{2,}/g, '/');
+}
+
+export function createProofLedger({ computeFingerprint = null, normalizePath = null } = {}) {
   const compute = computeFingerprint || defaultFingerprint;
+  const norm = normalizePath || normalizeRelevantPath;
   const proofs = [];
 
   return {
-    record({ acceptanceId, status = 'pass', kind = 'verify', summary = '', verification = null, relevantFiles = [], stepId = null }) {
+    record({ acceptanceId, status = 'pass', kind = 'verify', summary = '', verification = null, relevantFiles = [], dependencyFree = false, stepId = null }) {
+      const files = (relevantFiles || []).map(norm).filter(Boolean);
       const relevantFingerprints = {};
-      for (const f of relevantFiles) { try { relevantFingerprints[f] = compute(f); } catch { relevantFingerprints[f] = null; } }
-      const proof = { acceptanceId, status, kind, summary, verification, relevantFiles, relevantFingerprints, stepId, createdAt: new Date().toISOString() };
+      let fingerprintsOk = true;
+      for (const f of files) {
+        try { relevantFingerprints[f] = compute(f); } catch { relevantFingerprints[f] = null; fingerprintsOk = false; }
+      }
+      // Fail closed: without an explicit dependencyFree contract, a proof is only
+      // potentially reusable when it tracks at least one dependency and every
+      // dependency fingerprint computed successfully.
+      const reusable = dependencyFree === true ? true : (files.length > 0 && fingerprintsOk);
+      const proof = { acceptanceId, status, kind, summary, verification, relevantFiles: files, relevantFingerprints, dependencyFree, reusable, stepId, createdAt: new Date().toISOString() };
       const i = proofs.findIndex((p) => p.acceptanceId === acceptanceId);
       if (i >= 0) proofs[i] = proof; else proofs.push(proof);
       return proof;
@@ -53,21 +136,27 @@ export function createProofLedger({ computeFingerprint = null } = {}) {
     get(acceptanceId) { return proofs.find((p) => p.acceptanceId === acceptanceId) || null; },
     all() { return proofs.slice(); },
     count() { return proofs.length; },
-    // Fresh only when a pass proof exists AND every relevant dependency is
-    // byte-for-byte unchanged (current fingerprint equals the recorded one).
-    isFresh(acceptanceId) {
+    isFresh(acceptanceId, { verification = null } = {}) {
       const p = this.get(acceptanceId);
       if (!p || p.status !== 'pass') return false;
-      for (const f of p.relevantFiles) {
-        let cur = null; try { cur = compute(f); } catch { cur = null; }
-        if (cur !== p.relevantFingerprints[f]) return false;
+      // Fail closed: no-dependency proof without explicit dependencyFree contract is not reusable.
+      if (p.dependencyFree !== true && (!p.relevantFiles || p.relevantFiles.length === 0)) return false;
+      // Verification identity must participate if recorded.
+      if (p.verification && verification && p.verification !== verification) return false;
+      // Fingerprint failure (null) is not fresh; a changed dependency is stale.
+      if (p.dependencyFree !== true) {
+        for (const f of p.relevantFiles) {
+          let cur = null;
+          try { cur = compute(f); } catch { cur = null; }
+          if (cur === null || p.relevantFingerprints[f] === undefined || cur !== p.relevantFingerprints[f]) return false;
+        }
       }
       return true;
     },
-    isReusable(acceptanceId) { return this.isFresh(acceptanceId); },
-    // Mark proofs stale when a changed file intersects their relevantFiles.
+    isReusable(acceptanceId, opts) { return this.isFresh(acceptanceId, opts); },
+    // Mark proofs stale when a (normalized) changed file intersects relevantFiles.
     invalidateOnChange(changedFiles = []) {
-      const changed = new Set(changedFiles);
+      const changed = new Set((changedFiles || []).map(norm));
       let stale = 0;
       for (const p of proofs) {
         if (p.relevantFiles.some((f) => changed.has(f))) { p.status = 'stale'; stale++; }
@@ -78,9 +167,6 @@ export function createProofLedger({ computeFingerprint = null } = {}) {
 }
 
 // --- 3) Verification tiers ---------------------------------------------------
-// Decide which required acceptance IDs need (re)verification before a boundary.
-// STEP: targeted/syntax. MILESTONE: milestone gate + reusable fresh proofs.
-// FINAL: all required proofs must be fresh/pass. Do NOT blindly rerun a fresh proof.
 export function planVerification({ tier = 'step', requiredAcceptanceIds = [], proofLedger = null } = {}) {
   const needVerification = [];
   const reuse = [];
@@ -94,12 +180,10 @@ export function planVerification({ tier = 'step', requiredAcceptanceIds = [], pr
 export function verifyTierPrecondition({ tier, gate, proofLedger } = {}) {
   if (!gate) return { ok: false, reason: 'no acceptance gate result' };
   if (tier === 'final') {
-    // FINAL requires every required acceptance proof to be fresh/pass.
     const stale = gate.required.filter((id) => !(proofLedger && proofLedger.isReusable(id)));
     if (stale.length) return { ok: false, reason: `final requires fresh proofs for: ${stale.join(', ')}` };
   }
   if (tier === 'milestone') {
-    // MILESTONE requires the gate to pass.
     if (!gate.ok) return { ok: false, reason: `milestone gate failed: missing=${gate.missing.join(',')} failed=${gate.failed.join(',')}` };
   }
   return { ok: true };
@@ -136,18 +220,27 @@ export function createDirectMetrics() {
   };
 }
 
-// --- 9) Bounded late-reply recovery -----------------------------------------
-// Preserves exactly-once send. On a reply timeout, do NOT resend: keep the same
-// conversation, and use short bounded read-only polling slices to detect a late
-// reply. Returns the late reply text, or null if it never arrived (permanent).
-export async function attemptLateReplyRecovery({ readReply, getCount, beforeCount, beforeLast, maxSlices = 4, sliceMs = 2000 } = {}) {
+// --- 9) Bounded late-reply poll (truthful, identity-preserving) --------------
+// Preserves exactly-once send. This is ONLY a bounded read-only late-reply poll:
+// it never resends, verifies the expected conversation identity when supplied,
+// ignores placeholder / unstable replies, and returns a reply only when it is
+// confidently identified (stable across two reads). It does NOT claim to rebind
+// the IAB tab — if the conversation identity ever mismatches, it bails (null).
+export async function attemptLateReplyRecovery({ readReply, getCount, beforeCount = 0, beforeLast = '', expectedConversationId = null, getConversationId = null, maxSlices = 4, sliceMs = 2000 } = {}) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 0; i < maxSlices; i++) {
     await sleep(sliceMs);
+    if (getConversationId) {
+      let cid = null;
+      try { cid = await getConversationId(); } catch { cid = null; }
+      if (expectedConversationId && cid && cid !== expectedConversationId) return null;
+    }
     let n = -1; try { n = await getCount(); } catch { n = -1; }
     if (n > 0) {
       const cur = (await readReply(n - 1)) || '';
-      if (cur && cur.trim() && cur !== beforeLast) return cur;
+      if (cur && cur.trim() && cur !== beforeLast && !isPlaceholder(cur)) {
+        try { const again = (await readReply(n - 1)) || ''; if (again === cur) return cur; } catch { /* unstable */ }
+      }
     }
   }
   return null;

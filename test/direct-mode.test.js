@@ -8,7 +8,8 @@ import {
   BRAIN_PROVIDERS,
   createChatGPTBrowserProvider,
   newDirectTaskState,
-  evaluatePublishGate,
+  evaluatePublicationGate,
+  evaluateDoneGate,
   isPublishForbiddenState,
 } from '../src/direct-mode.js';
 import { buildCompactResult, normalizeResult, parseBrainOutput } from '../src/protocol.js';
@@ -74,12 +75,15 @@ test('RESULT packet stays compact structured protocol', () => {
   assert.equal(n.stepId, 'step-1');
 });
 
-test('DONE publish gate retained: only DONE + completed + verified + clean worktree publishes', () => {
-  assert.equal(evaluatePublishGate({ brainControl: 'DONE', taskStatus: 'completed', mandatoryVerificationOk: true, workingTreeScopeOk: true }).ok, true);
-  assert.equal(evaluatePublishGate({ brainControl: 'REVISE', taskStatus: 'completed', mandatoryVerificationOk: true, workingTreeScopeOk: true }).ok, false, 'REVISE must not publish');
-  assert.equal(evaluatePublishGate({ brainControl: 'DONE', taskStatus: 'recovery_required', mandatoryVerificationOk: true, workingTreeScopeOk: true }).ok, false, 'recovery_required task must not publish');
-  assert.equal(evaluatePublishGate({ brainControl: 'DONE', taskStatus: 'completed', mandatoryVerificationOk: false, workingTreeScopeOk: true }).ok, false, 'failed verification must not publish');
-  assert.equal(evaluatePublishGate({ brainControl: 'DONE', taskStatus: 'completed', mandatoryVerificationOk: true, workingTreeScopeOk: false }).ok, false, 'unclean worktree must not publish');
+test('PUBLISH authorizes publication; DONE is terminal and never authorizes publishing', () => {
+  assert.equal(evaluatePublicationGate({ brainControl: 'PUBLISH', acceptanceGateOk: true, identityPreflightOk: true, workingTreeScopeOk: true }).ok, true);
+  assert.equal(evaluatePublicationGate({ brainControl: 'DONE', acceptanceGateOk: true, identityPreflightOk: true, workingTreeScopeOk: true }).ok, false, 'DONE must not start publication');
+  assert.equal(evaluatePublicationGate({ brainControl: 'REVISE', acceptanceGateOk: true, identityPreflightOk: true, workingTreeScopeOk: true }).ok, false, 'REVISE must not publish');
+  assert.equal(evaluatePublicationGate({ brainControl: 'PUBLISH', acceptanceGateOk: false, identityPreflightOk: true, workingTreeScopeOk: true }).ok, false, 'failed acceptance gate must not publish');
+  // Terminal DONE only accepts the already-verified final state.
+  assert.equal(evaluateDoneGate({ publicationReady: true, finalVerificationOk: true, workingTreeScopeOk: true }).ok, true);
+  assert.equal(evaluateDoneGate({ publicationReady: false, finalVerificationOk: true, workingTreeScopeOk: true }).ok, false, 'DONE without publication/readback must be rejected');
+  assert.equal(evaluateDoneGate({ publicationReady: true, finalVerificationOk: false, workingTreeScopeOk: true }).ok, false, 'DONE without final verification must be rejected');
   // Known forbidden states.
   for (const s of ['REVISE', 'ASK_USER', 'failure', 'recovery_required']) {
     assert.equal(isPublishForbiddenState(s), true, `${s} is a non-publish state`);

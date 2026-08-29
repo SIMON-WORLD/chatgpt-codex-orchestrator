@@ -9,7 +9,7 @@ Drives a ChatGPT <-> Codex loop. The agent drives it; the user only speaks the g
 
 ## Default: Direct Brain Loop
 
-The canonical launcher Skill is **`brain-command`**. Its default path is the **Direct Brain Loop**: the current Codex agent uses the built-in browser to open/reuse one ChatGPT conversation, sends the goal + governance contract, receives `PLAN` / `TASK`, executes the `TASK` itself, sends a compact `RESULT` back to the same conversation, and repeats until `DONE` (then runs the publish gate). Provider-neutral by name; **Default Brain = ChatGPT**, **Default Executor = the current Codex agent**. See `skills/brain-command/SKILL.md`. Normal startup does NOT inspect orchestrator source and does NOT do broad filesystem discovery.
+The canonical launcher Skill is **`brain-command`**. Its default path is the **Direct Brain Loop**: the current Codex agent uses the built-in browser to open/reuse one ChatGPT conversation, sends the goal + governance contract, receives `PLAN` / `TASK`, executes the `TASK` itself, sends a compact `RESULT` back to the same conversation, and repeats until `PUBLISH` -> publication transaction -> external readback -> terminal `DONE`. Provider-neutral by name; **Default Brain = ChatGPT**, **Default Executor = the current Codex agent**. See `skills/brain-command/SKILL.md`. Normal startup does NOT inspect orchestrator source and does NOT do broad filesystem discovery.
 
 **Browser isolation:** canonical Direct Mode uses the Codex **in-app browser (iab) only** — it never attaches to the user's Edge/Chrome/external browser and there is no fallback; if the IAB is unavailable, stop and report instead of switching browser backend.
 
@@ -29,9 +29,9 @@ The detached worker/TaskService runtime is legacy / experimental, retained for c
 
 ## Protocol (Alpha.2)
 
-- Structured protocol is the default: `PLAN` / `REPLAN` (Brain -> Orchestrator control/state, not forwarded to Codex), compact `TASK`, compact `RESULT`, plus the existing `REVISE` / `ASK_USER` / `DONE`. The legacy text protocol remains a compatible fallback.
+- Structured protocol is the default: `PLAN` / `REPLAN` (Brain -> Orchestrator control/state, not forwarded to Codex), compact `TASK`, compact `RESULT`, plus the existing `REVISE` / `ASK_USER` / `PUBLISH` / `DONE`. The legacy text protocol remains a compatible fallback.
 - Verification tiers: step / milestone / final, with authority precedence `mandatory orchestrator boundary > Brain requested level > Codex local minimum`.
-- DONE only publishes after the publish gate: Brain = `DONE`, task completed, mandatory verification passed, working tree has no unrelated changes, and the git identity preflight (repo-local identity set before commit) is satisfied.
+- `PUBLISH` authorizes publication (publication gate + transaction + external observable readback). `DONE` is terminal and never authorizes publishing; after `DONE` no further control is valid.
 - Governance prefers milestone-sized TASKs: PLAN comprehensively once, combine coherent implementation work, let Codex iterate inside one TASK, return to the Brain only at meaningful review/decision boundaries. After `DONE`, the target repo must not receive non-Brain-reviewed product changes.
 
 ## Runtime wiring (agent-side, legacy)

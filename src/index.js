@@ -39,4 +39,4 @@ export { evaluateDirectAcceptanceGate, createProofLedger, planVerification, veri
 export { createPublicationTransaction, publicationReadyForDone, buildExternalEvidence, parseRemoteRef } from './publication-transaction.js';
 
 export { CodexWorkerClient } from './worker-client.js';
-export { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, BRAIN_PROVIDERS, DEFAULT_TAKEOVER_MESSAGE, ConversationNotFoundError, ConversationAmbiguityError, newDirectTaskState, evaluatePublishGate, isPublishForbiddenState } from './direct-mode.js';
+export { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, BRAIN_PROVIDERS, DEFAULT_TAKEOVER_MESSAGE, ConversationNotFoundError, ConversationAmbiguityError, newDirectTaskState, evaluatePublicationGate, evaluateDoneGate, isPublishForbiddenState } from './direct-mode.js';
