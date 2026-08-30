@@ -110,17 +110,15 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
 
 6. **Execute the TASK in the current Codex agent.** Do **not** start a nested Codex, do not start a worker, do not wait on a ready file. The current Codex agent is the executor. Do the work, collect real evidence, and verify.
 
-7. **Send a compact RESULT back to the same conversation.** Build it with `buildCompactResult` / `normalizeResult` from `src/protocol.js`:
+7. **Run the machine acceptance transition, THEN send the compact RESULT.** Execute `TASK` -> build the compact RESULT -> run the single canonical machine path BEFORE the Brain treats the milestone as accepted:
 
    ```js
-   const { buildCompactResult } = await import('<orchestratorRoot>/src/protocol.js');
-   const msg = JSON.stringify(buildCompactResult({
-     stepId, status: 'success', summary, changed, evidence, blockers,
-   }));
-   const r = await provider.send(msg);
+   const { createDirectGovernance } = await import('<orchestratorRoot>/src/direct-governance.js');
+   const t = governance.transition({ stepId, acceptance, result: { changed, evidence } });
+   const reviewed = t.gate.ok ? governance.markStepReviewed({ stepId }) : { ok: false, blocked: true, missing: t.missing, failed: t.failed };
    ```
 
-   The RESULT should carry only what the Brain needs for its next decision: `stepId`, `status`, `summary`, `changed`, `evidence`, `blockers`.
+   Attach the machine gate outcome (`t.gate.ok`, `t.missing`, `t.failed`, `t.passed`) to the RESULT, then build with `buildCompactResult` / `normalizeResult` from `src/protocol.js` and send it to the SAME conversation via `provider.send`. The executor's summary never overrides the gate; if the gate fails the milestone is NOT reviewed/completed, `PUBLISH` / final completion is impossible, and the Brain receives the structured missing/failed ids and decides `REVISE` / further corrective control. The machine gate MUST run before the Brain is allowed to treat the milestone as accepted.
 
 8. **Review loop.** The same ChatGPT conversation returns the next control (`TASK` / `REVISE` / `REPLAN` / `PUBLISH` / `ASK_USER` / `DONE`). Keep the same conversation; do not resend the full goal/plan/raw logs each turn.
 
@@ -221,7 +219,7 @@ Canonical implementation: `ChatGPTBrowserProvider` (`createChatGPTBrowserProvide
 
 ## Minimal state
 
-Normal Direct Mode does not require a daemon. If a minimal task record is useful, `newDirectTaskState` keeps only: `taskId`, `repoDir`, `brainProvider`, `executor`, `conversationId`, `conversationUrl`, `conversationTitle`, `plan`, `currentStepId`, `completedSteps`, `evidenceLedger`, `publishPolicy`. State persistence must never block the normal run; complex crash recovery is a later enhancement, not a P0.
+Normal Direct Mode does not require a daemon. `newDirectTaskState` carries the machine governance state used by the loop, all **in-memory** (NOT persistent/durable): the acceptance registry, the proof ledger snapshot, and Direct run metrics (via `governance`), plus `taskId`, `repoDir`, `brainProvider`, `executor`, `conversationId`, `conversationUrl`, `conversationTitle`, `plan`, `currentStepId`, `completedSteps`, `evidenceLedger`, `publishPolicy`. State persistence must never block the normal run; complex crash recovery is a later enhancement, not a P0.
 
 ## Scope boundaries (current Batch)
 

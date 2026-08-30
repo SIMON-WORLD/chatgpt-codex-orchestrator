@@ -3,7 +3,9 @@
 // Pure, injectable helpers that bring the existing acceptance / evidence /
 // verification capability into the canonical Direct Brain Loop. No worker /
 // daemon / nested Codex / external browser / complex recovery. The executor's
-// natural-language summary never overrides the acceptance gate.
+// natural-language summary never overrides the acceptance gate, and proof reuse
+// is wired into the single canonical transition (no separate record/invalidate
+// calls required of the agent).
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -32,13 +34,33 @@ export function evaluateDirectAcceptanceGate({ acceptance = [], evidence = [] } 
   return { ok: allPass, missing, failed, passed, required };
 }
 
+// Normalize a structured acceptance item, preserving optional proof metadata
+// (relevantFiles / dependencyFree / verificationId). Legacy strings stay compatible.
+export function normalizeAcceptanceItem(a) {
+  if (typeof a === 'string') return { id: a, required: true, text: a, proof: null };
+  const id = a.id || a.text;
+  if (!id) return null;
+  let proof = null;
+  if (a.proof && typeof a.proof === 'object') {
+    const p = {
+      ...(Array.isArray(a.proof.relevantFiles) ? { relevantFiles: a.proof.relevantFiles.slice() } : {}),
+      ...(typeof a.proof.dependencyFree === 'boolean' ? { dependencyFree: a.proof.dependencyFree } : {}),
+      ...(typeof a.proof.verificationId === 'string' ? { verificationId: a.proof.verificationId } : {}),
+    };
+    if (p.relevantFiles || p.dependencyFree || p.verificationId) proof = p;
+  }
+  return { id, required: a.required !== false, text: a.text || a.id || '', proof };
+}
+
 // --- Canonical Direct governance state + transition --------------------------
-// Carries the machine state needed by the loop (acceptance registry, proof
-// ledger snapshot, metrics) and exposes ONE transition function. The natural
-// language summary can never bypass the gate.
+// Carries the machine state (acceptance registry + proof ledger + metrics) and
+// exposes ONE transition. For a RESULT it: registers the acceptance contract,
+// invalidates proofs from result.changed, applies evidence, records new passing
+// proofs when a reusable proof contract exists, computes the gate, and returns
+// structured missing/failed/passed + proof info. Summary never participates.
 export function createDirectGovernance({ proofLedger = createProofLedger(), metrics = createDirectMetrics() } = {}) {
   const state = {
-    acceptanceRegistry: [],   // [{ id, required, text, status }]
+    acceptanceRegistry: [],
     proofLedger,
     metrics,
     currentStepId: null,
@@ -46,12 +68,17 @@ export function createDirectGovernance({ proofLedger = createProofLedger(), metr
   };
 
   function registerAcceptance(acceptance = []) {
-    for (const a of acceptance) {
-      const id = typeof a === 'string' ? a : (a.id || a.text);
-      if (!id) continue;
-      const required = typeof a === 'string' ? true : (a.required !== false);
-      if (!state.acceptanceRegistry.some((x) => x.id === id)) {
-        state.acceptanceRegistry.push({ id, required, text: (typeof a === 'string' ? a : (a.text || a.id || '')), status: 'missing' });
+    for (const raw of acceptance) {
+      const a = normalizeAcceptanceItem(raw);
+      if (!a) continue;
+      const ex = state.acceptanceRegistry.find((x) => x.id === a.id);
+      if (ex) {
+        // reissue with (possibly changed) proof metadata -> update contract deterministically
+        ex.required = a.required;
+        ex.text = a.text;
+        ex.proof = a.proof;
+      } else {
+        state.acceptanceRegistry.push({ ...a, status: 'missing' });
       }
     }
   }
@@ -60,29 +87,62 @@ export function createDirectGovernance({ proofLedger = createProofLedger(), metr
     for (const e of (evidence || []).map((x) => normalizeEvidence(x))) {
       const reg = state.acceptanceRegistry.find((x) => x.id === e.acceptanceId);
       if (reg) reg.status = e.status;
-      else state.acceptanceRegistry.push({ id: e.acceptanceId, required: false, text: e.acceptanceId, status: e.status });
+      else state.acceptanceRegistry.push({ id: e.acceptanceId, required: false, text: e.acceptanceId, proof: null, status: e.status });
     }
   }
 
   function gate() {
     return evaluateDirectAcceptanceGate({
       acceptance: state.acceptanceRegistry.map((a) => ({ id: a.id, required: a.required })),
-      // A never-evidenced acceptance keeps status 'missing' and is excluded from
-      // evidence, so the gate reports it as MISSING (not failed/unknown).
       evidence: state.acceptanceRegistry.filter((a) => a.status !== 'missing').map((a) => ({ acceptanceId: a.id, status: a.status })),
     });
   }
 
+  function currentVerificationId(acceptanceId) {
+    const reg = state.acceptanceRegistry.find((x) => x.id === acceptanceId);
+    return reg && reg.proof ? (reg.proof.verificationId || null) : null;
+  }
+
+  // Record a reusable proof for a currently-passing acceptance that has a proof
+  // contract. No proof metadata => current PASS but NOT reusable across later
+  // verification boundaries by default.
+  function recordPassingProof(e, stepId) {
+    const reg = state.acceptanceRegistry.find((x) => x.id === e.acceptanceId);
+    if (!reg || !reg.proof) return null;
+    const pc = reg.proof;
+    const relevant = pc.relevantFiles || [];
+    const dependencyFree = pc.dependencyFree === true;
+    const verificationId = pc.verificationId || null;
+    const prev = state.proofLedger.get(e.acceptanceId);
+    if (prev && !state.proofLedger.isReusable(e.acceptanceId, { verificationId })) state.metrics.bump('staleProofCount');
+    state.proofLedger.record({ acceptanceId: e.acceptanceId, status: 'pass', kind: e.kind || 'verify', summary: e.summary || e.acceptanceId || '', verificationId, relevantFiles: relevant, dependencyFree, stepId });
+    return { acceptanceId: e.acceptanceId };
+  }
+
   return {
     state,
-    // ONE canonical transition: begin/advance a step, register acceptance, apply
-    // RESULT evidence, and compute the gate. Returns structured missing/failed ids.
     transition({ stepId, acceptance = [], result = null }) {
       if (stepId) state.currentStepId = stepId;
+      // A) register/update acceptance contract
       registerAcceptance(acceptance);
-      if (result) applyResultEvidence(Array.isArray(result.evidence) ? result.evidence : (result.evidence ? [result.evidence] : []));
+      // B) invalidate existing proofs from result.changed BEFORE recording new proofs
+      const changed = Array.isArray(result?.changed) ? result.changed.map(normalizeRelevantPath) : [];
+      const invalidated = state.proofLedger.invalidateOnChange(changed);
+      if (invalidated > 0) state.metrics.bump('staleProofCount', invalidated);
+      // C) normalize/apply RESULT evidence
+      const evidence = Array.isArray(result?.evidence) ? result.evidence : (result?.evidence ? [result.evidence] : []);
+      applyResultEvidence(evidence);
+      // D) record passing proofs (only when a reusable proof contract exists)
+      const proofInfo = { recorded: [], stale: [] };
+      for (const e of evidence.map((x) => normalizeEvidence(x))) {
+        if (e.status !== 'pass') continue;
+        const rec = recordPassingProof(e, state.currentStepId);
+        if (rec) proofInfo.recorded.push(rec.acceptanceId);
+      }
+      // E) machine acceptance gate
       const g = gate();
-      return { gate: g, blocked: !g.ok, missing: g.missing, failed: g.failed, stepId: state.currentStepId };
+      // F) structured result
+      return { gate: g, blocked: !g.ok, missing: g.missing, failed: g.failed, passed: g.passed, proofInfo, stepId: state.currentStepId };
     },
     // Only mark reviewed/completed when the gate passes; never silently advance.
     markStepReviewed({ stepId }) {
@@ -93,12 +153,32 @@ export function createDirectGovernance({ proofLedger = createProofLedger(), metr
       state.currentStepId = null;
       return { ok: true, completed: true, stepId: s };
     },
+    // Verification planning that wires the ledger + metrics: reuse fresh proofs,
+    // rerun only what is required, and bump reused/stale/verification metrics.
+    planVerification({ tier, requiredAcceptanceIds }) {
+      const verificationIds = {};
+      for (const id of requiredAcceptanceIds) verificationIds[id] = currentVerificationId(id);
+      const plan = planVerification({ tier, requiredAcceptanceIds, proofLedger: state.proofLedger, verificationIds });
+      state.metrics.bump('reusedProofCount', plan.reuse.length);
+      state.metrics.bump('verificationRuns', plan.needVerification.length);
+      return plan;
+    },
     registerAcceptance,
     gate,
+    snapshot() {
+      return {
+        acceptanceRegistry: state.acceptanceRegistry,
+        proofLedger: state.proofLedger.all(),
+        completedSteps: state.completedSteps,
+        currentStepId: state.currentStepId,
+        gate: gate(),
+        metrics: state.metrics.snapshot(),
+      };
+    },
   };
 }
 
-// --- 2) Proof ledger (fail closed) -------------------------------------------
+// --- 2) Proof ledger (fail closed, deterministic verificationId) -------------
 function defaultFingerprint(file) {
   const buf = fs.readFileSync(file);
   return crypto.createHash('sha256').update(buf).digest('hex');
@@ -117,18 +197,11 @@ export function createProofLedger({ computeFingerprint = null, normalizePath = n
   const proofs = [];
 
   return {
-    record({ acceptanceId, status = 'pass', kind = 'verify', summary = '', verification = null, relevantFiles = [], dependencyFree = false, stepId = null }) {
+    record({ acceptanceId, status = 'pass', kind = 'verify', summary = '', verificationId = null, relevantFiles = [], dependencyFree = false, stepId = null }) {
       const files = (relevantFiles || []).map(norm).filter(Boolean);
       const relevantFingerprints = {};
-      let fingerprintsOk = true;
-      for (const f of files) {
-        try { relevantFingerprints[f] = compute(f); } catch { relevantFingerprints[f] = null; fingerprintsOk = false; }
-      }
-      // Fail closed: without an explicit dependencyFree contract, a proof is only
-      // potentially reusable when it tracks at least one dependency and every
-      // dependency fingerprint computed successfully.
-      const reusable = dependencyFree === true ? true : (files.length > 0 && fingerprintsOk);
-      const proof = { acceptanceId, status, kind, summary, verification, relevantFiles: files, relevantFingerprints, dependencyFree, reusable, stepId, createdAt: new Date().toISOString() };
+      for (const f of files) { try { relevantFingerprints[f] = compute(f); } catch { relevantFingerprints[f] = null; } }
+      const proof = { acceptanceId, status, kind, summary, verificationId, relevantFiles: files, relevantFingerprints, dependencyFree, stepId, createdAt: new Date().toISOString() };
       const i = proofs.findIndex((p) => p.acceptanceId === acceptanceId);
       if (i >= 0) proofs[i] = proof; else proofs.push(proof);
       return proof;
@@ -136,25 +209,22 @@ export function createProofLedger({ computeFingerprint = null, normalizePath = n
     get(acceptanceId) { return proofs.find((p) => p.acceptanceId === acceptanceId) || null; },
     all() { return proofs.slice(); },
     count() { return proofs.length; },
-    isFresh(acceptanceId, { verification = null } = {}) {
+    isFresh(acceptanceId, { verificationId = null } = {}) {
       const p = this.get(acceptanceId);
       if (!p || p.status !== 'pass') return false;
-      // Fail closed: no-dependency proof without explicit dependencyFree contract is not reusable.
       if (p.dependencyFree !== true && (!p.relevantFiles || p.relevantFiles.length === 0)) return false;
-      // Verification identity must participate if recorded.
-      if (p.verification && verification && p.verification !== verification) return false;
-      // Fingerprint failure (null) is not fresh; a changed dependency is stale.
+      // Deterministic scalar verification identity: if either side has an id,
+      // they must match (missing/changed current id when stored had one => stale).
+      if ((p.verificationId || verificationId) && p.verificationId !== verificationId) return false;
       if (p.dependencyFree !== true) {
         for (const f of p.relevantFiles) {
-          let cur = null;
-          try { cur = compute(f); } catch { cur = null; }
+          let cur = null; try { cur = compute(f); } catch { cur = null; }
           if (cur === null || p.relevantFingerprints[f] === undefined || cur !== p.relevantFingerprints[f]) return false;
         }
       }
       return true;
     },
     isReusable(acceptanceId, opts) { return this.isFresh(acceptanceId, opts); },
-    // Mark proofs stale when a (normalized) changed file intersects relevantFiles.
     invalidateOnChange(changedFiles = []) {
       const changed = new Set((changedFiles || []).map(norm));
       let stale = 0;
@@ -167,11 +237,11 @@ export function createProofLedger({ computeFingerprint = null, normalizePath = n
 }
 
 // --- 3) Verification tiers ---------------------------------------------------
-export function planVerification({ tier = 'step', requiredAcceptanceIds = [], proofLedger = null } = {}) {
+export function planVerification({ tier = 'step', requiredAcceptanceIds = [], proofLedger = null, verificationIds = {} } = {}) {
   const needVerification = [];
   const reuse = [];
   for (const id of requiredAcceptanceIds) {
-    if (proofLedger && proofLedger.isReusable(id)) reuse.push(id);
+    if (proofLedger && proofLedger.isReusable(id, { verificationId: verificationIds[id] ?? null })) reuse.push(id);
     else needVerification.push(id);
   }
   return { tier, needVerification, reuse };

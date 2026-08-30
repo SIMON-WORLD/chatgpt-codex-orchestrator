@@ -93,7 +93,16 @@ export function repairControl(ctrl) {
   }
   out.acceptance = (out.acceptance || []).map((a) => {
     if (typeof a === 'string') return { id: a, required: true, text: a };
-    return { id: a.id || a.text, required: a.required !== false, text: a.text || a.id || '' };
+    const na = { id: a.id || a.text, required: a.required !== false, text: a.text || a.id || '' };
+    // Preserve optional acceptance proof metadata (relevantFiles / dependencyFree / verificationId).
+    if (a.proof && typeof a.proof === 'object') {
+      na.proof = {
+        ...(Array.isArray(a.proof.relevantFiles) ? { relevantFiles: a.proof.relevantFiles.slice() } : {}),
+        ...(typeof a.proof.dependencyFree === 'boolean' ? { dependencyFree: a.proof.dependencyFree } : {}),
+        ...(typeof a.proof.verificationId === 'string' ? { verificationId: a.proof.verificationId } : {}),
+      };
+    }
+    return na;
   });
   return { control: out, repaired };
 }

@@ -1,4 +1,6 @@
 import test from 'node:test';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { evaluateDirectAcceptanceGate, createProofLedger, createDirectGovernance, planVerification, verifyTierPrecondition, buildBootstrapEvidence, createDirectMetrics, attemptLateReplyRecovery, normalizeRelevantPath } from '../src/direct-governance.js';
 import { createPublicationTransaction, publicationReadyForDone, buildExternalEvidence, parseRemoteRef } from '../src/publication-transaction.js';
@@ -261,9 +263,9 @@ test('path normalization invalidates correctly', () => {
 
 test('changed verification identity invalidates proof', () => {
   const ledger = createProofLedger({ computeFingerprint: (f) => 'h-' + f });
-  ledger.record({ acceptanceId: 'M1', relevantFiles: ['a.txt'], verification: 'cmd-a', status: 'pass' });
-  assert.equal(ledger.isReusable('M1', { verification: 'cmd-a' }), true);
-  assert.equal(ledger.isReusable('M1', { verification: 'cmd-b' }), false, 'changed verification identity invalidates reuse');
+  ledger.record({ acceptanceId: 'M1', relevantFiles: ['a.txt'], verificationId: 'cmd-a', status: 'pass' });
+  assert.equal(ledger.isReusable('M1', { verificationId: 'cmd-a' }), true);
+  assert.equal(ledger.isReusable('M1', { verificationId: 'cmd-b' }), false, 'changed verification identity invalidates reuse');
 });
 
 test('feature branch publication explicitly targets main', async () => {
@@ -324,4 +326,75 @@ test('late-reply recovery never duplicates send and preserves conversation ident
     maxSlices: 1, sliceMs: 1,
   });
   assert.equal(reply2, null);
+});
+
+
+test('acceptance proof metadata survives protocol normalization/repair', () => {
+  const out = parseBrainOutput('{"control":"TASK","stepId":"s1","instruction":"do x","acceptance":[{"id":"U1","required":true,"text":"U1","proof":{"relevantFiles":["a.txt"],"dependencyFree":false,"verificationId":"v1"}}]}');
+  const acc = out.control.acceptance[0];
+  assert.equal(acc.id, 'U1');
+  assert.deepEqual(acc.proof.relevantFiles, ['a.txt']);
+  assert.equal(acc.proof.dependencyFree, false);
+  assert.equal(acc.proof.verificationId, 'v1');
+});
+
+test('transition invalidates proofs from result.changed', () => {
+  const g = createDirectGovernance({ proofLedger: createProofLedger({ computeFingerprint: (f) => 'h-' + f }) });
+  g.transition({ stepId: 's1', acceptance: [{ id: 'M1', proof: { relevantFiles: ['a.txt'], verificationId: 'v1' } }], result: { evidence: [{ acceptanceId: 'M1', status: 'pass' }], changed: [] } });
+  assert.ok(g.state.proofLedger.get('M1'));
+  const before = g.state.metrics.snapshot().staleProofCount;
+  const t2 = g.transition({ stepId: 's2', acceptance: [{ id: 'M1', proof: { relevantFiles: ['a.txt'], verificationId: 'v1' } }], result: { evidence: [{ acceptanceId: 'M1', status: 'pass' }], changed: ['a.txt'] } });
+  assert.ok(g.state.metrics.snapshot().staleProofCount > before, 'changed file invalidates existing proof');
+  assert.ok(g.state.proofLedger.get('M1'), 'new proof still recorded');
+});
+
+test('transition records a new passing proof automatically when proof contract exists', () => {
+  const g = createDirectGovernance({ proofLedger: createProofLedger({ computeFingerprint: (f) => 'h-' + f }) });
+  const t = g.transition({ stepId: 's1', acceptance: [{ id: 'U1', proof: { relevantFiles: ['a.txt'], verificationId: 'v1' } }], result: { evidence: [{ acceptanceId: 'U1', status: 'pass' }] } });
+  assert.ok(g.state.proofLedger.get('U1'));
+  assert.ok(t.proofInfo.recorded.includes('U1'));
+});
+
+test('no proof metadata => current PASS but no reusable proof', () => {
+  const g = createDirectGovernance({ proofLedger: createProofLedger({ computeFingerprint: (f) => 'h-' + f }) });
+  const t = g.transition({ stepId: 's1', acceptance: [{ id: 'U1' }], result: { evidence: [{ acceptanceId: 'U1', status: 'pass' }] } });
+  assert.equal(t.gate.ok, true);
+  assert.equal(g.state.proofLedger.get('U1'), null, 'no proof contract => not recorded as reusable');
+});
+
+test('same verificationId + unchanged files => reusable', () => {
+  const ledger = createProofLedger({ computeFingerprint: (f) => 'h-' + f });
+  ledger.record({ acceptanceId: 'U1', relevantFiles: ['a.txt'], verificationId: 'v1', status: 'pass' });
+  assert.equal(ledger.isReusable('U1', { verificationId: 'v1' }), true);
+});
+
+test('missing current verificationId when stored proof had one => non-reusable', () => {
+  const ledger = createProofLedger({ computeFingerprint: (f) => 'h-' + f });
+  ledger.record({ acceptanceId: 'U1', relevantFiles: ['a.txt'], verificationId: 'v1', status: 'pass' });
+  assert.equal(ledger.isReusable('U1', { verificationId: null }), false);
+});
+
+test('canonical documented sequence runs the machine gate BEFORE send', () => {
+  const skill = fs.readFileSync(fileURLToPath(new URL('../skills/brain-command/SKILL.md', import.meta.url)), 'utf8');
+  const idxTransition = skill.indexOf('governance.transition');
+  const idxSend = skill.indexOf('provider.send');
+  assert.ok(idxTransition >= 0 && idxTransition < idxSend, 'machine transition must run before sending the RESULT');
+  assert.match(skill, /Run the machine acceptance transition, THEN send the compact RESULT/);
+});
+
+test('failed gate exposes missing/failed IDs', () => {
+  const g = createDirectGovernance();
+  const t = g.transition({ stepId: 's1', acceptance: ['U1', 'U2'], result: { evidence: [{ acceptanceId: 'U1', status: 'pass' }] } });
+  assert.equal(t.blocked, true);
+  assert.ok(t.missing.includes('U2'));
+});
+
+test('reused/stale metrics increment via governance', () => {
+  const g = createDirectGovernance({ proofLedger: createProofLedger({ computeFingerprint: (f) => 'h-' + f }) });
+  g.transition({ stepId: 's1', acceptance: [{ id: 'U1', proof: { relevantFiles: ['a.txt'], verificationId: 'v1' } }], result: { evidence: [{ acceptanceId: 'U1', status: 'pass' }] } });
+  const plan = g.planVerification({ tier: 'milestone', requiredAcceptanceIds: ['U1'] });
+  assert.ok(plan.reuse.includes('U1'));
+  assert.ok(g.state.metrics.snapshot().reusedProofCount >= 1);
+  g.transition({ stepId: 's2', acceptance: [{ id: 'U1', proof: { relevantFiles: ['a.txt'], verificationId: 'v1' } }], result: { evidence: [{ acceptanceId: 'U1', status: 'pass' }], changed: ['a.txt'] } });
+  assert.ok(g.state.metrics.snapshot().staleProofCount >= 1);
 });
