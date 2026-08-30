@@ -94,6 +94,7 @@ export function repairControl(ctrl) {
   out.acceptance = (out.acceptance || []).map((a) => {
     if (typeof a === 'string') return { id: a, required: true, text: a };
     const na = { id: a.id || a.text, required: a.required !== false, text: a.text || a.id || '' };
+    if (typeof a.requiredEvidenceLevel === 'string' && ['observed', 'inferred', 'user_verified', 'unobservable'].includes(a.requiredEvidenceLevel)) na.requiredEvidenceLevel = a.requiredEvidenceLevel;
     // Preserve optional acceptance proof metadata (relevantFiles / dependencyFree / verificationId).
     if (a.proof && typeof a.proof === 'object') {
       na.proof = {
@@ -299,6 +300,8 @@ export function normalizeEvidence(ev) {
     status: st,
     kind: ev.kind || 'verify',
     summary: ev.summary || ev.text || '',
+    // Epistemic level; legacy evidence without it defaults to observed (compatibility).
+    evidenceLevel: (ev.evidenceLevel && ['observed', 'inferred', 'user_verified', 'unobservable'].includes(ev.evidenceLevel)) ? ev.evidenceLevel : 'observed',
   };
 }
 

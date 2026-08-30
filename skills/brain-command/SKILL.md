@@ -85,7 +85,7 @@ PLAN
 ## Bootstrap evidence & metrics
 
 - On the first Brain takeover, send a small read-only bootstrap packet (`buildBootstrapEvidence`): `repoDir`, `currentBranch`, `HEAD`, `git status --short` summary, `origin/main` divergence. Keep it compact; do not require a separate standalone baseline TASK unless the project really needs deeper inspection.
-- Track minimal in-memory Direct run metrics (`createDirectMetrics`): duration, timeToFirstBrainControl, brainTurns, taskCount, reviseCount, replanCount, askUserCount, publishCount, replyTimeoutCount, browserRecoveryCount, conversationSwitchCount, reusedProofCount, staleProofCount, verificationRuns, publishRetryCount, protocolRepairCount, staleControlRejectedCount, duplicateResultCount, resultRetransmitCount, deliveryAckTimeoutCount, manualInterventionCount. No telemetry backend / no prompt or raw-log persistence.
+- Emit metrics from the ACTIVE run state (the final report reads `directRunCoordinator.metrics()` / `directRunLedger.state.metrics`), including (`createDirectMetrics`): duration, timeToFirstBrainControl, brainTurns, taskCount, reviseCount, replanCount, askUserCount, publishCount, replyTimeoutCount, browserRecoveryCount, conversationSwitchCount, reusedProofCount, staleProofCount, verificationRuns, publishRetryCount, protocolRepairCount, staleControlRejectedCount, duplicateResultCount, resultRetransmitCount, deliveryAckTimeoutCount, manualInterventionCount. No telemetry backend / no prompt or raw-log persistence.
 
 ## Run (canonical default path)
 
@@ -105,6 +105,8 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
 
    Canonical Direct Mode uses the **Codex in-app browser (iab) only** — it never attaches to or manipulates the user's Edge/Chrome/external browser, and there is no fallback. If the IAB is unavailable, stop and report (`IABUnavailableError`) instead of switching browser backend. If ChatGPT is already signed in, continue. Only if you actually detect a real login page / auth failure: `ASK_USER` to sign in, then continue. Do not pause pre-emptively because login *might* be needed. Keep the same conversation across turns (`provider.identifyConversation()` / `provider.resume(...)`); never restart a new conversation mid-task.
 
+   **Direct-run initialization (retain ONE per run):** create and keep a single `runId`, the `provider`, a `governance` (`createDirectGovernance`), a `directRunLedger` (`createDirectRunLedger`), and a `directRunCoordinator` (`createDirectRunCoordinator`). The browser provider is created inside the trusted browser execution context — never probe `createChatGPTBrowserProvider` from an ordinary node subprocess, never start a second browser runtime to inspect tabs/sidebar. All browser inspection/rebind goes through the run's `provider`/transport.
+
 4. **First Brain message.** Send the user goal + repo identity/path + a concise governance contract. The contract must say:
 
    - ChatGPT owns planning, review, and decisions.
@@ -118,11 +120,34 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
 
    Do **not** dump large repo history/source on the first message.
 
-5. **Parse the Brain's control.** Use `parseBrainOutput` / `parseEvidenceBlock` from `src/protocol.js` to turn the reply into a structured control (`PLAN`, `TASK`, `REVISE`, `ASK_USER`, `DONE`, `REPLAN`, `PUBLISH`). A `PLAN` is followed by a concrete `TASK`.
+5. **Extract the canonical structured Brain envelope, validate, then accept control.** Brain may write explanatory prose, but every actionable response must carry one canonical machine envelope. Extract it, validate with `validateStructuredEnvelope`, then `directRunCoordinator.acceptControl(env)` and `directRunLedger.persist()` BEFORE executing.
+
+   ```js
+   const env = extractCanonicalEnvelope(reply);
+   const v = validateStructuredEnvelope(env);
+   if (!v.ok) {
+     await provider.send(formatRepairPrompt(), { nonce: 'repair-' + runId + '-' + seq });
+     // do NOT execute; wait for/validate the repaired envelope; continue or fail closed.
+   }
+   const accepted = directRunCoordinator.acceptControl(env);   // monotonic sequence, one outstanding, stale reject, ACK validation
+   if (!accepted.ok) { /* fail closed; do not execute */ }
+   directRunLedger.persist();
+   ```
+
+   A `PLAN` is followed by a concrete `TASK`. Do NOT execute legacy prose through `parseBrainOutput` in canonical mode — that is an explicit compatibility mode only. (Run at Direct-run initialization: `runId`, `directRunLedger = createDirectRunLedger({ dataRoot, runId })`, `directRunCoordinator = createDirectRunCoordinator({ runId, ledger: directRunLedger })`, `governance = createDirectGovernance()`.)
 
 6. **Execute the TASK in the current Codex agent.** Do **not** start a nested Codex, do not start a worker, do not wait on a ready file. The current Codex agent is the executor. Do the work, collect real evidence, and verify.
 
-7. **Run the machine acceptance transition, THEN send the compact RESULT.** Execute `TASK` -> build the compact RESULT -> run the single canonical machine path BEFORE the Brain treats the milestone as accepted:
+7. **Freeze RESULT identity, machine gate, then send.** Execute `TASK` -> build the semantic RESULT payload -> run `governance.transition(...)` -> compute `executorStatus` + `machineGate` -> create a stable `resultId` ONCE -> compute `payloadHash` with `computePayloadHash` -> `directRunCoordinator.recordResult(result)` -> `directRunLedger.persist()` -> `provider.send(resultEnvelope, { nonce: correlationToken })`. Do NOT send before `recordResult` succeeds.
+
+   ```js
+   const machine = governance.transition({ stepId, acceptance, result: { changed, evidence } });
+   const result = { runId, resultId: 'r' + seq, inReplyToControlId: controlId, sequence: seq, stepId,
+     payloadHash: computePayloadHash({ runId, resultId: 'r' + seq, inReplyToControlId: controlId, sequence: seq, stepId, executorStatus, machineGate, changed, evidence, blockers }),
+     executorStatus, machineGate: machine.gate.ok ? 'pass' : 'fail', changed, evidence, blockers };
+   const rec = directRunCoordinator.recordResult(result);
+   if (rec.ok) { directRunLedger.persist(); await provider.send({ ...result }, { nonce: correlationToken }); }
+   ```
 
    ```js
    const { createDirectGovernance } = await import('<orchestratorRoot>/src/direct-governance.js');

@@ -43,7 +43,7 @@ Established once per task; the Brain does not repeat these defaults inside every
 - Protect secrets; fail closed on ambiguity.
 - Return compact `RESULT` evidence.
 - No force push or published-history rewrite.
-- Publish only after `DONE` + publish gate.
+- Publish only after `PUBLISH` + publication gate; `DONE` is terminal.
 
 ## Dogfood status (facts)
 

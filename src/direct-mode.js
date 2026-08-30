@@ -6,7 +6,7 @@
 //        -> current Codex agent executes TASK
 //        -> compact RESULT back to the same ChatGPT conversation
 //        -> REVISE / TASK / DONE
-//        -> publish on DONE
+//        -> PUBLISH -> publication transaction -> external readback -> terminal DONE
 //
 // It does NOT start a second Codex executor, does NOT start a worker daemon,
 // does NOT require a ready file, a localhost TCP handshake, or an auth token,
@@ -70,7 +70,7 @@ export const DEFAULT_TAKEOVER_MESSAGE = [
   '- Codex stays within Brain-approved scope; may run normal edit/debug/test iterations inside one milestone TASK.',
   '- Mandatory verification applies; protect secrets; fail closed on ambiguity.',
   '- Codex returns compact RESULT evidence.',
-  '- No force push or rewrite of published history; publish only after DONE + publish gate.',
+  '- No force push or rewrite of published history; publish only after PUBLISH + publication gate; DONE is terminal.',
   'Governance: PLAN comprehensively once, then prefer milestone-sized TASKs that combine coherent implementation work that can be executed and reviewed together; return to the Brain only at meaningful review/decision boundaries. REVISE remains available whenever evidence fails.',
   'Bootstrap evidence (read-only): repoDir, currentBranch, HEAD, git status --short summary, origin/main divergence.',
   'Lifecycle: PUBLISH (publication transaction + external observable readback) precedes terminal DONE; DONE is terminal and no further control is valid.',

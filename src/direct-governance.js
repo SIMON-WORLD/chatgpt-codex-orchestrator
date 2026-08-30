@@ -11,27 +11,36 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { normalizeEvidence } from './protocol.js';
 import { isPlaceholder } from './atomic-turn.js';
+import { evaluateEvidenceLevel } from './protocol-integrity.js';
 
 // --- 1) Acceptance gate ------------------------------------------------------
 // A TASK / milestone is only "passing" when EVERY required acceptanceId has an
 // evidence item whose status === 'pass'. Unknown / missing evidence is NOT pass.
 export function evaluateDirectAcceptanceGate({ acceptance = [], evidence = [] } = {}) {
-  const req = (acceptance || []).map((a) => (typeof a === 'string' ? { id: a, required: true } : { id: a.id, required: a.required !== false }));
+  const req = (acceptance || []).map((a) => (typeof a === 'string' ? { id: a, required: true, requiredEvidenceLevel: null } : { id: a.id, required: a.required !== false, requiredEvidenceLevel: a.requiredEvidenceLevel || null }));
   const evById = {};
   for (const e of (evidence || []).map((x) => normalizeEvidence(x))) evById[e.acceptanceId] = e;
   const missing = [];
   const failed = [];
   const passed = [];
+  const levelFailed = [];
   const required = req.filter((a) => a.required).map((a) => a.id);
   for (const a of req) {
     if (!a.required) continue;
     const e = evById[a.id];
-    if (!e) missing.push(a.id);
-    else if (e.status === 'pass') passed.push(a.id);
-    else failed.push(a.id);
+    if (!e) { missing.push(a.id); continue; }
+    if (e.status !== 'pass') { failed.push(a.id); continue; }
+    const lvl = evaluateEvidenceLevel({ evidenceLevel: e.evidenceLevel, requiredEvidenceLevel: a.requiredEvidenceLevel });
+    if (lvl.ok) passed.push(a.id);
+    else levelFailed.push(a.id);
   }
-  const allPass = required.every((id) => evById[id] && evById[id].status === 'pass');
-  return { ok: allPass, missing, failed, passed, required };
+  const ok = required.every((id) => {
+    const e = evById[id];
+    if (!e || e.status !== 'pass') return false;
+    const a = req.find((x) => x.id === id);
+    return evaluateEvidenceLevel({ evidenceLevel: e.evidenceLevel, requiredEvidenceLevel: a.requiredEvidenceLevel }).ok;
+  });
+  return { ok, missing, failed, levelFailed, passed, required };
 }
 
 // Normalize a structured acceptance item, preserving optional proof metadata
@@ -49,7 +58,8 @@ export function normalizeAcceptanceItem(a) {
     };
     if (p.relevantFiles || p.dependencyFree || p.verificationId) proof = p;
   }
-  return { id, required: a.required !== false, text: a.text || a.id || '', proof };
+  const requiredEvidenceLevel = (a.requiredEvidenceLevel && ['observed', 'inferred', 'user_verified', 'unobservable'].includes(a.requiredEvidenceLevel)) ? a.requiredEvidenceLevel : null;
+  return { id, required: a.required !== false, text: a.text || a.id || '', proof, requiredEvidenceLevel };
 }
 
 // --- Canonical Direct governance state + transition --------------------------
@@ -89,15 +99,16 @@ export function createDirectGovernance({ proofLedger = createProofLedger(), metr
   function applyResultEvidence(evidence = []) {
     for (const e of (evidence || []).map((x) => normalizeEvidence(x))) {
       const reg = state.acceptanceRegistry.find((x) => x.id === e.acceptanceId);
-      if (reg) reg.status = e.status;
-      else state.acceptanceRegistry.push({ id: e.acceptanceId, required: false, text: e.acceptanceId, proof: null, status: e.status });
+      const entry = { status: e.status, evidenceLevel: e.evidenceLevel, kind: e.kind, summary: e.summary };
+      if (reg) Object.assign(reg, entry);
+      else state.acceptanceRegistry.push({ id: e.acceptanceId, required: false, text: e.acceptanceId, proof: null, requiredEvidenceLevel: null, ...entry });
     }
   }
 
   function gate() {
     return evaluateDirectAcceptanceGate({
-      acceptance: state.acceptanceRegistry.map((a) => ({ id: a.id, required: a.required })),
-      evidence: state.acceptanceRegistry.filter((a) => a.status !== 'missing').map((a) => ({ acceptanceId: a.id, status: a.status })),
+      acceptance: state.acceptanceRegistry.map((a) => ({ id: a.id, required: a.required, requiredEvidenceLevel: a.requiredEvidenceLevel })),
+      evidence: state.acceptanceRegistry.filter((a) => a.status !== 'missing').map((a) => ({ acceptanceId: a.id, status: a.status, evidenceLevel: a.evidenceLevel })),
     });
   }
 

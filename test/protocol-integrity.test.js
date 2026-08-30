@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { evaluateMilestoneAcceptance, evaluateEvidenceLevel, validateStructuredEnvelope, formatRepairPrompt, createDirectRunCoordinator, createDirectRunLedger, applyReviseDelta, buildAskUserEnvelope } from '../src/protocol-integrity.js';
+import { evaluateMilestoneAcceptance, evaluateEvidenceLevel, validateStructuredEnvelope, formatRepairPrompt, createDirectRunCoordinator, createDirectRunLedger, computePayloadHash, applyReviseDelta, buildAskUserEnvelope } from '../src/protocol-integrity.js';
 import { createDirectGovernance, createProofLedger, createDirectMetrics } from '../src/direct-governance.js';
 import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, evaluatePublicationGate, evaluateDoneGate } from '../src/direct-mode.js';
 import { isTerminalControl, validateLifecycleAfterDone, parseBrainOutput } from '../src/protocol.js';
@@ -46,15 +46,15 @@ test('monotonic control sequence: stale control rejected, RESULT must match outs
   assert.equal(c.acceptControl(validEnv({ sequence: 7, controlId: 'c7' })).ok, true);
   assert.equal(c.acceptControl(validEnv({ sequence: 6, controlId: 'c6' })).ok, false, 'stale sequence rejected');
   assert.equal(c.state.metrics.staleControlRejectedCount, 1);
-  assert.equal(c.recordResult({ resultId: 'r6', inReplyToControlId: 'c6', payloadHash: 'h' }).ok, false, 'RESULT must match outstanding control');
-  assert.equal(c.recordResult({ resultId: 'r7', inReplyToControlId: 'c7', payloadHash: 'h1' }).ok, true);
+  assert.equal(c.recordResult({ resultId: 'r6', runId: 'run-1', sequence: 6, inReplyToControlId: 'c6', payloadHash: 'h' }).ok, false, 'RESULT must match outstanding control');
+  assert.equal(c.recordResult({ resultId: 'r7', runId: 'run-1', sequence: 7, inReplyToControlId: 'c7', payloadHash: 'h1' }).ok, true);
   assert.equal(c.state.outstandingControlId, null);
 });
 
 test('duplicate RESULT idempotent, retransmit preserves resultId + payloadHash', () => {
   const c = createDirectRunCoordinator();
   c.acceptControl(validEnv({ sequence: 7, controlId: 'c7' }));
-  const r1 = c.recordResult({ resultId: 'r7', inReplyToControlId: 'c7', payloadHash: 'h1' });
+  const r1 = c.recordResult({ resultId: 'r7', runId: 'run-1', sequence: 7, inReplyToControlId: 'c7', payloadHash: 'h1' });
   assert.equal(r1.ok, true); assert.equal(r1.duplicate, false);
   // retransmit the SAME result
   const rt = c.retransmit({ resultId: 'r7', payloadHash: 'h1' });
@@ -65,7 +65,7 @@ test('duplicate RESULT idempotent, retransmit preserves resultId + payloadHash',
 test('next control piggybacks ackResultId; RESULT becomes acknowledged', () => {
   const c = createDirectRunCoordinator();
   c.acceptControl(validEnv({ sequence: 7, controlId: 'c7' }));
-  c.recordResult({ resultId: 'r7', inReplyToControlId: 'c7', payloadHash: 'h1' });
+  c.recordResult({ resultId: 'r7', runId: 'run-1', sequence: 7, inReplyToControlId: 'c7', payloadHash: 'h1' });
   assert.equal(c.acceptControl(validEnv({ sequence: 8, controlId: 'c8', ackResultId: 'r7' })).ok, true);
   assert.equal(c.state.lastAcknowledgedResultId, 'r7');
 });
@@ -130,9 +130,11 @@ test('composer fail-closed still resolves #prompt-textarea; canonical Skill orde
   const facade = createTabFacade({ id: 't', playwright: { locator: (s) => ({ count: async () => s === '#prompt-textarea' ? 1 : 0, evaluate: async () => false, fill: async () => {}, press: async () => {}, innerText: async () => '' }), waitForTimeout: async () => {} } });
   assert.equal(await facade.isComposerReady(), true);
   const skill = fs.readFileSync(skillPath, 'utf8');
-  const runSection = skill.slice(skill.indexOf('## Run (canonical default path)'));
-  assert.ok(runSection.indexOf('governance.transition') < runSection.indexOf('provider.send'), 'machine transition before send');
-  assert.match(runSection, /Run the machine acceptance transition, THEN send the compact RESULT/);
+  const start = skill.indexOf('7. **Freeze RESULT identity');
+  const end = skill.indexOf('\n## ', start);
+  const step7 = skill.slice(start, end < 0 ? skill.length : end);
+  assert.ok(step7.indexOf('governance.transition') < step7.indexOf('provider.send'), 'machine transition before send');
+  assert.match(step7, /Freeze RESULT identity, machine gate, then send/);
   assert.match(skill, /buildBootstrapEvidence/);
 });
 
@@ -159,4 +161,65 @@ test('Alpha.3 IAB / existing-conversation / composer guarantees remain green', a
   const p = createChatGPTBrowserProvider();
   assert.ok(p._transport instanceof Object);
   assert.equal(typeof p.adoptCurrent, 'function');
+});
+
+
+test('REVISE 002a: canonical offline loop (control c1 -> exec -> machine gate -> RESULT r1 -> c2 ack r1 -> Brain accepts) survives restart', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dirint-'));
+  // run 1
+  const l1 = createDirectRunLedger({ dataRoot: dir, runId: 'run-int' });
+  const c1 = createDirectRunCoordinator({ runId: 'run-int', ledger: l1 });
+  const gov = createDirectGovernance({ proofLedger: createProofLedger({ computeFingerprint: (f) => 'h-' + f }) });
+  l1.set('runId', 'run-int');
+  const env = { runId: 'run-int', controlId: 'c1', sequence: 1, control: 'TASK', stepId: 's1', instruction: 'do x', acceptance: [{ id: 'U1', required: true, requiredEvidenceLevel: 'observed' }] };
+  assert.equal(c1.acceptControl(env).ok, true);
+  l1.persist();
+  // execute + machine gate
+  const t = gov.transition({ stepId: 's1', acceptance: env.acceptance, result: { evidence: [{ acceptanceId: 'U1', status: 'pass', evidenceLevel: 'observed' }] } });
+  assert.equal(t.gate.ok, true);
+  const result = { runId: 'run-int', resultId: 'r1', inReplyToControlId: 'c1', sequence: 1, stepId: 's1', payloadHash: computePayloadHash({ runId: 'run-int', resultId: 'r1', inReplyToControlId: 'c1', sequence: 1, stepId: 's1', executorStatus: 'success', machineGate: 'pass', changed: ['a.txt'], evidence: [], blockers: [] }), executorStatus: 'success', machineGate: 'pass', changed: ['a.txt'], evidence: [], blockers: [] };
+  assert.equal(c1.recordResult(result).ok, true);
+  l1.persist();
+  // Brain accepts previous milestone (setBrainAcceptance) + c2 ack r1
+  assert.equal(gov.setBrainAcceptance({ stepId: 's1', acceptance: 'accepted' }).ok, true);
+  const env2 = { runId: 'run-int', controlId: 'c2', sequence: 2, control: 'TASK', stepId: 's2', instruction: 'do y', acceptance: [], ackResultId: 'r1' };
+  assert.equal(c1.acceptControl(env2).ok, true);
+  l1.persist();
+  // simulate provider/kernel restart: new ledger loads state; new coordinator hydrates
+  const l2 = createDirectRunLedger({ dataRoot: dir, runId: 'run-int' });
+  const loaded = l2.load();
+  const c2 = createDirectRunCoordinator({ runId: 'run-int', ledger: l2 });
+  assert.equal(loaded.lastAcceptedSequence, 2);
+  assert.equal(c2.acceptControl({ runId: 'run-int', controlId: 'c1', sequence: 1, control: 'TASK', stepId: 's1', instruction: 'do x', acceptance: [] }).ok, false, 'stale old c1 rejected');
+  // continue with the already-outstanding c2 (no re-accept; it is preserved)
+  const r2 = { runId: 'run-int', resultId: 'r2', inReplyToControlId: 'c2', sequence: 2, stepId: 's2', payloadHash: computePayloadHash({ runId: 'run-int', resultId: 'r2', inReplyToControlId: 'c2', sequence: 2, stepId: 's2', executorStatus: 'success', machineGate: 'pass', changed: [], evidence: [], blockers: [] }), executorStatus: 'success', machineGate: 'pass', changed: [], evidence: [], blockers: [] };
+  assert.equal(c2.recordResult(r2).ok, true, 'resume completes c2');
+});
+
+test('REVISE 002a: offline delivery uncertainty resumes same r1, retransmit idempotent, no duplicate execution', () => {
+  const c = createDirectRunCoordinator({ runId: 'run-int2' });
+  assert.equal(c.acceptControl({ runId: 'run-int2', controlId: 'c1', sequence: 1, control: 'TASK', stepId: 's1', instruction: 'do x', acceptance: [] }).ok, true);
+  const result = { runId: 'run-int2', resultId: 'r1', inReplyToControlId: 'c1', sequence: 1, stepId: 's1', payloadHash: computePayloadHash({ runId: 'run-int2', resultId: 'r1', inReplyToControlId: 'c1', sequence: 1, stepId: 's1', executorStatus: 'success', machineGate: 'pass', changed: ['a.txt'], evidence: [], blockers: [] }), executorStatus: 'success', machineGate: 'pass', changed: ['a.txt'], evidence: [], blockers: [] };
+  assert.equal(c.recordResult(result).ok, true);
+  // retransmit same r1
+  const rt = c.retransmit(result);
+  assert.equal(rt.resultId, 'r1');
+  // duplicate delivery idempotent
+  const dup = c.recordResult(result);
+  assert.equal(dup.ok, true);
+  assert.equal(dup.duplicate, true);
+  assert.equal(c.state.metrics.duplicateResultCount, 1);
+  // c2 ack r1
+  assert.equal(c.acceptControl({ runId: 'run-int2', controlId: 'c2', sequence: 2, control: 'TASK', stepId: 's2', instruction: 'do y', acceptance: [], ackResultId: 'r1' }).ok, true);
+});
+
+test('REVISE 002a: epistemic evidence flows through the canonical acceptance gate', () => {
+  const g = createDirectGovernance();
+  const t1 = g.transition({ stepId: 's1', acceptance: [{ id: 'U1', required: true, requiredEvidenceLevel: 'observed' }], result: { evidence: [{ acceptanceId: 'U1', status: 'pass', evidenceLevel: 'inferred' }] } });
+  assert.equal(t1.gate.ok, false, 'inferred cannot satisfy observed');
+  assert.ok(t1.gate.levelFailed.includes('U1'));
+  const t2 = g.transition({ stepId: 's2', acceptance: [{ id: 'U1', required: true, requiredEvidenceLevel: 'observed' }], result: { evidence: [{ acceptanceId: 'U1', status: 'pass', evidenceLevel: 'observed' }] } });
+  assert.equal(t2.gate.ok, true);
+  const t3 = g.transition({ stepId: 's3', acceptance: [{ id: 'U2', required: true, requiredEvidenceLevel: 'observed' }], result: { evidence: [{ acceptanceId: 'U2', status: 'pass', evidenceLevel: 'unobservable' }] } });
+  assert.equal(t3.gate.ok, false, 'unobservable never pass');
 });

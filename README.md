@@ -43,7 +43,7 @@
 - 保护密钥，遇到歧义时 fail closed。
 - 返回紧凑的 `RESULT` 证据。
 - 不 force-push、不改写已发布历史。
-- 仅在 `DONE` + 发布门禁通过后发布。
+- 仅在 `PUBLISH` + 发布门禁通过后发布；`DONE` 为终态。
 
 ## Dogfood 状态（事实）
 

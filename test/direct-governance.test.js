@@ -376,11 +376,13 @@ test('missing current verificationId when stored proof had one => non-reusable',
 
 test('canonical documented sequence runs the machine gate BEFORE send', () => {
   const skill = fs.readFileSync(fileURLToPath(new URL('../skills/brain-command/SKILL.md', import.meta.url)), 'utf8');
-  const runSection = skill.slice(skill.indexOf('## Run (canonical default path)'));
-  const idxTransition = runSection.indexOf('governance.transition');
-  const idxSend = runSection.indexOf('provider.send');
+  const start = skill.indexOf('7. **Freeze RESULT identity');
+  const end = skill.indexOf('\n## ', start);
+  const step7 = skill.slice(start, end < 0 ? skill.length : end);
+  const idxTransition = step7.indexOf('governance.transition');
+  const idxSend = step7.indexOf('provider.send');
   assert.ok(idxTransition >= 0 && idxTransition < idxSend, 'machine transition must run before sending the RESULT');
-  assert.match(runSection, /Run the machine acceptance transition, THEN send the compact RESULT/);
+  assert.match(step7, /Freeze RESULT identity, machine gate, then send/);
 });
 
 test('failed gate exposes missing/failed IDs', () => {
