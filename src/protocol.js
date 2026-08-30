@@ -300,8 +300,9 @@ export function normalizeEvidence(ev) {
     status: st,
     kind: ev.kind || 'verify',
     summary: ev.summary || ev.text || '',
-    // Epistemic level; legacy evidence without it defaults to observed (compatibility).
-    evidenceLevel: (ev.evidenceLevel && ['observed', 'inferred', 'user_verified', 'unobservable'].includes(ev.evidenceLevel)) ? ev.evidenceLevel : 'observed',
+    // Epistemic level; preserve the 'explicitly supplied' distinction.
+    // Omitted => null (unset); a requiredEvidenceLevel will fail closed on null.
+    evidenceLevel: (ev.evidenceLevel && ['observed', 'inferred', 'user_verified', 'unobservable'].includes(ev.evidenceLevel)) ? ev.evidenceLevel : null,
   };
 }
 

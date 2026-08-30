@@ -107,7 +107,7 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
 
    **Direct-run initialization (retain ONE per run):** create and keep a single `runId`, the `provider`, a `governance` (`createDirectGovernance`), a `directRunLedger` (`createDirectRunLedger`), and a `directRunCoordinator` (`createDirectRunCoordinator`). The browser provider is created inside the trusted browser execution context — never probe `createChatGPTBrowserProvider` from an ordinary node subprocess, never start a second browser runtime to inspect tabs/sidebar. All browser inspection/rebind goes through the run's `provider`/transport.
 
-4. **First Brain message.** Send the user goal + repo identity/path + a concise governance contract. The contract must say:
+4. **First Brain message.** Send the user goal + repo identity/path + the DYNAMIC takeover/control-contract built by `buildTakeoverContract({ runId })` (tells the Brain the required α.4 envelope schema + rules; do not rely on it having read SKILL.md). The governance contract must say:
 
    - ChatGPT owns planning, review, and decisions.
    - Codex executes only bounded TASKs.
@@ -126,7 +126,8 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
    const env = extractCanonicalEnvelope(reply);
    const v = validateStructuredEnvelope(env);
    if (!v.ok) {
-     await provider.send(formatRepairPrompt(), { nonce: 'repair-' + runId + '-' + seq });
+     await provider.send(formatRepairPrompt({ runId, controlId }), { nonce: 'repair-' + runId + '-' + seq });
+   // exactly ONE repair attempt per control, then fail closed if still invalid
      // do NOT execute; wait for/validate the repaired envelope; continue or fail closed.
    }
    const accepted = directRunCoordinator.acceptControl(env);   // monotonic sequence, one outstanding, stale reject, ACK validation
@@ -138,28 +139,33 @@ For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do n
 
 6. **Execute the TASK in the current Codex agent.** Do **not** start a nested Codex, do not start a worker, do not wait on a ready file. The current Codex agent is the executor. Do the work, collect real evidence, and verify.
 
-7. **Freeze RESULT identity, machine gate, then send.** Execute `TASK` -> build the semantic RESULT payload -> run `governance.transition(...)` -> compute `executorStatus` + `machineGate` -> create a stable `resultId` ONCE -> compute `payloadHash` with `computePayloadHash` -> `directRunCoordinator.recordResult(result)` -> `directRunLedger.persist()` -> `provider.send(resultEnvelope, { nonce: correlationToken })`. Do NOT send before `recordResult` succeeds.
+7. **Freeze RESULT identity, machine gate, serialize, then send (ONE deterministic path).**
+   1. `const machine = governance.transition({ stepId, acceptance, result: { changed, evidence } });` — ONCE.
+   2. `machineGate = machine.gate.ok ? 'pass' : 'fail';`
+   3. freeze `resultId` ONCE (`'r' + seq`); build the frozen result object (machineGate already defined).
+   4. `result.payloadHash = computePayloadHash(result);`
+   5. `const rec = directRunCoordinator.recordResult(result);` — verifies payloadHash; do NOT send before `rec.ok`.
+   6. `directRunLedger.persist();`
+   7. `const serialized = JSON.stringify(result); await provider.send(serialized, { nonce: correlationToken });` (browser composer expects text).
 
    ```js
-   const machine = governance.transition({ stepId, acceptance, result: { changed, evidence } });
-   const result = { runId, resultId: 'r' + seq, inReplyToControlId: controlId, sequence: seq, stepId,
-     payloadHash: computePayloadHash({ runId, resultId: 'r' + seq, inReplyToControlId: controlId, sequence: seq, stepId, executorStatus, machineGate, changed, evidence, blockers }),
-     executorStatus, machineGate: machine.gate.ok ? 'pass' : 'fail', changed, evidence, blockers };
-   const rec = directRunCoordinator.recordResult(result);
-   if (rec.ok) { directRunLedger.persist(); await provider.send({ ...result }, { nonce: correlationToken }); }
+   const machine = governance.transition({ stepId, acceptance, result: { changed, evidence } });   // once only
+   const machineGate = machine.gate.ok ? 'pass' : 'fail';
+   const result = { runId, resultId: 'r' + seq, inReplyToControlId: controlId, sequence: seq, stepId, executorStatus, machineGate, changed, evidence, blockers };
+   result.payloadHash = computePayloadHash(result);
+   const rec = directRunCoordinator.recordResult(result);          // verifies payloadHash; no send before rec.ok
+   if (rec.ok) {
+     directRunLedger.persist();
+     const serialized = JSON.stringify(result);                    // serialize to text; retransmission reuses this exact payload
+     await provider.send(serialized, { nonce: correlationToken });
+   }
    ```
 
-   ```js
-   const { createDirectGovernance } = await import('<orchestratorRoot>/src/direct-governance.js');
-   const t = governance.transition({ stepId, acceptance, result: { changed, evidence } });
-   const reviewed = t.gate.ok ? governance.markStepReviewed({ stepId }) : { ok: false, blocked: true, missing: t.missing, failed: t.failed };
-   ```
-
-   Attach the machine gate outcome (`t.gate.ok`, `t.missing`, `t.failed`, `t.passed`) to the RESULT, then build with `buildCompactResult` / `normalizeResult` from `src/protocol.js` and send it to the SAME conversation via `provider.send`. The executor's summary never overrides the gate; if the gate fails the milestone is NOT reviewed/completed, `PUBLISH` / final completion is impossible, and the Brain receives the structured missing/failed ids and decides `REVISE` / further corrective control. The machine gate MUST run before the Brain is allowed to treat the milestone as accepted.
+   Do NOT call `governance.transition` / `markStepReviewed` a second time for the same RESULT (no duplicate machine gate). The exact serialized text used for the first send is the same semantic payload used for retransmission. The executor's summary never overrides the gate; if the gate fails the milestone is not reviewed/completed and the Brain receives structured missing/failed ids.
 
 8. **Review loop.** The same ChatGPT conversation returns the next control (`TASK` / `REVISE` / `REPLAN` / `PUBLISH` / `ASK_USER` / `DONE`). Keep the same conversation; do not resend the full goal/plan/raw logs each turn.
 
-9. **Machine acceptance transition, then PUBLISH, then terminal DONE.** Before a milestone advances, run the machine acceptance transition (`createDirectGovernance().transition(...)` then `.markStepReviewed(...)`); a milestone only advances when EVERY required acceptance has a `pass` evidence item (`evaluateDirectAcceptanceGate`). The executor's natural-language summary never overrides the gate; missing/unknown/failed required evidence is returned to the Brain as structured `missing`/`failed` ids and is never silently advanced.
+9. **Brain acceptance transition, then PUBLISH, then terminal DONE.** When a valid next control is accepted, update the prior milestone's `brainAcceptance` deterministically with `applyBrainAcceptanceTransition` (`TASK` / `PUBLISH` / `DONE` advancing → prior accepted; `REVISE` → prior revise per `reviseDelta`; `ASK_USER` → no silent accept). The machine gate (`governance.transition` once) marks machine evidence completion, distinct from Brain acceptance; a milestone is globally accepted only when executor is acceptable AND machineGate=pass AND Brain accepts. `PUBLISH` precedes terminal `DONE`.
 
    On `PUBLISH`, confirm the publication gate (`evaluatePublicationGate`), which requires `brainControl === 'PUBLISH'` — `DONE` never authorizes publishing:
 

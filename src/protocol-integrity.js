@@ -33,10 +33,14 @@ export const EVIDENCE_LEVELS = ['observed', 'inferred', 'user_verified', 'unobse
 
 // inferred cannot satisfy an observed requirement; user_verified may satisfy an
 // acceptance explicitly allowing it; unobservable is never silently pass.
-export function evaluateEvidenceLevel({ evidenceLevel = 'observed', requiredEvidenceLevel = null } = {}) {
-  const lvl = evidenceLevel || 'observed';
+export function evaluateEvidenceLevel({ evidenceLevel = null, requiredEvidenceLevel = null } = {}) {
+  const lvl = evidenceLevel || null;
   if (lvl === 'unobservable') return { ok: false, level: lvl, reason: 'unobservable evidence cannot satisfy any acceptance (never silently converted to pass)' };
+  // No required level: legacy evidence stays compatible even without an explicit level.
   if (!requiredEvidenceLevel) return { ok: true, level: lvl };
+  // A required level is explicitly present: evidence that did NOT declare an
+  // explicit epistemic level must NOT satisfy it (fail closed, not default to observed).
+  if (lvl === null) return { ok: false, level: lvl, reason: 'evidence did not declare an epistemic level but a requiredEvidenceLevel is present' };
   if (requiredEvidenceLevel === 'observed' && lvl !== 'observed') return { ok: false, level: lvl, reason: `inferred (${lvl}) cannot satisfy an observed requirement` };
   if (requiredEvidenceLevel === 'user_verified' && !['user_verified', 'observed'].includes(lvl)) return { ok: false, level: lvl, reason: `only user_verified/observed satisfies user_verified requirement (got ${lvl})` };
   return { ok: true, level: lvl };
@@ -70,8 +74,48 @@ export function validateStructuredEnvelope(env) {
   return { ok: errors.length === 0, errors };
 }
 
-export function formatRepairPrompt() {
-  return 'Restate the immediately previous control in canonical structured form only. Do not replan or change its instruction/acceptance.';
+export function formatRepairPrompt({ runId = null, controlId = null } = {}) {
+  return 'Restate the immediately previous control in canonical structured form only. Do not replan or change its instruction/acceptance.'
+    + '\nRequired envelope schema: { runId, controlId, sequence, control, stepId, instruction, acceptance, ackResultId?, reviseDelta?, askUser? }'
+    + (runId ? '\nrunId: ' + runId : '')
+    + (controlId ? '\ncontrolId: ' + controlId : '');
+}
+
+// Dynamic takeover / control-contract builder for the FIRST brain packet. Tells
+// the Brain the canonical Alpha.4 envelope protocol outright (do not rely on it
+// having read SKILL.md). Includes the current runId and the required rules.
+export function buildTakeoverContract({ runId, ackResultId = null } = {}) {
+  return [
+    'Continue this existing project conversation.',
+    'ChatGPT now owns PLAN / TASK / REVISE / ASK_USER / PUBLISH / DONE.',
+    'The current Codex conversation is the executor.',
+    'Use the existing conversation context; do not restart completed work from zero.',
+    'Current runId: ' + (runId || '') + '.',
+    'Every actionable reply MUST contain exactly one canonical structured control envelope:',
+    '{ runId, controlId, sequence, control, stepId, instruction, acceptance, ackResultId?, reviseDelta?, askUser? }',
+    '- control is one of PLAN / TASK / REVISE / ASK_USER / PUBLISH / DONE.',
+    '- sequence starts at 1 and monotonically increases for accepted controls.',
+    '- The next control should acknowledge the previous RESULT via ackResultId.',
+    '- PUBLISH precedes terminal DONE; DONE is terminal.',
+    (ackResultId ? 'Acknowledge the previously sent RESULT ' + ackResultId + ' via ackResultId.' : ''),
+  ].filter(Boolean).join('\n');
+}
+
+// Deterministic Brain acceptance transition. TASK/PUBLISH/DONE advancing from the
+// prior successful milestone marks it accepted; REVISE marks the affected prior
+// milestone revise via reviseDelta; ASK_USER does not silently accept.
+export function applyBrainAcceptanceTransition({ control, prevStepId = null, reviseDelta = null, acceptanceStates = {} } = {}) {
+  const next = { ...acceptanceStates };
+  const transitions = [];
+  if (control === 'REVISE') {
+    const r = applyReviseDelta({ delta: reviseDelta || {}, acceptanceStates });
+    Object.assign(next, r.acceptanceStates);
+    for (const id of r.reopened) transitions.push({ stepId: id, acceptance: 'revise' });
+  } else if (['TASK', 'PUBLISH', 'DONE'].includes(control)) {
+    if (prevStepId) { next[prevStepId] = 'accepted'; transitions.push({ stepId: prevStepId, acceptance: 'accepted' }); }
+  }
+  // ASK_USER: no silent acceptance.
+  return { acceptanceStates: next, transitions };
 }
 
 // --- 4/5) Control / RESULT identity, monotonic cursor, piggyback ACK ---------
@@ -165,6 +209,7 @@ export function createDirectRunCoordinator({ runId = null, ledger = null } = {})
       if (st.runId && result.runId !== st.runId) return { ok: false, reason: 'runId mismatch' };
       if (!result.resultId) return { ok: false, reason: 'resultId required' };
       if (!result.payloadHash) return { ok: false, reason: 'payloadHash required' };
+      if (computePayloadHash(result) !== result.payloadHash) { bump('protocolIntegrityFailure'); persist(); return { ok: false, reason: 'payloadHash mismatch (protocol integrity failure)', resultId: result.resultId }; }
       if (result.inReplyToControlId !== st.outstandingControlId) { bump('staleControlRejectedCount'); persist(); return { ok: false, reason: 'RESULT does not match the outstanding control', outstanding: st.outstandingControlId, got: result.inReplyToControlId }; }
       const ctl = st.controls[result.inReplyToControlId];
       if (!ctl || ctl.sequence !== result.sequence) { bump('staleControlRejectedCount'); persist(); return { ok: false, reason: 'RESULT sequence does not match the outstanding control' }; }

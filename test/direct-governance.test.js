@@ -382,7 +382,7 @@ test('canonical documented sequence runs the machine gate BEFORE send', () => {
   const idxTransition = step7.indexOf('governance.transition');
   const idxSend = step7.indexOf('provider.send');
   assert.ok(idxTransition >= 0 && idxTransition < idxSend, 'machine transition must run before sending the RESULT');
-  assert.match(step7, /Freeze RESULT identity, machine gate, then send/);
+  assert.match(step7, /Freeze RESULT identity, machine gate, serialize, then send/);
 });
 
 test('failed gate exposes missing/failed IDs', () => {
