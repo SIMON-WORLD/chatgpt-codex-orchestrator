@@ -35,6 +35,7 @@ export { loadBrainCommandConfig, writeBrainCommandConfig, codexHome, brainComman
 export { resolveVerificationLevel, shouldRunFullSuite, resolveVerificationCommands, buildVerificationPlan, normalizeVerificationPolicy, canDowngrade, VERIFICATION_TIERS, TIER_RANK, VerificationPolicyError, isMandatoryBoundary, assertMandatoryVerification } from './verification.js';
 
 export * as publish from './publish-policy.js';
+export * as protocolIntegrity from './protocol-integrity.js';
 export { evaluateDirectAcceptanceGate, createProofLedger, planVerification, verifyTierPrecondition, buildBootstrapEvidence, createDirectMetrics, attemptLateReplyRecovery } from './direct-governance.js';
 export { createPublicationTransaction, publicationReadyForDone, buildExternalEvidence, parseRemoteRef } from './publication-transaction.js';
 

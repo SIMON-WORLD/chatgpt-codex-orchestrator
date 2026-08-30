@@ -65,6 +65,9 @@ export function createDirectGovernance({ proofLedger = createProofLedger(), metr
     metrics,
     currentStepId: null,
     completedSteps: [],
+    brainAcceptance: {},
+    frozenDecisions: [],
+    machineGateStatus: null,
   };
 
   function registerAcceptance(acceptance = []) {
@@ -162,6 +165,18 @@ export function createDirectGovernance({ proofLedger = createProofLedger(), metr
       state.metrics.bump('reusedProofCount', plan.reuse.length);
       state.metrics.bump('verificationRuns', plan.needVerification.length);
       return plan;
+    },
+    // Machine evidence completion (NOT Brain acceptance). A milestone is only
+    // globally accepted after the Brain explicitly accepts it (setBrainAcceptance).
+    markMachineEvidenceComplete({ stepId }) { return this.markStepReviewed({ stepId }); },
+    machineGateStatus() { const g = gate(); return g.ok ? 'pass' : 'fail'; },
+    // Only a valid Brain control may change brainAcceptance.
+    setBrainAcceptance({ stepId, acceptance }) {
+      if (!['pending', 'accepted', 'revise', 'rejected'].includes(acceptance)) return { ok: false, reason: 'invalid brainAcceptance' };
+      const s = stepId || state.currentStepId;
+      state.brainAcceptance[s] = acceptance;
+      state.frozenDecisions.push({ stepId: s, acceptance, at: new Date().toISOString() });
+      return { ok: true, stepId: s, brainAcceptance: acceptance };
     },
     registerAcceptance,
     gate,
@@ -280,6 +295,7 @@ export function createDirectMetrics() {
     duration: 0, timeToFirstBrainControl: null, brainTurns: 0, taskCount: 0, reviseCount: 0,
     replanCount: 0, askUserCount: 0, publishCount: 0, replyTimeoutCount: 0, browserRecoveryCount: 0,
     conversationSwitchCount: 0, reusedProofCount: 0, staleProofCount: 0, verificationRuns: 0, publishRetryCount: 0,
+    protocolRepairCount: 0, staleControlRejectedCount: 0, duplicateResultCount: 0, resultRetransmitCount: 0, deliveryAckTimeoutCount: 0, manualInterventionCount: 0,
   };
   const data = { startedAt: Date.now(), ...keys };
   return {

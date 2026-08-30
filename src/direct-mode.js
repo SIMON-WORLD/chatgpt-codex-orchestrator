@@ -146,9 +146,9 @@ export function createChatGPTBrowserProvider({ transport = null, turnOptions = {
     return identity;
   }
 
-  async function send(message) {
+  async function send(message, { nonce } = {}) {
     if (!session) throw new Error('no Brain session; call open / adoptConversation / adoptCurrent first');
-    const r = await session.send(message);
+    const r = await session.send(message, { nonce });
     identity = { conversationId: r.conversationId, conversationUrl: r.conversationUrl, tabId: r.ownedTabId };
     return r;
   }
