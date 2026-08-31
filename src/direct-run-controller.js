@@ -73,22 +73,28 @@ export function createDirectRun({ runId = null, dataRoot = null, repoDir = null,
     const advance = ['TASK', 'PUBLISH', 'DONE'].includes(env.control);
     const prevResultId = coordinator.state.lastSentResultId;
     const prevResult = prevResultId ? coordinator.state.results[prevResultId] : null;
+    // Mandatory piggyback ACK: if a RESULT was sent and is not yet acknowledged,
+    // ANY next Brain control (PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE) must
+    // ackResultId the last sent RESULT. This closes delivery for every lifecycle,
+    // not only advancement controls, and rejects wrong/missing ACK.
+    if (prevResultId && prevResult && env.ackResultId !== prevResultId) {
+      return {
+        advance, priorAccepted: false, protocolFailure: true,
+        reason: 'next control must piggyback ackResultId equal to the last sent RESULT',
+        expectedAckResultId: prevResultId, got: env.ackResultId || null, resultId: prevResultId,
+      };
+    }
     if (!advance) {
+      // REVISE / ASK_USER / PLAN / REPLAN: a correct ACK proves delivery; they never
+      // silently accept a failed/unacknowledged prior milestone.
       return { advance: false, priorAccepted: false, protocolFailure: false };
     }
     if (!prevResultId || !prevResult) {
       // First actionable control: nothing prior to advance.
       return { advance: true, priorAccepted: false, protocolFailure: false };
     }
-    // Mandatory piggyback ACK: advancing after a RESULT requires ackResultId match.
-    if (env.ackResultId !== prevResultId) {
-      return {
-        advance: true, priorAccepted: false, protocolFailure: true,
-        reason: 'advancement control must piggyback ackResultId equal to the last sent RESULT',
-        expectedAckResultId: prevResultId, got: env.ackResultId || null, resultId: prevResultId,
-      };
-    }
-    // Prior RESULT must be genuinely acceptable (success + machineGate pass).
+    // Advancement: prior RESULT must be genuinely acceptable (success + pass). A
+    // correct ACK does NOT by itself make the prior milestone accepted.
     const authoritative = evaluateMilestoneAcceptance({
       executorStatus: prevResult.executorStatus,
       machineGate: prevResult.machineGate,

@@ -302,7 +302,7 @@ test('REVISE 004a F: advance with WRONG ackResultId fails closed (prior NOT acce
 test('REVISE 004a G: REVISE after failed r1 applies revise transition, no false accepted state', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004g-'));
   const c1G = { ...c1, runId: 'run-g' };
-  const reviseEnv = { runId: 'run-g', controlId: 'c2', sequence: 2, control: 'REVISE', stepId: 's1', instruction: 'fix', acceptance: [], reviseDelta: { invalidate: ['s1'] } };
+  const reviseEnv = { runId: 'run-g', controlId: 'c2', sequence: 2, control: 'REVISE', stepId: 's1', instruction: 'fix', acceptance: [], ackResultId: 'r1', reviseDelta: { invalidate: ['s1'] } };
   const fake = makeFakeBrain([JSON.stringify(c1G), JSON.stringify(reviseEnv)]);
   const run = createDirectRun({ runId: 'run-g', dataRoot: dir, repoDir: '.', provider: fake });
   const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
@@ -321,7 +321,7 @@ test('REVISE 004a G: REVISE after failed r1 applies revise transition, no false 
 test('REVISE 004a H: ASK_USER after r1 does NOT silently accept the prior', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004h-'));
   const c1H = { ...c1, runId: 'run-h' };
-  const askEnv = { runId: 'run-h', controlId: 'c2', sequence: 2, control: 'ASK_USER', stepId: 's2', instruction: 'ask', acceptance: [], askUser: { whyBlocked: 'need input', minimalUserAction: 'run cmd', readOnly: true, resumeControlId: 'c1' } };
+  const askEnv = { runId: 'run-h', controlId: 'c2', sequence: 2, control: 'ASK_USER', stepId: 's2', instruction: 'ask', acceptance: [], ackResultId: 'r1', askUser: { whyBlocked: 'need input', minimalUserAction: 'run cmd', readOnly: true, resumeControlId: 'c1' } };
   const fake = makeFakeBrain([JSON.stringify(c1H), JSON.stringify(askEnv)]);
   const run = createDirectRun({ runId: 'run-h', dataRoot: dir, repoDir: '.', provider: fake });
   const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
@@ -334,5 +334,149 @@ test('REVISE 004a H: ASK_USER after r1 does NOT silently accept the prior', asyn
   assert.equal(acc.control.control, 'ASK_USER');
   assert.notEqual(run.governance.state.brainAcceptance.s1, 'accepted', 'ASK_USER must not silently accept the prior milestone');
   assert.equal(run.governance.state.brainAcceptance.s1 ? run.governance.state.brainAcceptance.s1 : 'pending', 'pending');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// --- REVISE 004b: control-lifecycle closure (every non-terminal control -> 1 RESULT) ---
+
+test('REVISE 004b A: PLAN -> RESULT r1 -> TASK c2 ack r1 (no outstanding-control deadlock)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004bA-'));
+  const planC1 = { runId: 'run-p1', controlId: 'c1', sequence: 1, control: 'PLAN', stepId: 's1', instruction: 'plan', acceptance: [] };
+  const taskC2 = { runId: 'run-p1', controlId: 'c2', sequence: 2, control: 'TASK', stepId: 's2', instruction: 'do y', acceptance: [], ackResultId: 'r1' };
+  const fake = makeFakeBrain([JSON.stringify(planC1), JSON.stringify(taskC2)]);
+  const run = createDirectRun({ runId: 'run-p1', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  assert.equal(start.control.control, 'PLAN');
+  assert.equal(run.coordinator.state.outstandingControlId, 'c1');
+  const prep = run.prepareResult({ stepId: 's1', executorStatus: 'success', changed: [], evidence: [], blockers: [] });
+  assert.equal(prep.ok, true);
+  assert.equal(run.coordinator.state.outstandingControlId, null, 'RESULT clears PLAN outstanding');
+  const sent = await run.sendResult();
+  const acc = await run.acceptBrainReply(sent.reply, { allowRepair: false });
+  assert.equal(acc.ok, true);
+  assert.equal(acc.control.control, 'TASK');
+  assert.equal(run.coordinator.state.outstandingControlId, 'c2', 'c2 becomes outstanding, no deadlock');
+  assert.equal(acc.priorAccepted, true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004b B: failed r1 -> REVISE c2 ack r1 -> accepted + ack recorded + prior NOT falsely accepted', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004bB-'));
+  const c1B = { ...c1, runId: 'run-p2' };
+  const reviseB = { runId: 'run-p2', controlId: 'c2', sequence: 2, control: 'REVISE', stepId: 's1', instruction: 'fix', acceptance: [], ackResultId: 'r1', reviseDelta: { invalidate: ['s1'] } };
+  const fake = makeFakeBrain([JSON.stringify(c1B), JSON.stringify(reviseB)]);
+  const run = createDirectRun({ runId: 'run-p2', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  const prep = run.prepareResult({ stepId: 's1', executorStatus: 'failure', changed: [], evidence: [], blockers: [] });
+  assert.equal(prep.machineGate, 'fail');
+  const sent = await run.sendResult();
+  const acc = await run.acceptBrainReply(sent.reply, { allowRepair: false });
+  assert.equal(acc.ok, true, 'REVISE accepted');
+  assert.equal(acc.control.control, 'REVISE');
+  assert.equal(run.coordinator.state.lastAcknowledgedResultId, 'r1', 'r1 acknowledged');
+  assert.ok(run.coordinator.state.acknowledgedResultIds.includes('r1'));
+  assert.notEqual(run.governance.state.brainAcceptance.s1, 'accepted', 'prior NOT falsely accepted');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004b C: failed r1 -> ASK_USER c2 ack r1 -> user_verified RESULT r2 -> c3 ack r2 (no deadlock, blocked milestone not silently accepted)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004bC-'));
+  const c1C = { ...c1, runId: 'run-p3' };
+  const askC = { runId: 'run-p3', controlId: 'c2', sequence: 2, control: 'ASK_USER', stepId: 's2', instruction: 'ask', acceptance: [], ackResultId: 'r1', askUser: { whyBlocked: 'blocked', minimalUserAction: 'x', readOnly: true, resumeControlId: 'c1' } };
+  const c3C = { runId: 'run-p3', controlId: 'c3', sequence: 3, control: 'REVISE', stepId: 's3', instruction: 'fix', acceptance: [], ackResultId: 'r2', reviseDelta: { invalidate: ['s1'] } };
+  const fake = makeFakeBrain([JSON.stringify(c1C), JSON.stringify(askC), JSON.stringify(c3C)]);
+  const run = createDirectRun({ runId: 'run-p3', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  const prep1 = run.prepareResult({ stepId: 's1', executorStatus: 'failure', changed: [], evidence: [], blockers: [] });
+  assert.equal(prep1.machineGate, 'fail');
+  const sent1 = await run.sendResult();
+  const accAsk = await run.acceptBrainReply(sent1.reply, { allowRepair: false });
+  assert.equal(accAsk.ok, true, 'ASK_USER accepted with ack r1');
+  assert.equal(accAsk.control.control, 'ASK_USER');
+  assert.equal(run.coordinator.state.outstandingControlId, 'c2', 'ASK_USER outstanding while waiting');
+  const prep2 = run.prepareResult({ stepId: 's2', executorStatus: 'success', changed: [], evidence: [{ acceptanceId: 'USER', status: 'pass', evidenceLevel: 'user_verified', summary: 'user input' }], blockers: [] });
+  assert.equal(prep2.ok, true, 'user_verified RESULT r2 recorded');
+  assert.equal(prep2.result.resultId, 'r2');
+  assert.equal(run.coordinator.state.outstandingControlId, null, 'r2 clears ASK_USER outstanding');
+  const sent2 = await run.sendResult();
+  const acc3 = await run.acceptBrainReply(sent2.reply, { allowRepair: false });
+  assert.equal(acc3.ok, true, 'c3 (REVISE) accepted with ack r2');
+  assert.equal(acc3.control.control, 'REVISE');
+  assert.equal(run.coordinator.state.lastAcknowledgedResultId, 'r2');
+  assert.notEqual(run.governance.state.brainAcceptance.s1, 'accepted', 'original BLOCKED milestone s1 not silently accepted');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004b D: REPLAN -> RESULT r1 -> TASK c2 ack r1', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004bD-'));
+  const replanC1 = { runId: 'run-p4', controlId: 'c1', sequence: 1, control: 'REPLAN', stepId: 's1', instruction: 'replan', acceptance: [], reviseDelta: { invalidate: ['s0'] } };
+  const taskC2 = { runId: 'run-p4', controlId: 'c2', sequence: 2, control: 'TASK', stepId: 's2', instruction: 'do y', acceptance: [], ackResultId: 'r1' };
+  const fake = makeFakeBrain([JSON.stringify(replanC1), JSON.stringify(taskC2)]);
+  const run = createDirectRun({ runId: 'run-p4', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  assert.equal(start.control.control, 'REPLAN');
+  const prep = run.prepareResult({ stepId: 's1', executorStatus: 'success', changed: [], evidence: [], blockers: [] });
+  assert.equal(prep.ok, true);
+  assert.equal(run.coordinator.state.outstandingControlId, null);
+  const sent = await run.sendResult();
+  const acc = await run.acceptBrainReply(sent.reply, { allowRepair: false });
+  assert.equal(acc.ok, true);
+  assert.equal(acc.control.control, 'TASK');
+  assert.equal(run.coordinator.state.outstandingControlId, 'c2');
+  assert.equal(acc.priorAccepted, true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004b E: ANY next control after an unacknowledged RESULT with missing/wrong ack fails closed', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004bE-'));
+  const c1E = { ...c1, runId: 'run-p5' };
+  const reviseE = { runId: 'run-p5', controlId: 'c2', sequence: 2, control: 'REVISE', stepId: 's1', instruction: 'fix', acceptance: [] };
+  const fake = makeFakeBrain([JSON.stringify(c1E), JSON.stringify(reviseE)]);
+  const run = createDirectRun({ runId: 'run-p5', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  const prep = run.prepareResult({ stepId: 's1', executorStatus: 'failure', changed: [], evidence: [], blockers: [] });
+  assert.equal(prep.machineGate, 'fail');
+  const sent = await run.sendResult();
+  const acc = await run.acceptBrainReply(sent.reply, { allowRepair: false });
+  assert.equal(acc.ok, false, 'REVISE (non-advancing) without ack still fails closed');
+  assert.equal(acc.protocolIntegrity, true);
+  assert.equal(acc.expectedAckResultId, 'r1');
+  assert.equal(acc.got, null);
+  assert.ok(!run.coordinator.state.acknowledgedResultIds.includes('r1'), 'r1 NOT acknowledged');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004b F: DONE after PUBLISH RESULT requires correct ackResultId, is terminal, produces no new RESULT', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004bF-'));
+  const c1F = { ...c1, runId: 'run-p6' };
+  const pubF = { runId: 'run-p6', controlId: 'c2', sequence: 2, control: 'PUBLISH', stepId: 's2', instruction: 'publish', acceptance: [], ackResultId: 'r1' };
+  const doneF = { runId: 'run-p6', controlId: 'c3', sequence: 3, control: 'DONE', stepId: 's3', instruction: 'done', acceptance: [], ackResultId: 'r2' };
+  const fake = makeFakeBrain([JSON.stringify(c1F), JSON.stringify(pubF), JSON.stringify(doneF)]);
+  const run = createDirectRun({ runId: 'run-p6', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  const prep1 = run.prepareResult({ stepId: 's1', executorStatus: 'success', changed: [], evidence: [{ acceptanceId: 'U1', status: 'pass', evidenceLevel: 'observed' }], blockers: [] });
+  assert.equal(prep1.machineGate, 'pass');
+  const sent1 = await run.sendResult();
+  const accPub = await run.acceptBrainReply(sent1.reply, { allowRepair: false });
+  assert.equal(accPub.ok, true);
+  assert.equal(accPub.control.control, 'PUBLISH');
+  assert.equal(run.publicationGate({ brainControl: 'PUBLISH', acceptanceGateOk: true, identityPreflightOk: true, workingTreeScopeOk: true }).ok, true);
+  const prep2 = run.prepareResult({ stepId: 's2', executorStatus: 'success', changed: [], evidence: [{ acceptanceId: 'PUB', status: 'pass', evidenceLevel: 'observed' }], blockers: [] });
+  assert.equal(prep2.result.resultId, 'r2');
+  const sent2 = await run.sendResult();
+  // DONE with correct ack r2 is accepted; DONE is terminal and produces NO new RESULT.
+  const accDone = await run.acceptBrainReply(sent2.reply, { allowRepair: false });
+  assert.equal(accDone.ok, true, 'DONE accepted with ack r2');
+  assert.equal(accDone.control.control, 'DONE');
+  assert.equal(run.isTerminal('DONE'), true);
+  assert.equal(run.doneGate({ publicationReady: true, finalVerificationOk: true, workingTreeScopeOk: true }).ok, true);
+  assert.equal(run.frozenResult ? run.frozenResult.resultId : null, 'r2', 'last frozen RESULT is the PUBLISH r2');
+  assert.ok(!run.coordinator.state.results['r3'], 'no r3 RESULT produced for terminal DONE');
   fs.rmSync(dir, { recursive: true, force: true });
 });
