@@ -4,9 +4,10 @@
 // Brain Loop. It owns exactly one runId / provider / DirectRunLedger /
 // DirectRunCoordinator / DirectGovernance and enforces the protocol mechanics
 // (takeover contract, canonical envelope extraction, one FORMAT_REPAIR, control
-// identity + monotonic cursor, RESULT payloadHash, nonce send, Brain acceptance
-// transition, resume/delivery recovery). The calling Codex agent provides only
-// task execution + real evidence; it never reassembles protocol primitives.
+// identity + monotonic cursor, RESULT payloadHash, nonce send, mandatory
+// piggyback ACK, Brain acceptance transition, resume/delivery recovery). The
+// calling Codex agent provides only task execution + real evidence; it never
+// reassembles protocol primitives.
 //
 // Canonical mode is 'direct-alpha4'. This module does NOT import or use the
 // legacy TaskService / TaskManager / LoopController / worker-bootstrap path.
@@ -59,6 +60,49 @@ export function createDirectRun({ runId = null, dataRoot = null, repoDir = null,
   const metrics = gov.state.metrics;
   const providerInstance = provider || createChatGPTBrowserProvider({ turnOptions });
   const ledgerPath = dataRoot ? path.join(dataRoot, 'direct-runs', rid + '.json') : null;
+  // Exactly one browser-bound provider session per run.
+  let providerSessionOpen = false;
+
+  // Controller-owned advancement authority gate (single equivalent of
+  // evaluateMilestoneAcceptance). A prior milestone may only become Brain-accepted
+  // when: there is a prior RESULT for that step, its executorStatus === success
+  // AND machineGate === pass, and the next advancement control correctly
+  // acknowledges that RESULT via ackResultId. REVISE / ASK_USER / PLAN / REPLAN
+  // never silently accept a failed/unacknowledged milestone.
+  function advancementGate(env) {
+    const advance = ['TASK', 'PUBLISH', 'DONE'].includes(env.control);
+    const prevResultId = coordinator.state.lastSentResultId;
+    const prevResult = prevResultId ? coordinator.state.results[prevResultId] : null;
+    if (!advance) {
+      return { advance: false, priorAccepted: false, protocolFailure: false };
+    }
+    if (!prevResultId || !prevResult) {
+      // First actionable control: nothing prior to advance.
+      return { advance: true, priorAccepted: false, protocolFailure: false };
+    }
+    // Mandatory piggyback ACK: advancing after a RESULT requires ackResultId match.
+    if (env.ackResultId !== prevResultId) {
+      return {
+        advance: true, priorAccepted: false, protocolFailure: true,
+        reason: 'advancement control must piggyback ackResultId equal to the last sent RESULT',
+        expectedAckResultId: prevResultId, got: env.ackResultId || null, resultId: prevResultId,
+      };
+    }
+    // Prior RESULT must be genuinely acceptable (success + machineGate pass).
+    const authoritative = evaluateMilestoneAcceptance({
+      executorStatus: prevResult.executorStatus,
+      machineGate: prevResult.machineGate,
+      brainAcceptance: 'accepted',
+    });
+    if (!authoritative.accepted) {
+      return {
+        advance: true, priorAccepted: false, protocolFailure: true,
+        reason: 'prior RESULT not acceptable for advancement (executorStatus != success or machineGate != pass)',
+        resultId: prevResultId, executorStatus: prevResult.executorStatus, machineGate: prevResult.machineGate,
+      };
+    }
+    return { advance: true, priorAccepted: true, protocolFailure: false, resultId: prevResultId };
+  }
 
   const ctl = {
     mode: DIRECT_ALPHA4_MODE,
@@ -74,6 +118,7 @@ export function createDirectRun({ runId = null, dataRoot = null, repoDir = null,
     frozenResult: null,
     pendingResult: null,
     deliveredResultId: null,
+
     // Canonical run metrics: governance metrics + coordinator-level counts.
     metrics() {
       const m = metrics.snapshot();
@@ -96,9 +141,25 @@ export function createDirectRun({ runId = null, dataRoot = null, repoDir = null,
 
     setOrchestratorHead(head) { ctl.orchestratorHead = head; },
 
-    // FIRST TURN: build dynamic takeover + bootstrap, send, extract/validate the
-    // first Brain reply (one FORMAT_REPAIR allowed), accept the control, persist.
-    async start({ goal = null, gitRun = null, bootstrap = null, allowRepair = true } = {}) {
+    // FIRST TURN: if no conversation is already bound, open the provider exactly
+    // once (a brand-new Brain conversation); if a conversation was adopted/resumed
+    // (ledger conversationId present) do NOT open a second browser runtime. Then
+    // build the dynamic takeover + bootstrap, send it, extract/validate the first
+    // Brain reply (one FORMAT_REPAIR allowed), accept the control, persist.
+    async start({ goal = null, gitRun = null, bootstrap = null, allowRepair = true, openUrl = 'https://chatgpt.com/' } = {}) {
+      if (!providerSessionOpen) {
+        if (ledger.state.conversationId) {
+          try { await ctl.provider.resume({ tabId: null, conversationId: ledger.state.conversationId, conversationUrl: ledger.state.conversationUrl }); } catch { /* bounded */ }
+        } else {
+          const identity = await ctl.provider.open({ url: openUrl });
+          if (identity && identity.conversationId) {
+            ledger.state.conversationId = identity.conversationId;
+            ledger.state.conversationUrl = identity.conversationUrl || null;
+            ledger.persist();
+          }
+        }
+        providerSessionOpen = true;
+      }
       const takeover = buildTakeoverContract({ runId: rid });
       let b = bootstrap;
       if (b == null && repoDir) b = buildBootstrapEvidence({ repoDir, gitRun });
@@ -118,16 +179,21 @@ export function createDirectRun({ runId = null, dataRoot = null, repoDir = null,
     // Adopt an existing ChatGPT conversation (no new conversation created).
     async adoptConversation({ conversationUrl = null, conversationId = null, title = null } = {}) {
       const identity = await ctl.provider.adoptConversation({ conversationUrl, conversationId, title });
+      providerSessionOpen = true;
       ledger.state.conversationId = identity.conversationId;
       ledger.state.conversationUrl = identity.conversationUrl;
       ledger.persist();
       return identity;
     },
 
+    // Expose the controller-owned advancement gate (for tests / runtime authority).
+    evaluateAdvancement(env) { return advancementGate(env); },
+
     // NEXT CONTROL: extract the canonical envelope, validate, send ONE FORMAT_REPAIR
-    // if necessary (then fail closed), accept the control (monotonic sequence, one
-    // outstanding, stale/acked validation), apply the deterministic Brain acceptance
-    // transition for the prior milestone, persist.
+    // if necessary (then fail closed), enforce the advancement authority gate, accept
+    // the control (monotonic sequence, one outstanding, stale/acked validation), apply
+    // the deterministic Brain acceptance transition ONLY when the gate passes, then
+    // persist accepted state.
     async acceptBrainReply(reply, { allowRepair = true, repairControlId = null } = {}) {
       let env = extractCanonicalEnvelope(reply);
       let v = validateStructuredEnvelope(env);
@@ -142,14 +208,34 @@ export function createDirectRun({ runId = null, dataRoot = null, repoDir = null,
         if (!v.ok) return { ok: false, error: 'invalid envelope after one FORMAT_REPAIR', errors: v.errors };
       }
       metrics.bump('brainTurns');
+      const gate = advancementGate(env);
+      if (gate.protocolFailure) {
+        // Do not advance, do not mark prior accepted, do not accept the control,
+        // and do not persist an accepted state.
+        metrics.bump('staleControlRejectedCount');
+        return { ok: false, protocolIntegrity: true, reason: gate.reason, controlId: env.controlId, expectedAckResultId: gate.expectedAckResultId, got: gate.got, resultId: gate.resultId };
+      }
       const accepted = coordinator.acceptControl(env);
       if (!accepted.ok) { metrics.bump('staleControlRejectedCount'); return { ok: false, reason: accepted.reason }; }
-      const acc = applyBrainAcceptanceTransition({
-        control: env.control,
-        prevStepId: ctl.lastStepId,
-        reviseDelta: env.reviseDelta,
-        acceptanceStates: gov.state.brainAcceptance,
-      });
+      // Determine the Brain acceptance transition from the gate result (one
+      // deterministic path; never silently accept a failed/unacknowledged milestone).
+      let acc = { acceptanceStates: gov.state.brainAcceptance, transitions: [] };
+      if (gate.priorAccepted && ctl.lastStepId) {
+        acc = applyBrainAcceptanceTransition({
+          control: env.control,
+          prevStepId: ctl.lastStepId,
+          reviseDelta: env.reviseDelta,
+          acceptanceStates: gov.state.brainAcceptance,
+        });
+      } else if (env.control === 'REVISE') {
+        acc = applyBrainAcceptanceTransition({
+          control: 'REVISE',
+          reviseDelta: env.reviseDelta,
+          acceptanceStates: gov.state.brainAcceptance,
+        });
+      }
+      // Only persist accepted Brain state after the gate passes (fix: never persist
+      // accepted on executor failure / machineGate fail / unacknowledged RESULT).
       gov.state.brainAcceptance = acc.acceptanceStates;
       ledger.state.brainAcceptance = acc.acceptanceStates;
       if (env.control === 'TASK') metrics.bump('taskCount');
@@ -159,8 +245,9 @@ export function createDirectRun({ runId = null, dataRoot = null, repoDir = null,
       else if (env.control === 'PUBLISH') metrics.bump('publishCount');
       ctl.lastStepId = env.stepId;
       ledger.persist();
-      return { ok: true, control: env, sequence: accepted.sequence, brainAcceptance: acc.acceptanceStates, transitions: acc.transitions };
+      return { ok: true, control: env, sequence: accepted.sequence, brainAcceptance: acc.acceptanceStates, transitions: acc.transitions, priorAccepted: gate.priorAccepted };
     },
+
     // RESULT TURN: semantic result -> governance.transition ONCE -> machineGate ->
     // stable resultId -> computePayloadHash -> coordinator.recordResult (verifies
     // hash, no send before ok) -> persist frozen RESULT -> JSON serialization.
@@ -208,6 +295,7 @@ export function createDirectRun({ runId = null, dataRoot = null, repoDir = null,
     // Bounded canonical recovery; do not fall back to user click/paste first.
     async resume({ provider = null, reopen = true } = {}) {
       if (provider) ctl.provider = provider;
+      providerSessionOpen = true;
       gov.state.brainAcceptance = ledger.state.brainAcceptance || {};
       const lastCtl = coordinator.state.controls[coordinator.state.lastAcceptedControlId];
       ctl.lastStepId = lastCtl ? lastCtl.stepId : null;

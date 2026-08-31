@@ -10,19 +10,33 @@ const controllerPath = fileURLToPath(new URL('../src/direct-run-controller.js', 
 const skillPath = fileURLToPath(new URL('../skills/brain-command/SKILL.md', import.meta.url));
 
 // Deterministic scripted Brain: consumes an ordered list of reply strings on each
-// send, records the outbound message + nonce, and returns a stable conversation id.
-function makeFakeBrain(replies) {
+// send, records outbound message + nonce, and counts provider.open / adopt calls.
+function makeFakeBrain(replies, { conversationId = 'conv-1' } = {}) {
   let i = 0;
+  let currentId = conversationId;
+  const state = { sent: [], openCount: 0, openCalls: [], adoptCount: 0 };
   return {
-    sent: [],
+    ...state,
     async send(message, { nonce } = {}) {
       this.sent.push({ message, nonce });
       const reply = (replies && i < replies.length) ? replies[i] : 'ack';
       i += 1;
-      return { reply, conversationId: 'conv-1', conversationUrl: 'https://chatgpt.com/c/conv-1', ownedTabId: 't1' };
+      return { reply, conversationId: currentId, conversationUrl: 'https://chatgpt.com/c/' + currentId, ownedTabId: 't1' };
+    },
+    async open({ url } = {}) {
+      this.openCount += 1;
+      this.openCalls.push(url);
+      currentId = 'conv-new';
+      return { conversationId: currentId, conversationUrl: 'https://chatgpt.com/c/' + currentId, ownedTabId: 't-new' };
+    },
+    async adoptConversation() {
+      this.adoptCount += 1;
+      currentId = 'conv-exist';
+      return { conversationId: currentId, conversationUrl: 'https://chatgpt.com/c/' + currentId, ownedTabId: 't-e' };
     },
     async resume() {
-      return { conversationId: 'conv-1', conversationUrl: 'https://chatgpt.com/c/conv-1', ownedTabId: 't1' };
+      currentId = currentId || conversationId;
+      return { conversationId: currentId, conversationUrl: 'https://chatgpt.com/c/' + currentId, ownedTabId: 't1' };
     },
   };
 }
@@ -174,4 +188,151 @@ test('Skill truth simplification: canonical SKILL references the Direct controll
   // The long manual "wire governance.transition / provider.send" recipe is removed.
   assert.ok(!skill.includes('7. **Freeze RESULT identity, machine gate, serialize, then send'), 'manual step 7 recipe removed');
   assert.ok(!skill.includes('const machine = governance.transition({ stepId, acceptance, result: { changed, evidence } });'), 'manual recipe removed');
+});
+
+// --- REVISE 004a: focused controller-level advancement / startup tests ---------
+
+test('REVISE 004a A: new conversation opens provider exactly once before takeover send', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004a-'));
+  const c1A = { ...c1, runId: 'run-a' };
+  const fake = makeFakeBrain([JSON.stringify(c1A)]);
+  const run = createDirectRun({ runId: 'run-a', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  assert.equal(fake.openCount, 1, 'provider.open called exactly once for a new conversation');
+  assert.equal(fake.openCalls.length, 1);
+  assert.equal(fake.sent.length, 1, 'exactly one takeover send, no repair send');
+  assert.match(fake.sent[0].message, /Current runId: run-a/);
+  assert.match(fake.sent[0].nonce, /^takeover-/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004a B: adoptConversation then start does NOT open a second conversation', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004b-'));
+  const c1B = { ...c1, runId: 'run-b' };
+  const fake = makeFakeBrain([JSON.stringify(c1B)]);
+  const run = createDirectRun({ runId: 'run-b', dataRoot: dir, repoDir: '.', provider: fake });
+  await run.adoptConversation({ conversationId: 'conv-exist' });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  assert.equal(fake.openCount, 0, 'no provider.open after adoptConversation');
+  assert.equal(fake.adoptCount, 1);
+  assert.equal(run.ledger.state.conversationId, 'conv-exist');
+  assert.equal(fake.sent.length, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004a C: advance requires prior RESULT success + pass + ack r1 (prior accepted)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004c-'));
+  const c1C = { ...c1, runId: 'run-c' };
+  const c2C = { ...c2, runId: 'run-c', ackResultId: 'r1' };
+  const fake = makeFakeBrain([JSON.stringify(c1C), JSON.stringify(c2C)]);
+  const run = createDirectRun({ runId: 'run-c', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  const prep = run.prepareResult({ stepId: 's1', executorStatus: 'success', changed: ['a.txt'], evidence: [{ acceptanceId: 'U1', status: 'pass', evidenceLevel: 'observed' }], blockers: [] });
+  assert.equal(prep.machineGate, 'pass');
+  const sent = await run.sendResult();
+  const acc = await run.acceptBrainReply(sent.reply, { allowRepair: false });
+  assert.equal(acc.ok, true);
+  assert.equal(acc.priorAccepted, true);
+  assert.equal(run.governance.state.brainAcceptance.s1, 'accepted', 'prior milestone accepted');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004a D: cannot advance when prior machineGate failed (prior NOT accepted)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004d-'));
+  const c1D2 = { ...c1, runId: 'run-d' };
+  const c2D2 = { ...c2, runId: 'run-d', ackResultId: 'r1' };
+  const fake = makeFakeBrain([JSON.stringify(c1D2), JSON.stringify(c2D2)]);
+  const run = createDirectRun({ runId: 'run-d', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  const prep = run.prepareResult({ stepId: 's1', executorStatus: 'success', changed: [], evidence: [], blockers: [] });
+  assert.equal(prep.machineGate, 'fail', 'missing U1 evidence -> gate fail');
+  const sent = await run.sendResult();
+  const acc = await run.acceptBrainReply(sent.reply, { allowRepair: false });
+  assert.equal(acc.ok, false);
+  assert.equal(acc.protocolIntegrity, true, 'advancement over a failed gate is a protocol-integrity failure');
+  assert.notEqual(run.governance.state.brainAcceptance.s1, 'accepted', 'prior NOT accepted');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004a E: advance with RESULT present but NO ackResultId fails closed (prior NOT accepted)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004e-'));
+  const c1E = { ...c1, runId: 'run-e' };
+  const c2E = { ...c2, runId: 'run-e' };
+  delete c2E.ackResultId;
+  const fake = makeFakeBrain([JSON.stringify(c1E), JSON.stringify(c2E)]);
+  const run = createDirectRun({ runId: 'run-e', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  const prep = run.prepareResult({ stepId: 's1', executorStatus: 'success', changed: ['a.txt'], evidence: [{ acceptanceId: 'U1', status: 'pass', evidenceLevel: 'observed' }], blockers: [] });
+  assert.equal(prep.machineGate, 'pass');
+  const sent = await run.sendResult();
+  const acc = await run.acceptBrainReply(sent.reply, { allowRepair: false });
+  assert.equal(acc.ok, false, 'missing ackResultId fails closed');
+  assert.equal(acc.protocolIntegrity, true);
+  assert.equal(acc.expectedAckResultId, 'r1');
+  assert.equal(acc.got, null);
+  assert.notEqual(run.governance.state.brainAcceptance.s1, 'accepted', 'prior NOT accepted');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004a F: advance with WRONG ackResultId fails closed (prior NOT accepted)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004f-'));
+  const c1F = { ...c1, runId: 'run-f' };
+  const c2F = { ...c2, runId: 'run-f', ackResultId: 'r999' };
+  const fake = makeFakeBrain([JSON.stringify(c1F), JSON.stringify(c2F)]);
+  const run = createDirectRun({ runId: 'run-f', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  const prep = run.prepareResult({ stepId: 's1', executorStatus: 'success', changed: ['a.txt'], evidence: [{ acceptanceId: 'U1', status: 'pass', evidenceLevel: 'observed' }], blockers: [] });
+  assert.equal(prep.machineGate, 'pass');
+  const sent = await run.sendResult();
+  const acc = await run.acceptBrainReply(sent.reply, { allowRepair: false });
+  assert.equal(acc.ok, false, 'wrong ackResultId fails closed');
+  assert.equal(acc.protocolIntegrity, true);
+  assert.equal(acc.expectedAckResultId, 'r1');
+  assert.equal(acc.got, 'r999');
+  assert.notEqual(run.governance.state.brainAcceptance.s1, 'accepted', 'prior NOT accepted');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004a G: REVISE after failed r1 applies revise transition, no false accepted state', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004g-'));
+  const c1G = { ...c1, runId: 'run-g' };
+  const reviseEnv = { runId: 'run-g', controlId: 'c2', sequence: 2, control: 'REVISE', stepId: 's1', instruction: 'fix', acceptance: [], reviseDelta: { invalidate: ['s1'] } };
+  const fake = makeFakeBrain([JSON.stringify(c1G), JSON.stringify(reviseEnv)]);
+  const run = createDirectRun({ runId: 'run-g', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  const prep = run.prepareResult({ stepId: 's1', executorStatus: 'failure', changed: [], evidence: [], blockers: [] });
+  assert.equal(prep.machineGate, 'fail');
+  const sent = await run.sendResult();
+  const acc = await run.acceptBrainReply(sent.reply, { allowRepair: false });
+  assert.equal(acc.ok, true, 'REVISE accepted even after failed r1');
+  assert.equal(acc.control.control, 'REVISE');
+  assert.equal(run.coordinator.state.lastAcceptedControlId, 'c2');
+  assert.notEqual(run.governance.state.brainAcceptance.s1, 'accepted', 'no false accepted state');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('REVISE 004a H: ASK_USER after r1 does NOT silently accept the prior', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drc-004h-'));
+  const c1H = { ...c1, runId: 'run-h' };
+  const askEnv = { runId: 'run-h', controlId: 'c2', sequence: 2, control: 'ASK_USER', stepId: 's2', instruction: 'ask', acceptance: [], askUser: { whyBlocked: 'need input', minimalUserAction: 'run cmd', readOnly: true, resumeControlId: 'c1' } };
+  const fake = makeFakeBrain([JSON.stringify(c1H), JSON.stringify(askEnv)]);
+  const run = createDirectRun({ runId: 'run-h', dataRoot: dir, repoDir: '.', provider: fake });
+  const start = await run.start({ goal: 'do x', bootstrap: 'B', allowRepair: false });
+  assert.equal(start.ok, true);
+  const prep = run.prepareResult({ stepId: 's1', executorStatus: 'success', changed: ['a.txt'], evidence: [{ acceptanceId: 'U1', status: 'pass', evidenceLevel: 'observed' }], blockers: [] });
+  assert.equal(prep.machineGate, 'pass');
+  const sent = await run.sendResult();
+  const acc = await run.acceptBrainReply(sent.reply, { allowRepair: false });
+  assert.equal(acc.ok, true);
+  assert.equal(acc.control.control, 'ASK_USER');
+  assert.notEqual(run.governance.state.brainAcceptance.s1, 'accepted', 'ASK_USER must not silently accept the prior milestone');
+  assert.equal(run.governance.state.brainAcceptance.s1 ? run.governance.state.brainAcceptance.s1 : 'pending', 'pending');
+  fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -23,7 +23,7 @@ import { TaskService } from '../src/task-service.js';
 import { CodexWorkerClient } from '../src/worker-client.js';
 import { InAppBrowserTransport, openBrainSession, openBrainSessionExisting } from '../src/iab-transport.js';
 import { runtimePaths, canonicalReadyFile } from '../src/runtime-paths.js';
-import { getCwd, getCodexHome, isTrustedRepl } from '../src/runtime-env.js';
+import { getCwd, getCodexHome, isTrustedRepl, getEnv } from '../src/runtime-env.js';
 
 export class BrainCommandLaunchError extends Error {
   constructor(msg, extra = {}) { super(msg); this.name = 'BrainCommandLaunchError'; Object.assign(this, extra); }
@@ -127,7 +127,7 @@ export async function runBrainCommand({
   legacyOptIn = false,
 } = {}) {
   if (!goal) throw new BrainCommandLaunchError('goal is required');
-  if (!legacyOptIn && process.env.BRAIN_COMMAND_LEGACY !== '1') {
+  if (!legacyOptIn && getEnv(envScope).BRAIN_COMMAND_LEGACY !== '1') {
     throw new BrainCommandLaunchError('legacy launcher is non-canonical/experimental; set BRAIN_COMMAND_LEGACY=1 or pass { legacyOptIn: true } to opt in');
   }
 
