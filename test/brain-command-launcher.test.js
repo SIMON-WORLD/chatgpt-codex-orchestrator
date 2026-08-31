@@ -49,7 +49,7 @@ test('runBrainCommand uses TaskService/createTask/advanceTask, binds worker task
   const repo = tmpRepo();
   const worker = new MockWorker();
   const brain = new MockBrain([TASK, 'DONE']);
-  const r = await runBrainCommand({ goal: 'g', config: cfg(repo), repoDir: repo, worker, brainSession: brain, preflight: false });
+  const r = await runBrainCommand({ goal: 'g', config: cfg(repo), repoDir: repo, worker, brainSession: brain, preflight: false, legacyOptIn: true });
   assert.strictEqual(r.status, 'completed');
   assert.strictEqual(r.terminal, true);
   assert.ok(worker.executeCalls >= 1, 'codex executor was invoked');
@@ -65,7 +65,7 @@ test('runBrainCommand shuts worker down even when the loop errors', async () => 
   const brain = new MockBrain([TASK]);
   let err = null;
   try {
-    await runBrainCommand({ goal: 'g', config: cfg(repo), repoDir: repo, worker, brainSession: brain, preflight: false });
+    await runBrainCommand({ goal: 'g', config: cfg(repo), repoDir: repo, worker, brainSession: brain, preflight: false, legacyOptIn: true });
   } catch (e) { err = e; }
   assert.ok(err, 'an error should propagate');
   assert.strictEqual(worker.shutdownCalled, true, 'worker shut down on error path too');
@@ -124,7 +124,7 @@ test('runBrainCommand initializes in a trusted-REPL-like scope without a process
   const worker = new MockWorker();
   const brain = new MockBrain([TASK, 'DONE']);
   const envScope = trustedLauncherScope({ cwd: repo });
-  const r = await runBrainCommand({ goal: 'g', config: null, configPath: cfgPath, repoDir: repo, worker, brainSession: brain, preflight: false, envScope });
+  const r = await runBrainCommand({ goal: 'g', config: null, configPath: cfgPath, repoDir: repo, worker, brainSession: brain, preflight: false, envScope, legacyOptIn: true });
   assert.strictEqual(r.status, 'completed');
   assert.strictEqual(r.terminal, true);
   assert.strictEqual(isTrustedRepl(envScope), true, 'scope is detected as trusted REPL');

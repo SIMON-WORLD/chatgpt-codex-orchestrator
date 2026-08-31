@@ -374,15 +374,12 @@ test('missing current verificationId when stored proof had one => non-reusable',
   assert.equal(ledger.isReusable('U1', { verificationId: null }), false);
 });
 
-test('canonical documented sequence runs the machine gate BEFORE send', () => {
+test('canonical Skill delegates protocol mechanics to the Direct controller (no manual primitive recipe)', () => {
   const skill = fs.readFileSync(fileURLToPath(new URL('../skills/brain-command/SKILL.md', import.meta.url)), 'utf8');
-  const start = skill.indexOf('7. **Freeze RESULT identity');
-  const end = skill.indexOf('\n## ', start);
-  const step7 = skill.slice(start, end < 0 ? skill.length : end);
-  const idxTransition = step7.indexOf('governance.transition');
-  const idxSend = step7.indexOf('provider.send');
-  assert.ok(idxTransition >= 0 && idxTransition < idxSend, 'machine transition must run before sending the RESULT');
-  assert.match(step7, /Freeze RESULT identity, machine gate, serialize, then send/);
+  assert.match(skill, /direct-run-controller|createDirectRun/);
+  assert.match(skill, /direct-alpha4|DIRECT_ALPHA4_MODE/);
+  assert.ok(!skill.includes('7. **Freeze RESULT identity, machine gate, serialize, then send'), 'manual step-7 recipe removed');
+  assert.ok(!skill.includes('const machine = governance.transition({ stepId, acceptance, result: { changed, evidence } });'), 'manual transition recipe removed');
 });
 
 test('failed gate exposes missing/failed IDs', () => {

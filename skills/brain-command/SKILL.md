@@ -89,100 +89,48 @@ PLAN
 
 ## Run (canonical default path)
 
-For a normal `$brain-command <goal>`, follow this deterministic sequence. **Do not inspect the orchestrator's implementation source during normal startup.** The goal is to get ChatGPT guiding as fast as possible — the only delays should be the browser/tool and ChatGPT's own response latency.
+For a normal `$brain-command <goal>`, drive ONE canonical Alpha.4 Direct controller
+(`createDirectRun` from `src/direct-run-controller.js`, mode `direct-alpha4`). The
+controller owns the protocol mechanics (provider, ledger, coordinator, governance,
+canonical envelope parsing, nonce, RESULT hashing, resume/recovery). The agent
+provides only config/repo resolution, task execution + real evidence, and the
+publication mechanics. **Do not manually reassemble the protocol primitives and do
+not inspect the orchestrator implementation source during normal startup.**
 
-1. **Load config.** Read only `$CODEX_HOME/brain-command/config.json` (`$CODEX_HOME` defaults to `~/.codex`). Read the needed fields (`orchestratorRoot`, `dataRoot`, `workspaceRoot`, `defaultBrain`, `defaultExecutor`, `defaultConversationMode`). Do not traverse `~/.codex`, skills, or repo source beyond the config.
+**Governance:** PLAN comprehensively once, then prefer **milestone-sized** TASKs that combine coherent implementation work that can be executed and reviewed together; Codex may run normal implementation/debug/test iterations inside one TASK and returns to the Brain only at meaningful review/decision boundaries; `REVISE` remains available whenever evidence fails.
+
+1. **Load config.** Read only `$CODEX_HOME/brain-command/config.json` (`$CODEX_HOME` defaults to `~/.codex`). Read `orchestratorRoot`, `dataRoot`, `workspaceRoot`, `defaultBrain`, `defaultExecutor`, `defaultConversationMode`. Do not traverse `~/.codex`, skills, or repo source beyond the config.
 
 2. **Resolve repo.** Prefer, in order: an explicit repo/path the user gave; the current cwd if it is the target repo; otherwise `config.workspaceRoot` / the deterministic configured location. No broad recursive filesystem discovery.
 
-3. **Open / reuse the Brain.** Use the current Codex agent's **built-in browser** capability. Default provider is ChatGPT (`brainProvider: 'chatgpt'`). Open or reuse one dedicated brain-command ChatGPT tab/conversation using `createChatGPTBrowserProvider` from `src/direct-mode.js`:
+3. **Create the canonical Direct controller** inside the trusted Codex in-app-browser (iab) context (iab **only**; never Edge/Chrome/external browser, no fallback):
 
    ```js
-   const { createChatGPTBrowserProvider } = await import('<orchestratorRoot>/src/direct-mode.js');
-   const provider = createChatGPTBrowserProvider();
-   const identity = await provider.open({ url: 'https://chatgpt.com/' });
+   const { createDirectRun, DIRECT_ALPHA4_MODE } = await import('<orchestratorRoot>/src/direct-run-controller.js');
+   const run = createDirectRun({ runId, dataRoot: cfg.dataRoot, repoDir });
+   run.setOrchestratorHead(HEAD);
    ```
 
-   Canonical Direct Mode uses the **Codex in-app browser (iab) only** — it never attaches to or manipulates the user's Edge/Chrome/external browser, and there is no fallback. If the IAB is unavailable, stop and report (`IABUnavailableError`) instead of switching browser backend. If ChatGPT is already signed in, continue. Only if you actually detect a real login page / auth failure: `ASK_USER` to sign in, then continue. Do not pause pre-emptively because login *might* be needed. Keep the same conversation across turns (`provider.identifyConversation()` / `provider.resume(...)`); never restart a new conversation mid-task.
+   If the IAB is unavailable, stop and report (`IABUnavailableError`) instead of switching browser backend. Never probe `createChatGPTBrowserProvider` / the controller from an ordinary node subprocess. Do not start a second browser runtime.
 
-   **Direct-run initialization (retain ONE per run):** create and keep a single `runId`, the `provider`, a `governance` (`createDirectGovernance`), a `directRunLedger` (`createDirectRunLedger`), and a `directRunCoordinator` (`createDirectRunCoordinator`). The browser provider is created inside the trusted browser execution context — never probe `createChatGPTBrowserProvider` from an ordinary node subprocess, never start a second browser runtime to inspect tabs/sidebar. All browser inspection/rebind goes through the run's `provider`/transport.
+   Optional: to continue an existing ChatGPT history conversation, first `await run.adoptConversation({ conversationUrl | conversationId | title })` (no new conversation), else `run.start(...)` opens/reuses one dedicated Brain conversation via the built-in browser. Default conversation mode is `new`.
 
-4. **First Brain message.** Send the user goal + repo identity/path + the DYNAMIC takeover/control-contract built by `buildTakeoverContract({ runId })` (tells the Brain the required α.4 envelope schema + rules; do not rely on it having read SKILL.md). The governance contract must say:
+4. **Send the dynamic takeover + bootstrap and accept the first control.** `await run.start({ goal, repoDir, gitRun })` builds `buildTakeoverContract({ runId })`, appends a compact read-only bootstrap (`buildBootstrapEvidence`), sends it, then extracts/validates the first canonical envelope (ONE `FORMAT_REPAIR` allowed, then fail closed), `acceptControl`, and `persist`. It returns the first control: `PLAN` / `TASK` / `REVISE` / `REPLAN` / `ASK_USER` / `PUBLISH` / `DONE`. Do not dump large repo history/source.
 
-   - ChatGPT owns planning, review, and decisions.
-   - Codex executes only bounded TASKs.
-   - Return structured `PLAN` / `TASK` / `REVISE` / `ASK_USER` / `DONE`.
-   - Use compact packets after the initial `PLAN`.
-   - PLAN comprehensively once, then prefer **milestone-sized** TASKs that combine coherent implementation work that can be executed and reviewed together.
-   - Codex may run normal implementation/debug/test iterations inside one TASK; return to the Brain only at meaningful review/decision boundaries.
-   - `REVISE` remains available whenever evidence fails.
-   - Establish the DEFAULT EXECUTION CONTRACT once (see the Default execution contract section); do not repeat these defaults in every `TASK` unless an exception/override is needed.
+5. **Loop — the controller owns protocol, the agent owns execution.** For each Brain reply:
 
-   Do **not** dump large repo history/source on the first message.
+   - `const ack = await run.acceptBrainReply(reply);` — extracts/validates the canonical envelope, sends ONE `FORMAT_REPAIR` if needed (then fail closed), `acceptControl` (monotonic sequence, one outstanding, stale/acked validation), applies the deterministic Brain acceptance transition for the prior milestone (`applyBrainAcceptanceTransition`: `TASK`/`PUBLISH`/`DONE` advancing → prior accepted, `REVISE` → prior revise per `reviseDelta`, `ASK_USER` → no silent accept), and `persist`. Returns `{ ok, control }`.
+   - If `control === 'TASK'`: execute the body in the current Codex agent (no nested Codex, no worker, no ready file); collect real evidence + verification; then `const prep = run.prepareResult({ stepId, executorStatus, changed, evidence, blockers });` and `const sent = await run.sendResult();`. The controller runs `governance.transition` ONCE, computes `machineGate`, freezes `resultId`, `computePayloadHash`, `coordinator.recordResult` (verifies the hash; no send before `ok`), persists the frozen RESULT, `JSON.stringify`s it, and `provider.send(serialized, { nonce })`. The executor's summary never overrides the gate.
+   - If `control === 'PUBLISH'`: confirm `run.publicationGate({ brainControl: 'PUBLISH', acceptanceGateOk, identityPreflightOk, workingTreeScopeOk })` (requires `brainControl === 'PUBLISH'` — `DONE` never authorizes publishing), run the publication transaction (`createPublicationTransaction`): identity preflight → `fetch origin` → verify `origin/main` baseline → create commit → re-check remote race → require fast-forward → push (no force) → optional tag/Release → external readback; then `run.prepareResult(...)` + `run.sendResult()`.
+   - If `control === 'DONE'`: `run.doneGate({ publicationReady, finalVerificationOk, workingTreeScopeOk })` must pass; `run.isTerminal('DONE')` is true; after `DONE`, `TASK`/`REVISE`/`REPLAN`/`PUBLISH` are invalid (`validateLifecycleAfterDone`).
+   - If `control === 'ASK_USER'`: `run` exposes `askUser`/`whyBlocked`/`minimalUserAction`/`readOnly`/`expectedFields`/`resumeControlId`; ask the human concisely, then resume.
+   - If `control === 'PLAN'`/`REVISE`/`REPLAN`: handle per the control; `REVISE` uses `reviseDelta` and returns to the Brain when evidence fails.
 
-5. **Extract the canonical structured Brain envelope, validate, then accept control.** Brain may write explanatory prose, but every actionable response must carry one canonical machine envelope. Extract it, validate with `validateStructuredEnvelope`, then `directRunCoordinator.acceptControl(env)` and `directRunLedger.persist()` BEFORE executing.
+6. **Resume / delivery recovery is controller-owned.** On provider/composer/kernel failure, `await run.resume()` reloads the `DirectRunLedger`, reopens the SAME conversation binding, recovers the current run/control/result cursor, and retransmits the SAME frozen `resultId` + `payloadHash` only when it was sent but not yet acknowledged (no new resultId, no duplicate execution). Do NOT instruct the user to click/paste until bounded canonical recovery has failed. No daemon, no background worker.
 
-   ```js
-   const env = extractCanonicalEnvelope(reply);
-   const v = validateStructuredEnvelope(env);
-   if (!v.ok) {
-     await provider.send(formatRepairPrompt({ runId, controlId }), { nonce: 'repair-' + runId + '-' + seq });
-   // exactly ONE repair attempt per control, then fail closed if still invalid
-     // do NOT execute; wait for/validate the repaired envelope; continue or fail closed.
-   }
-   const accepted = directRunCoordinator.acceptControl(env);   // monotonic sequence, one outstanding, stale reject, ACK validation
-   if (!accepted.ok) { /* fail closed; do not execute */ }
-   directRunLedger.persist();
-   ```
+7. **Runtime provenance is self-reported.** `run.statusPacket()` returns `{ mode: 'direct-alpha4', orchestratorHead, runId, conversationId, conversationUrl, ledgerPath }`, and `run.metrics()` returns the active-run metrics (`brainTurns`, `taskCount`, `reviseCount`, `replanCount`, `askUserCount`, `publishCount`, `protocolRepairCount`, `staleControlRejectedCount`, `duplicateResultCount`, `resultRetransmitCount`, `deliveryAckTimeoutCount`, `manualInterventionCount`, `reusedProofCount`, `staleProofCount`, `verificationRuns`, …). Include the status packet in the dogfood report so it is obvious canonical Direct Mode actually ran.
 
-   A `PLAN` is followed by a concrete `TASK`. Do NOT execute legacy prose through `parseBrainOutput` in canonical mode — that is an explicit compatibility mode only. (Run at Direct-run initialization: `runId`, `directRunLedger = createDirectRunLedger({ dataRoot, runId })`, `directRunCoordinator = createDirectRunCoordinator({ runId, ledger: directRunLedger })`, `governance = createDirectGovernance()`.)
-
-6. **Execute the TASK in the current Codex agent.** Do **not** start a nested Codex, do not start a worker, do not wait on a ready file. The current Codex agent is the executor. Do the work, collect real evidence, and verify.
-
-7. **Freeze RESULT identity, machine gate, serialize, then send (ONE deterministic path).**
-   1. `const machine = governance.transition({ stepId, acceptance, result: { changed, evidence } });` — ONCE.
-   2. `machineGate = machine.gate.ok ? 'pass' : 'fail';`
-   3. freeze `resultId` ONCE (`'r' + seq`); build the frozen result object (machineGate already defined).
-   4. `result.payloadHash = computePayloadHash(result);`
-   5. `const rec = directRunCoordinator.recordResult(result);` — verifies payloadHash; do NOT send before `rec.ok`.
-   6. `directRunLedger.persist();`
-   7. `const serialized = JSON.stringify(result); await provider.send(serialized, { nonce: correlationToken });` (browser composer expects text).
-
-   ```js
-   const machine = governance.transition({ stepId, acceptance, result: { changed, evidence } });   // once only
-   const machineGate = machine.gate.ok ? 'pass' : 'fail';
-   const result = { runId, resultId: 'r' + seq, inReplyToControlId: controlId, sequence: seq, stepId, executorStatus, machineGate, changed, evidence, blockers };
-   result.payloadHash = computePayloadHash(result);
-   const rec = directRunCoordinator.recordResult(result);          // verifies payloadHash; no send before rec.ok
-   if (rec.ok) {
-     directRunLedger.persist();
-     const serialized = JSON.stringify(result);                    // serialize to text; retransmission reuses this exact payload
-     await provider.send(serialized, { nonce: correlationToken });
-   }
-   ```
-
-   Do NOT call `governance.transition` / `markStepReviewed` a second time for the same RESULT (no duplicate machine gate). The exact serialized text used for the first send is the same semantic payload used for retransmission. The executor's summary never overrides the gate; if the gate fails the milestone is not reviewed/completed and the Brain receives structured missing/failed ids.
-
-8. **Review loop.** The same ChatGPT conversation returns the next control (`TASK` / `REVISE` / `REPLAN` / `PUBLISH` / `ASK_USER` / `DONE`). Keep the same conversation; do not resend the full goal/plan/raw logs each turn.
-
-9. **Brain acceptance transition, then PUBLISH, then terminal DONE.** When a valid next control is accepted, update the prior milestone's `brainAcceptance` deterministically with `applyBrainAcceptanceTransition` (`TASK` / `PUBLISH` / `DONE` advancing → prior accepted; `REVISE` → prior revise per `reviseDelta`; `ASK_USER` → no silent accept). The machine gate (`governance.transition` once) marks machine evidence completion, distinct from Brain acceptance; a milestone is globally accepted only when executor is acceptable AND machineGate=pass AND Brain accepts. `PUBLISH` precedes terminal `DONE`.
-
-   On `PUBLISH`, confirm the publication gate (`evaluatePublicationGate`), which requires `brainControl === 'PUBLISH'` — `DONE` never authorizes publishing:
-
-   ```js
-   const { evaluatePublicationGate, evaluateDoneGate } = await import('<orchestratorRoot>/src/direct-mode.js');
-   const gate = evaluatePublicationGate({ brainControl: 'PUBLISH', acceptanceGateOk, identityPreflightOk, workingTreeScopeOk });
-   ```
-
-   Then run the publication transaction (`createPublicationTransaction`): identity preflight -> `fetch origin` -> verify `origin/main` baseline -> create commit -> re-check remote race -> require fast-forward -> push `HEAD:refs/heads/main` (never force) -> optional tag -> externally supplied Release action/readback. Only after `publicationReadyForDone` (external observable evidence, including declared Release properties when a Release is required) may the Brain issue a terminal `DONE`.
-
-   ```js
-   const doneGate = evaluateDoneGate({ publicationReady, finalVerificationOk, workingTreeScopeOk });
-   ```
-
-   `DONE` is terminal: after `DONE`, `TASK` / `REVISE` / `REPLAN` / `PUBLISH` are invalid (`validateLifecycleAfterDone`).
-
-   **Post-DONE boundary:** after Brain `DONE`, the target repo must NOT receive new product modifications that were not Brain-reviewed. Independent workspace bookkeeping/logging is allowed only if it does not change the already-accepted target-repo outcome.
+**Do NOT** enter the `TaskService` / `TaskManager` / worker bootstrap / `LoopController` / `scripts/brain-command-launcher.mjs` legacy execution path — that is the legacy/experimental runtime, not the canonical Alpha.4 path. A normal `$brain-command` invocation must reach the Direct controller, not the legacy path.
 
 ## Direct Mode guarantees
 

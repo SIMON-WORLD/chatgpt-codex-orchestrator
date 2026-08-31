@@ -130,15 +130,14 @@ test('one browser-runtime owner; provider.send forwards nonce; default Direct Mo
   assert.equal(typeof p.adoptCurrent, 'function');
 });
 
-test('composer fail-closed still resolves #prompt-textarea; canonical Skill orders machine gate before send', async () => {
+test('composer fail-closed still resolves #prompt-textarea; canonical Skill delegates to the Direct controller', async () => {
   const facade = createTabFacade({ id: 't', playwright: { locator: (s) => ({ count: async () => s === '#prompt-textarea' ? 1 : 0, evaluate: async () => false, fill: async () => {}, press: async () => {}, innerText: async () => '' }), waitForTimeout: async () => {} } });
   assert.equal(await facade.isComposerReady(), true);
   const skill = fs.readFileSync(skillPath, 'utf8');
-  const start = skill.indexOf('7. **Freeze RESULT identity');
-  const end = skill.indexOf('\n## ', start);
-  const step7 = skill.slice(start, end < 0 ? skill.length : end);
-  assert.ok(step7.indexOf('governance.transition') < step7.indexOf('provider.send'), 'machine transition before send');
-  assert.match(step7, /Freeze RESULT identity, machine gate, serialize, then send/);
+  assert.match(skill, /direct-run-controller|createDirectRun/);
+  assert.match(skill, /direct-alpha4|DIRECT_ALPHA4_MODE/);
+  assert.ok(!skill.includes('7. **Freeze RESULT identity, machine gate, serialize, then send'), 'manual step-7 recipe removed');
+  assert.ok(!skill.includes('const machine = governance.transition({ stepId, acceptance, result: { changed, evidence } });'), 'manual transition recipe removed');
   assert.match(skill, /buildBootstrapEvidence/);
 });
 
