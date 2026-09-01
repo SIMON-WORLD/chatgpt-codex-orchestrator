@@ -327,7 +327,7 @@ Rationale: those mechanisms existed to make a brittle **IAB browser** path work.
 > **Not an open decision:** choosing "Custom MCP App vs Codex App Server" as a default transport. They are **layered** (Brain-to-local transport vs local executor backend), not alternatives.
 
 ### 6. Recommended scope for the next Routing RFC
-The next RFC (`rfc-v0.3-...`) should cover **transport + routing** narrowly:
+The next RFC (`rfc-v0.2-capability-routing`) should cover **transport + routing** narrowly:
 - **A. Transport layering** — formalize the chain `Custom MCP App → Secure Tunnel → orchestration bridge → Codex App Server → Codex` as the composition, with the bridge owning routing.
 - **B. Routing policy** — formalize the §D matrix into an executable/default rule set, keyed by task category and `CHATGPT_DIRECT_LOCAL` vs `CODEX_DELEGATE`.
 - **C. Workspace ownership** — land `mutation_owner = none | chatgpt | codex` (§E) as a first-class state field with a test; include the "Codex owns a mutating turn → ChatGPT may read but not mutate" rule.
