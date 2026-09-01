@@ -15,6 +15,7 @@ let approvalRequested = false;
 
 const EMIT_APPROVAL = process.env.FAKE_APP_SERVER_APPROVAL === '1';
 const DIE_MS = process.env.FAKE_APP_SERVER_DIE_MS ? Number(process.env.FAKE_APP_SERVER_DIE_MS) : null;
+const FAIL_TURN_START = process.env.FAKE_APP_SERVER_FAIL_TURN_START === '1';
 
 function respond(id, result) { process.stdout.write(JSON.stringify({ id, result }) + '\n'); }
 function respondError(id, error) { process.stdout.write(JSON.stringify({ id, error }) + '\n'); }
@@ -62,6 +63,7 @@ function handle(msg) {
     }
 
     case 'turn/start': {
+      if (FAIL_TURN_START) return respondError(id, { code: -32000, message: 'fake turn/start failure' });
       const threadId = params && params.threadId;
       const thread = threads.get(threadId);
       if (!thread) return respondError(id, { code: -32601, message: `thread not found: ${threadId}` });
@@ -81,8 +83,8 @@ function handle(msg) {
           id: reqId, method: 'item/commandExecution/requestApproval',
           params: {
             threadId, turnId, itemId: 'item-1', startedAtMs: Date.now(),
-            reason: 'fake approval', command: 'echo hi', cwd: process.cwd(),
-            commandActions: [], availableDecisions: ['approve', 'deny'],
+            approvalId: 'cb-1', reason: 'fake approval', command: 'echo hi', cwd: process.cwd(),
+            commandActions: [], availableDecisions: ['accept', 'acceptForSession', 'decline'],
           },
         }) + '\n');
       }

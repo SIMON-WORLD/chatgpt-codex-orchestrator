@@ -1,6 +1,6 @@
 // chatgpt-codex-orchestrator: low-level Codex App Server JSON-RPC client (v0.2 M1).
 // Spawns `codex app-server --listen stdio://` and speaks newline-delimited JSON-RPC.
-// Protocol authority: `codex app-server generate-ts` (codex-cli 0.146.0).
+// Protocol authority: `codex app-server generate-ts --experimental` (codex-cli 0.146.0).
 //
 // Framing (newline-delimited JSON objects):
 //   - client request:   { id, method, params }
@@ -19,6 +19,14 @@ export const DEFAULT_CLIENT_VERSION = '0.2.0';
 let idCounter = 0;
 function nextId() { return ++idCounter; }
 
+// Canonical App Server argv for the proven environment:
+//   codex app-server --listen stdio://
+// We do NOT redundantly append --stdio (the installed CLI does not require it;
+// --stdio is just an alias for --listen stdio://).
+export function buildDefaultSpawnArgv({ listen = DEFAULT_APP_SERVER_LISTEN } = {}) {
+  return ['app-server', '--listen', listen];
+}
+
 export class AppServerClient {
   constructor({
     codexBin = DEFAULT_CODEX_BIN,
@@ -31,7 +39,7 @@ export class AppServerClient {
   } = {}) {
     this.codexBin = codexBin;
     this.listen = listen;
-    this.spawnArgs = spawnArgs; // override full argv (e.g. tests: [fixturePath])
+    this.spawnArgs = spawnArgs; // override full argv after the binary (e.g. tests: [fixturePath])
     this.name = name;
     this.version = version;
     this.cwd = cwd;
@@ -49,12 +57,15 @@ export class AppServerClient {
   get stderrTail() { return this._stderr.slice(-2000); }
   get isRunning() { return !this.exited && !!this.child && this.child.exitCode === null; }
 
+  // Build the argv that will be passed to the binary (excluding the binary itself).
+  buildSpawnArgv() {
+    if (this.spawnArgs) return this.spawnArgs.slice();
+    return buildDefaultSpawnArgv({ listen: this.listen });
+  }
+
   _spawn() {
-    if (this.spawnArgs) {
-      this.child = spawn(this.codexBin, this.spawnArgs, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], env: this.env });
-    } else {
-      this.child = spawn(this.codexBin, ['app-server', '--listen', this.listen, '--stdio'], { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], env: this.env });
-    }
+    const argv = this.buildSpawnArgv();
+    this.child = spawn(this.codexBin, argv, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], env: this.env });
     this._rl = createInterface({ input: this.child.stdout, crlfDelay: Infinity });
     this._rl.on('line', (line) => this._onLine(line));
     this.child.stdout.on('error', () => {});

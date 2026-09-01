@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AppServerClient } from '../../src/executor/app-server-client.js';
+import { AppServerClient, buildDefaultSpawnArgv, DEFAULT_APP_SERVER_LISTEN } from '../../src/executor/app-server-client.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixture = path.join(__dirname, '..', '..', 'test-fixtures', 'executor', 'fake-app-server.mjs');
@@ -64,7 +64,8 @@ test('server request (approval) is surfaced', async (t) => {
   assert.equal(await waitFor(() => !!approval), true);
   assert.equal(approval.method, 'item/commandExecution/requestApproval');
   assert.ok(approval.id);
-  assert.equal(approval.params.availableDecisions.includes('approve'), true);
+  assert.equal(approval.params.availableDecisions.includes('accept'), true);
+  assert.equal(approval.params.availableDecisions.includes('decline'), true);
 });
 
 test('process death is detected', async (t) => {
@@ -72,4 +73,20 @@ test('process death is detected', async (t) => {
   await client.connect();
   t.after(() => client.close());
   assert.equal(await waitFor(() => client.isRunning === false, 2000), true);
+});
+
+test('default production argv is codex app-server --listen stdio://', () => {
+  const client = new AppServerClient({});
+  assert.deepEqual(client.buildSpawnArgv(), ['app-server', '--listen', 'stdio://']);
+});
+
+test('buildDefaultSpawnArgv does not redundantly append --stdio', () => {
+  assert.deepEqual(buildDefaultSpawnArgv(), ['app-server', '--listen', 'stdio://']);
+  assert.equal(buildDefaultSpawnArgv().includes('--stdio'), false);
+  assert.equal(buildDefaultSpawnArgv({ listen: 'stdio://' }).join(' ').includes('--stdio'), false);
+});
+
+test('spawnArgs override bypasses production argv', () => {
+  const client = new AppServerClient({ codexBin: process.execPath, spawnArgs: ['fixture.mjs'] });
+  assert.deepEqual(client.buildSpawnArgv(), ['fixture.mjs']);
 });

@@ -48,5 +48,5 @@ export { createDirectRun, DIRECT_ALPHA4_MODE, assertDirectAlpha4Mode } from './d
 export { AppServerClient, DEFAULT_APP_SERVER_LISTEN, DEFAULT_CODEX_BIN } from './executor/app-server-client.js';
 export { AppServerExecutor, TERMINAL_TURN_STATES } from './executor/app-server-executor.js';
 export { JobMap, makeJobId } from './executor/job-map.js';
-export { normalizeApproval, isApprovalMethod, buildApprovalResponse, APPROVAL_DECISIONS, ApprovalError } from './executor/approval.js';
+export { normalizeApproval, isApprovalMethod, mapDecision, approvalKind, SUPPORTED_BINARY_METHODS, APPROVAL_DECISIONS, ApprovalError, UnsupportedApprovalMethodError } from './executor/approval.js';
 export { MutationOwner, MutationOwnerError, MUTATION_OWNERS } from './state/mutation-owner.js';
