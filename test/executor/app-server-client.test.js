@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { AppServerClient, buildDefaultSpawnArgv, DEFAULT_APP_SERVER_LISTEN } from '../../src/executor/app-server-client.js';
 
@@ -54,7 +56,7 @@ test('notification handler receives turn/started and turn/completed', async (t) 
 });
 
 test('server request (approval) is surfaced', async (t) => {
-  const client = makeClient({ env: { ...process.env, FAKE_APP_SERVER_APPROVAL: '1' } });
+  const client = makeClient({ env: { ...process.env, FAKE_APP_SERVER_APPROVAL: '1', FAKE_APP_SERVER_STATE_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'cli-')) } });
   t.after(() => client.close());
   await client.connect();
   let approval = null;
@@ -89,4 +91,27 @@ test('buildDefaultSpawnArgv does not redundantly append --stdio', () => {
 test('spawnArgs override bypasses production argv', () => {
   const client = new AppServerClient({ codexBin: process.execPath, spawnArgs: ['fixture.mjs'] });
   assert.deepEqual(client.buildSpawnArgv(), ['fixture.mjs']);
+});
+
+test('restartable: reconnect SAME instance after child death initializes', async (t) => {
+  const client = makeClient({ env: { ...process.env, FAKE_APP_SERVER_DIE_MS: '20' } });
+  await client.connect();
+  assert.equal(client.isRunning, true);
+  assert.equal(await waitFor(() => client.isRunning === false, 2000), true);
+  // Reconnect the same client instance.
+  const init2 = await client.connect();
+  assert.equal(init2.userAgent, 'fake-app-server');
+  assert.equal(client.isRunning, true);
+  t.after(() => client.close());
+});
+
+test('restartable: close then reconnect same instance works', async (t) => {
+  const client = makeClient();
+  await client.connect();
+  await client.close();
+  assert.equal(client.isRunning, false);
+  const init = await client.connect();
+  assert.equal(init.userAgent, 'fake-app-server');
+  assert.equal(client.isRunning, true);
+  t.after(() => client.close());
 });

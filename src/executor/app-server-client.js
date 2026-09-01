@@ -7,6 +7,11 @@
 //   - server response:  { id, result } | { id, error }
 //   - server notification: { method, params }            (no id)
 //   - server request (approval): { id, method, params }  (must be answered)
+//
+// Lifecycle: restart-safe. A died/closed child can be replaced by calling
+// connect() again on the SAME instance. Handlers (notification/server-request/
+// lifecycle) are preserved across restarts. There is never more than one live
+// child at a time.
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -21,8 +26,7 @@ function nextId() { return ++idCounter; }
 
 // Canonical App Server argv for the proven environment:
 //   codex app-server --listen stdio://
-// We do NOT redundantly append --stdio (the installed CLI does not require it;
-// --stdio is just an alias for --listen stdio://).
+// We do NOT redundantly append --stdio.
 export function buildDefaultSpawnArgv({ listen = DEFAULT_APP_SERVER_LISTEN } = {}) {
   return ['app-server', '--listen', listen];
 }
@@ -32,6 +36,7 @@ export class AppServerClient {
     codexBin = DEFAULT_CODEX_BIN,
     listen = DEFAULT_APP_SERVER_LISTEN,
     spawnArgs = null,
+    extraArgs = [],
     name = DEFAULT_CLIENT_NAME,
     version = DEFAULT_CLIENT_VERSION,
     cwd = (typeof process !== 'undefined' ? process.cwd() : undefined),
@@ -39,7 +44,8 @@ export class AppServerClient {
   } = {}) {
     this.codexBin = codexBin;
     this.listen = listen;
-    this.spawnArgs = spawnArgs; // override full argv after the binary (e.g. tests: [fixturePath])
+    this.spawnArgs = spawnArgs;   // override full argv after the binary (e.g. tests: [fixturePath])
+    this.extraArgs = Array.isArray(extraArgs) ? extraArgs.slice() : [];
     this.name = name;
     this.version = version;
     this.cwd = cwd;
@@ -49,21 +55,37 @@ export class AppServerClient {
     this.pending = new Map();       // id -> { resolve, reject, timer }
     this.notificationHandlers = new Set();
     this.serverRequestHandlers = new Set();
+    this.lifecycleHandlers = new Set();
     this._stderr = '';
     this.exited = false;
+    this._closing = false;
     this._connected = false;
   }
 
   get stderrTail() { return this._stderr.slice(-2000); }
   get isRunning() { return !this.exited && !!this.child && this.child.exitCode === null; }
 
-  // Build the argv that will be passed to the binary (excluding the binary itself).
   buildSpawnArgv() {
     if (this.spawnArgs) return this.spawnArgs.slice();
-    return buildDefaultSpawnArgv({ listen: this.listen });
+    return [...buildDefaultSpawnArgv({ listen: this.listen }), ...this.extraArgs];
+  }
+
+  _cleanupOldChild() {
+    const old = this.child;
+    if (old && old.exitCode === null) {
+      try { old.stdin && old.stdin.end(); } catch {}
+      try { old.kill('SIGTERM'); } catch {}
+    }
+    if (this._rl) { try { this._rl.close(); } catch {} }
+    this._rl = null;
+    this.child = null;
   }
 
   _spawn() {
+    this._cleanupOldChild();
+    this.exited = false;
+    this._closing = false;
+    this._stderr = '';
     const argv = this.buildSpawnArgv();
     this.child = spawn(this.codexBin, argv, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], env: this.env });
     this._rl = createInterface({ input: this.child.stdout, crlfDelay: Infinity });
@@ -73,10 +95,12 @@ export class AppServerClient {
     this.child.on('close', (code, signal) => {
       this.exited = true;
       this._failAllPending(`app-server exited (code=${code}, signal=${signal})`);
+      this._emitLifecycle({ type: 'exit', code, signal });
     });
     this.child.on('error', (err) => {
       this.exited = true;
       this._failAllPending('app-server spawn error: ' + err.message);
+      this._emitLifecycle({ type: 'error', reason: err.message });
     });
   }
 
@@ -86,7 +110,6 @@ export class AppServerClient {
     try { msg = JSON.parse(line); } catch { return; }
     if (!msg || typeof msg !== 'object') return;
 
-    // Response to one of our client requests.
     if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
       const key = String(msg.id);
       const p = this.pending.get(key);
@@ -99,13 +122,11 @@ export class AppServerClient {
       return;
     }
 
-    // Server-initiated request (approval) with an id + method.
     if (msg.id != null && msg.method) {
       for (const h of this.serverRequestHandlers) { try { h(msg); } catch {} }
       return;
     }
 
-    // Server notification (method, no id).
     if (msg.method) {
       for (const h of this.notificationHandlers) { try { h(msg); } catch {} }
       return;
@@ -140,6 +161,7 @@ export class AppServerClient {
     });
   }
 
+  // Restart-safe connect: a died/closed child is replaced on the SAME instance.
   async connect() {
     if (this._connected && this.isRunning) return this;
     this._spawn();
@@ -161,13 +183,22 @@ export class AppServerClient {
     return () => this.serverRequestHandlers.delete(handler);
   }
 
-  // Answer a server-initiated request (approval) by id.
+  onExit(handler) {
+    this.lifecycleHandlers.add(handler);
+    return () => this.lifecycleHandlers.delete(handler);
+  }
+
+  _emitLifecycle(evt) {
+    for (const h of this.lifecycleHandlers) { try { h(evt); } catch {} }
+  }
+
   respondRequest(id, result) {
     this._send({ id, result });
   }
 
   async close() {
     const child = this.child;
+    this._closing = true;
     if (child && !this.exited && child.exitCode === null) {
       try { child.stdin.end(); } catch {}
       await new Promise((res) => {
