@@ -14,7 +14,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 yarn.lock
-package-lock.json
 *.tgz
 
 # --- Local durable data-root (must never be committed) ---
@@ -70,4 +69,3 @@ $RECYCLE.BIN/
 *.swo
 .vscode/
 .idea/
-

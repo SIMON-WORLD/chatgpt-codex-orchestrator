@@ -134,7 +134,7 @@ test('clean shutdown leaves no child', async (t) => {
 
 test('simulated process death is detected', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
-  const exec = makeExecutor({ die: 20, dataRoot: root });
+  const exec = makeExecutor({ die: 300, dataRoot: root });
   await startExecutor(exec);
   assert.equal(await waitFor(() => exec.client.isRunning === false, 2000), true);
 });

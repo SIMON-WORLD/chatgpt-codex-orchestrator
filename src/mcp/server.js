@@ -1,32 +1,21 @@
 // chatgpt-codex-orchestrator: local MCP server (v0.2 M2).
-// Streamable HTTP MCP endpoint bound to LOOPBACK ONLY by default.
+// Uses the MCP TypeScript SDK v2 stable packages (@modelcontextprotocol/server +
+// @modelcontextprotocol/node). Serving model is the canonical stateless,
+// per-request streamable HTTP transport (GET/DELETE session operations are
+// answered with 405 as the official stateless example does). No hand-rolled
+// session registry, so no forever-growing transports Map.
+//
 //   GET  /healthz
 //   GET  /readyz
 //   POST /mcp      (Streamable HTTP MCP)
-// No OAuth in M2; loopback-only, intentionally no-auth. Secure Tunnel is M5.
-// Graceful shutdown; bounded request/output handling; no secrets in diagnostics.
+//
+// Loopback-only by default, DNS-rebinding protected via the official v2 Node
+// localhost Host + Origin validation guards. No OAuth in M2.
 
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { createMcpHandler } from '@modelcontextprotocol/server';
+import { toNodeHandler, localhostHostValidation, localhostOriginValidation } from '@modelcontextprotocol/node';
 import { createToolsServer } from './tools.js';
-
-const MAX_BODY_BYTES = 2 * 1024 * 1024;
-
-function readBody(req, maxBytes = MAX_BODY_BYTES) {
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    const chunks = [];
-    req.on('data', (c) => {
-      size += c.length;
-      if (size > maxBytes) { reject(new Error('request body too large')); req.destroy(); return; }
-      chunks.push(c);
-    });
-    req.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (e) { reject(e); } });
-    req.on('error', reject);
-  });
-}
 
 function sendJson(res, status, obj) {
   if (res.headersSent) return;
@@ -35,8 +24,11 @@ function sendJson(res, status, obj) {
 }
 
 export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null } = {}) {
-  const transports = new Map();
-  const makeServer = () => createToolsServer({ workspaceRegistry, appServerExecutor });
+  const factory = () => createToolsServer({ workspaceRegistry, appServerExecutor });
+  const handler = createMcpHandler(factory);
+  const nodeHandler = toNodeHandler(handler);
+  const validateHost = localhostHostValidation();
+  const validateOrigin = localhostOriginValidation();
 
   const httpServer = http.createServer(async (req, res) => {
     const url = (req.url || '').split('?')[0];
@@ -46,35 +38,15 @@ export async function startMcpServer({ workspaceRegistry, appServerExecutor = nu
       return sendJson(res, 200, { status: 'ready', loopback: host === '127.0.0.1' || host === '::1', hasAllowedRoots: !!workspaceRegistry && workspaceRegistry.hasAllowedRoots });
     }
 
-    if (req.method === 'GET' && (url === '/mcp' || url === '/mcp/')) {
-      res.writeHead(405, { Allow: 'POST', 'content-type': 'text/plain' });
-      res.end('Method Not Allowed');
-      return;
-    }
-
-    if (req.method === 'POST' && (url === '/mcp' || url === '/mcp/')) {
-      let body;
-      try { body = await readBody(req); }
-      catch { return sendJson(res, 400, { jsonrpc: '2.0', error: { code: -32700, message: 'invalid JSON body' }, id: null }); }
-
-      const sessionId = req.headers['mcp-session-id'];
-      let transport;
-      if (sessionId && transports.has(sessionId)) {
-        transport = transports.get(sessionId);
-      } else if (!sessionId && isInitializeRequest(body)) {
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          enableJsonResponse: true,
-          onsessioninitialized: (sid) => { transports.set(sid, transport); },
-        });
-        const server = makeServer();
-        await server.connect(transport);
-        try { await transport.handleRequest(req, res, body); } catch (e) { if (!res.headersSent) sendJson(res, 500, { jsonrpc: '2.0', error: { code: -32603, message: 'internal error' }, id: null }); }
-        return;
-      } else {
-        return sendJson(res, 400, { jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request: no valid session id' }, id: null });
+    if (url === '/mcp' || url === '/mcp/') {
+      // DNS-rebinding protection: invalid Host or non-local Origin -> 403.
+      if (!validateHost(req, res)) return;
+      if (!validateOrigin(req, res)) return;
+      try {
+        await nodeHandler(req, res);
+      } catch (e) {
+        if (!res.headersSent) sendJson(res, 500, { error: 'internal error' });
       }
-      try { await transport.handleRequest(req, res, body); } catch (e) { if (!res.headersSent) sendJson(res, 500, { jsonrpc: '2.0', error: { code: -32603, message: 'internal error' }, id: null }); }
       return;
     }
 
@@ -88,8 +60,7 @@ export async function startMcpServer({ workspaceRegistry, appServerExecutor = nu
 
   const addr = httpServer.address();
   const port2 = typeof addr === 'object' && addr ? addr.port : port;
+  const close = () => new Promise((resolve) => httpServer.close(() => resolve()));
 
-  const close = () => new Promise((resolve) => { for (const t of transports.values()) { try { t.close ? t.close() : null; } catch {} } httpServer.close(() => resolve()); });
-
-  return { httpServer, close, host, port: port2, url: `http://${host}:${port2}/mcp`, transports };
+  return { httpServer, close, host, port: port2, url: `http://${host}:${port2}/mcp` };
 }

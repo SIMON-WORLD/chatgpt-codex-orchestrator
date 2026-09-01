@@ -1,16 +1,8 @@
 // scripts/mcp-local-smoke.mjs
-// Real LOCAL MCP smoke for M2 (no Secure Tunnel / no live Codex).
-//   start MCP server on 127.0.0.1
-//   -> official MCP client
-//   -> initialize
-//   -> tools/list
-//   -> workspace_open(test repo)
-//   -> read known file
-//   -> search known marker
-//   -> git_status
-//   -> git_diff
-//   -> clean shutdown
-// Does NOT modify repository contents.
+// Real LOCAL MCP smoke for M2 (no Secure Tunnel / no live Codex). Uses the
+// MCP TypeScript SDK v2 client.
+//   connect -> tools/list -> workspace_open -> read -> search -> git_status ->
+//   git_diff -> terminate/close cleanly. No repo mutation.
 //
 // Run explicitly (NOT part of `npm test`):
 //   node scripts/mcp-local-smoke.mjs
@@ -20,15 +12,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { startMcpServer } from '../src/mcp/server.js';
 import { WorkspaceRegistry } from '../src/local/workspace.js';
 
 function textOf(res) { const t = res && res.content && res.content.find((c) => c.type === 'text'); return t ? t.text : ''; }
 
 async function main() {
-  // Isolated temp workspace (not the orchestrator repo).
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-smoke-'));
   const repo = path.join(root, 'repo');
   fs.mkdirSync(repo);
@@ -42,7 +32,7 @@ async function main() {
 
   const registry = new WorkspaceRegistry({ allowedRoots: [root] });
   const srv = await startMcpServer({ workspaceRegistry: registry, host: '127.0.0.1', port: 0, allowedRoots: [root] });
-  const client = new Client({ name: 'mcp-local-smoke', version: '0.2.0' });
+  const client = new Client({ name: 'mcp-local-smoke', version: '0.2.0-dev' });
 
   try {
     await client.connect(new StreamableHTTPClientTransport(srv.url));

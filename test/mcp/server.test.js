@@ -4,8 +4,9 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import http from 'node:http';
+import { Client } from '@modelcontextprotocol/client';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { startMcpServer } from '../../src/mcp/server.js';
 import { WorkspaceRegistry } from '../../src/local/workspace.js';
 
@@ -70,4 +71,24 @@ test('MCP server binds loopback / healthz / readyz / initialize / tools / clean 
 
   const gd = await client.callTool({ name: 'git_diff', arguments: { workspaceId: ws.workspaceId, mode: 'worktree' } });
   assert.ok(typeof JSON.parse(textOf(gd)).diff === 'string');
+});
+
+test('rejects malicious Host and non-local Origin, allows localhost', async (t) => {
+  const { root, repo } = makeWorkspace();
+  const registry = new WorkspaceRegistry({ allowedRoots: [root] });
+  const srv = await startMcpServer({ workspaceRegistry: registry, host: '127.0.0.1', port: 0, allowedRoots: [root] });
+  t.after(() => srv.close());
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2026-07-28', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
+
+  const post = (headers) => new Promise((resolve, reject) => {
+    const req = http.request(srv.url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers } }, (res) => { let d=''; res.on('data',(c)=>d+=c); res.on('end',()=>resolve({ status: res.statusCode, body: d })); });
+    req.on('error', reject); req.write(body); req.end();
+  });
+
+  const maliciousHost = await post({ host: 'evil.com' });
+  assert.equal(maliciousHost.status, 403);
+  const nonLocalOrigin = await post({ origin: 'https://evil.com' });
+  assert.equal(nonLocalOrigin.status, 403);
+  const local = await post({ origin: 'http://127.0.0.1' });
+  assert.notEqual(local.status, 403); // localhost origin allowed (then processed/initialized)
 });

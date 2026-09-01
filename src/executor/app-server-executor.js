@@ -21,6 +21,44 @@ import { normalizeApproval, mapDecision, APPROVAL_DECISIONS, ApprovalError } fro
 const TERMINAL_TURN_STATES = ['completed', 'failed'];
 const RECOVERY_STATES = ['created', 'thread_ready', 'starting', 'running'];
 
+const MAX_RESULT_CHARS = 8000;
+
+function collectText(value, out) {
+  if (value == null) return;
+  if (typeof value === 'string') { if (value.trim()) out.push(value); return; }
+  if (typeof value !== 'object') return;
+  if (Array.isArray(value)) { for (const v of value) collectText(v, out); return; }
+  if (typeof value.text === 'string') out.push(value.text);
+  if (typeof value.payload === 'string') out.push(value.payload);
+  if (typeof value.content === 'string') out.push(value.content);
+  if (typeof value.role === 'string') out.push(value.role);
+  for (const k of Object.keys(value)) { if (k === 'text' || k === 'payload' || k === 'content') continue; collectText(value[k], out); }
+}
+
+function extractAssistantText(turn) {
+  const out = [];
+  collectText(turn ? turn.items : [], out);
+  return out.join(' ').trim().slice(0, MAX_RESULT_CHARS) || null;
+}
+
+function pendingForJob(job, approvals) {
+  const pending = [];
+  for (const [, entry] of approvals) {
+    if (entry.resolved) continue;
+    const info = entry.info;
+    if (info.threadId && job.threadId && info.threadId !== job.threadId) continue;
+    pending.push({
+      approvalId: info.approvalId,
+      kind: info.kind,
+      method: info.method,
+      reason: info.reason || null,
+      itemId: info.itemId || null,
+      supportedDecisionMode: ['approve', 'deny'],
+    });
+  }
+  return pending;
+}
+
 export class AppServerExecutor {
   constructor({ dataRoot = null, codexBin = null, listen = null, cwd = null, client = null, jobMap = null } = {}) {
     this.client = client || new AppServerClient({ codexBin: codexBin || undefined, listen: listen || undefined, cwd: cwd || undefined });
@@ -91,12 +129,12 @@ export class AppServerExecutor {
     else if (!this.client._connected) await this.client.connect();
   }
 
-  async start({ prompt, cwd = null, sandbox = null } = {}) {
+  async start({ prompt, cwd = null, sandbox = null, workspaceRoot = null, workspaceId = null } = {}) {
     await this._ensureConnected();
 
     const jobId = makeJobId();
     const mutationUnitId = makeMutationUnitId();
-    this.jobMap.save(jobId, { jobId, mutationUnitId, threadId: null, turnId: null, state: 'created', createdAt: Date.now(), updatedAt: Date.now() });
+    this.jobMap.save(jobId, { jobId, mutationUnitId, workspaceRoot, workspaceId, threadId: null, turnId: null, state: 'created', createdAt: Date.now(), updatedAt: Date.now() });
 
     const threadParams = { ...(cwd ? { cwd } : {}), ...(sandbox ? { sandbox } : {}) };
     const threadRes = await this.client.request('thread/start', threadParams);
@@ -156,16 +194,23 @@ export class AppServerExecutor {
     if (!this.client.isRunning) recoveryRequired = true;
 
     const turn = thread && Array.isArray(thread.turns) ? thread.turns.find((t) => t && t.id === job.turnId) || null : null;
+    const assistantText = turn ? extractAssistantText(turn) : null;
+    const pendingApprovals = pendingForJob(job, this._approvals);
     return {
       jobId,
       threadId: job.threadId,
       turnId: job.turnId,
       mutationUnitId: job.mutationUnitId || null,
+      workspaceRoot: job.workspaceRoot || null,
+      workspaceId: job.workspaceId || null,
       state: job.state,
       live,
       recoveryRequired,
       readErrorCode,
       threadStatus: thread ? thread.status : null,
+      result: assistantText,
+      assistantText,
+      pendingApprovals,
       turn: turn ? {
         id: turn.id,
         status: turn.status,
