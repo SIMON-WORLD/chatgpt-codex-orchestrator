@@ -111,6 +111,19 @@ ChatGPT Web/Desktop
 ```
 
 `CHATGPT_NATIVE` capabilities remain **product-native** and are **not implemented** in this repository.
+**First-release canonical chain (Secure Tunnel path):**
+
+```
+ChatGPT Web/Desktop
+→ Custom MCP App
+→ OpenAI Secure Tunnel
+→ local **Streamable HTTP** MCP endpoint (`http://127.0.0.1:<port>/mcp`)
+→ orchestrator
+→ App Server
+→ Codex
+```
+
+**Transport distinction:** the **Secure Tunnel path uses Streamable HTTP MCP** for the first release; **STDIO MCP support may remain optional/deferred**. The **Codex App Server itself remains stdio** using `codex app-server --listen stdio://` — these are separate layers and must not be conflated.
 
 ### B.1 Runtime components / responsibilities
 
@@ -224,7 +237,7 @@ verify_effect = read_only | workspace_effect
 Productionized replacement for the spike, using **Codex App Server generated schema/protocol as authority**. Thin MCP facade; **no raw App Server protocol exposure to ChatGPT**.
 
 **Covers:**
-- **process launch** — spawn `codex app-server --listen stdio://crypto` (baseline `codex-cli 0.146.0`); manage stdin/stdout/stderr;
+- **process launch** — spawn `codex app-server --listen stdio://` (baseline `codex-cli 0.146.0`); manage stdin/stdout/stderr;
 - **initialize** — `initialize` handshake;
 - **capabilities.experimentalApi** — set `experimentalApi: true` for granular `AskForApproval`;
 - **thread/start** — create a thread;
@@ -306,7 +319,7 @@ How a real user runs v0.2.
 | Item | Design |
 |---|---|
 | **orchestrator local server startup** | `npm run v0.2:` launcher (new script) starts a local Node process hosting the MCP server + router + App Server executor. |
-| **MCP endpoint** | Local streamable-HTTP/stdio endpoint; configured via v0.2 config. |
+| **MCP endpoint** | Local **Streamable HTTP** MCP endpoint `http://127.0.0.1:<port>/mcp` for the canonical Secure Tunnel path (v0.2 first-release). STDIO MCP remains optional/deferred. Configured via v0.2 config. |
 | **tunnel-client relationship** | **Official `tunnel-client` is an external supported dependency** for first release — do **not** vendor/fork. The orchestrator mounts a route and exposes the tunnel URL; it does not reimplement tunneling. |
 | **tunnel-client external prerequisite?** | **Yes** for first release (external prerequisite), unless evidence proves otherwise. |
 | **profile setup** | `setup-brain-command` extended to register the v0.2 Custom MCP App and write the config; a distinct "v0.2 profile". |
@@ -316,7 +329,7 @@ How a real user runs v0.2.
 | **Custom MCP App discovery** | The MCP server advertises `tools/list`; the Custom MCP App in ChatGPT discovers it. |
 | **Web/Desktop compatibility** | Supported via the Custom MCP App + tunnel (both surfaces). |
 | **Codex install/auth req** | Codex CLI (baseline `0.146.0`) installed & authenticated locally; the App Server runs against the local Codex. |
-| **Codex App Server startup** | Managed by `AppServerExecutor` spawn (`codex app-server --listen stdio://crypto`), not a separate user step for normal runs. |
+| **Codex App Server startup** | Managed by `AppServerExecutor` spawn (`codex app-server --listen stdio://`), not a separate user step for normal runs. |
 
 **Key distinction (three identities, no OpenAI model API key for the Brain):**
 - **ChatGPT account/auth** — product-side login; not an orchestrator key.
@@ -498,7 +511,7 @@ ChatGPT Web/Desktop → Custom MCP App → OpenAI Secure Tunnel → local orches
 ### 3. File-level first-change list (M1)
 
 - `src/executor/app-server-executor.js` (new) — create/start/continue/interrupt/approval/shutdown/reconcile.
-- `src/executor/app-server-client.js` (new) — spawn `codex app-server --listen stdio://crypto`, `initialize`, `capabilities.experimentalApi`, streaming events.
+- `src/executor/app-server-client.js` (new) — spawn `codex app-server --listen stdio://`, `initialize`, `capabilities.experimentalApi`, streaming events.
 - `src/executor/job-map.js` (new) — persist local job ↔ App Server thread/turn identity (reconciliation).
 - `src/executor/approval.js` (new) — map `AskForApproval` ↔ `codex_respond_approval`.
 - `src/state/mutation-owner.js` (new) — owner state for `codex`.
@@ -549,7 +562,7 @@ ChatGPT Web/Desktop → Custom MCP App → OpenAI Secure Tunnel → local orches
 - [`docs/rfc-v0.2-capability-routing.md`](rfc-v0.2-capability-routing.md) — accepted N1 routing contract.
 - [`docs/architecture.md`](architecture.md) — current Alpha.3/Alpha.4 state.
 - [`docs/development-history.md`](development-history.md) — historical notes.
-- Codex App Server spike (local oracle): `codex-cli 0.146.0`, `codex app-server --listen stdio://crypto`, `capabilities.experimentalApi`, `thread/read {includeTurns:true}`, `TurnStatus`.
+- Codex App Server spike (local oracle): `codex-cli 0.146.0`, `codex app-server --listen stdio://`, `capabilities.experimentalApi`, `thread/read {includeTurns:true}`, `TurnStatus`.
 - CodexBridge (pattern reference): https://github.com/naplesblue/codexbridge.
 
 ---
