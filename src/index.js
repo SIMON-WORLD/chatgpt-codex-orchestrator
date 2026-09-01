@@ -50,3 +50,11 @@ export { AppServerExecutor, TERMINAL_TURN_STATES } from './executor/app-server-e
 export { JobMap, makeJobId } from './executor/job-map.js';
 export { normalizeApproval, isApprovalMethod, mapDecision, approvalKind, SUPPORTED_BINARY_METHODS, APPROVAL_DECISIONS, ApprovalError, UnsupportedApprovalMethodError } from './executor/approval.js';
 export { MutationOwner, MutationOwnerError, MUTATION_OWNERS } from './state/mutation-owner.js';
+
+// --- v0.2 M2: local MCP server + read-only Direct Local (additive, non-default) ---
+export { startMcpServer } from './mcp/server.js';
+export { createToolsServer } from './mcp/tools.js';
+export { WorkspaceRegistry, WorkspaceError, detectGitRepo } from './local/workspace.js';
+export { readFile, READ_DEFAULTS } from './local/read.js';
+export { search, SEARCH_DEFAULTS } from './local/search.js';
+export { gitStatus, gitDiff, GIT_DIFF_MODES } from './local/git.js';
