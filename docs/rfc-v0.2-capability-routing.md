@@ -1,9 +1,9 @@
 # RFC: v0.2 — Capability Routing
 
-- **Status:** Proposed design input — no implementation
+- **Status:** Proposed design input — no implementation (Revision 1)
 - **Target version:** v0.2 (Routing contract; does **not** implement runtime behavior)
 - **Relates to:** [`docs/rfc-v0.2-chatgpt-native-capability-inventory.md`](rfc-v0.2-chatgpt-native-capability-inventory.md) (accepted N0 inventory)
-- **Date:** 2026-09-01 · N1
+- **Date:** 2026-09-01 · N1 r1 (revised per Brain `v0.2-n1-capability-routing-rfc-001-r1`)
 - **Artifact:** this document only, under `docs/`. No runtime/source change, no version bump, no release.
 
 ---
@@ -36,7 +36,35 @@ ChatGPT Capability Router
 └─ HYBRID
 ```
 
-**Notation / evidence:** `OFFICIAL_SUPPORT` vs `OBSERVED_LOCAL` follow the N0 RFC. Plan-tier availability is marked `gate` (unverified). Nothing here assumes a distributed lock or extra transport reliability; the MCP/App Server transport already provides exactly-once behavior.
+**Notation / evidence:** `OFFICIAL_SUPPORT` vs `OBSERVED_LOCAL` follow the N0 RFC. Plan-tier availability is marked `gate` (unverified). Nothing here assumes a distributed lock.
+
+---
+
+## Transport identity & idempotency boundary
+
+MCP / JSON-RPC / **Codex App Server** provide **structured request/response identities, thread/turn identities, lifecycle events, and recoverable state surfaces**. They do **not**, by themselves, justify a blanket **end-to-end exactly-once mutation guarantee** across:
+
+```
+ChatGPT
+→ Custom MCP App
+→ Secure Tunnel
+→ local bridge
+→ App Server
+→ filesystem / git side effects
+```
+
+**What we do here:**
+- do **not** carry forward Alpha.4 browser-specific ACK / nonce / retransmit machinery;
+- use **native MCP / App Server identifiers and lifecycle** as the **primary correlation** mechanism;
+- for side-effecting operations, define only the **minimum idempotency / reconciliation boundary** required by implementation and real dogfood;
+- do **not** invent a general exactly-once protocol in this RFC.
+
+**Failure examples that drive the minimum boundary (implementation concerns for the next architecture phase, not reasons to restore browser machinery):**
+
+A. `edit` succeeds locally → response connection fails → the caller does **not** know whether a retry is safe.
+B. `codex_start` creates/starts an App Server turn → the bridge fails **before** returning the local job mapping → recovery must **reconcile** rather than blindly duplicate.
+
+These are handled as **implementation concerns** in the next architecture phase. They do not justify re-imposing browser transport machinery, nor a general exactly-once protocol.
 
 ---
 
@@ -54,7 +82,7 @@ ChatGPT Capability Router
 | **Expected outputs** | Product result: answer, researched summary, image, artifact, document, connector operation result. |
 | **Mutation behavior** | None on the local workspace (server-side action only). |
 | **Approval behavior** | Governed by the ChatGPT product (connector/mutation approvals as applicable). |
-| **Failure / escalation** | If the result must land in the local repo → escalate: small/bounded → `CHATGPT_DIRECT_LOCAL`; multi-file/long-running → `CODEX_DELEGATE`; combined → `HYBRID`. If pure product output → done. |
+| **Failure / escalation** | If the result must land in the local repo → escalate: small/bounded → `CHATGPT_DIRECT_LOCAL`; multi-file/long-running → `CODEX_DELEGATE`; combined native + local → `HYBRID`. If pure product output → done. |
 
 ### A.2 CHATGPT_DIRECT_LOCAL
 
@@ -62,7 +90,7 @@ ChatGPT Capability Router
 |---|---|
 | **Owns** | Workspace-scoped local read, bounded search, small bounded edit/write, `git_status`/`git_diff`, focused safe verification. |
 | **Must not own** | Multi-file coherent implementation, unknown-root-cause debugging, large refactor, long-running test/build, complex git/publish, multi-turn implementation. |
-| **Typical inputs** | "read this file", "search the repo", "git status/diff", "edit this one line", "create one small config file", "run the focused test". |
+| **Typical inputs** | "read this file", "search the repo", "git status/diff", "edit this one line", "create one small config file", "run a focused verify". |
 | **Expected outputs** | Workspace-scoped read results, a small diff, focused verification evidence. |
 | **Mutation behavior** | Small, bounded, diff-visible, base-hash protected; gated by `mutation_owner = chatgpt`. |
 | **Approval behavior** | Mutation gated by `mutation_owner`; if the change is non-trivial, escalate rather than auto-approve beyond scope. |
@@ -80,46 +108,65 @@ ChatGPT Capability Router
 | **Approval behavior** | `AskForApproval` via App Server (`capabilities.experimentalApi`); gated by machine gate / Brain acceptance. |
 | **Failure / escalation** | Report evidence → `REVISE`; supports `interrupt` / `resume`. |
 
-### A.4 HYBRID
+### A.4 HYBRID (composition route)
 
 | Aspect | Definition |
 |---|---|
-| **Owns** | A single logical unit that needs **both** a product capability **and** local work. Splits: product capability natively (research/image/doc) + local mutation (`CHATGPT_DIRECT_LOCAL` if small, else `CODEX_DELEGATE`). |
-| **Must not own** | An unclear split; an implicit handoff of the whole ChatGPT transcript. |
-| **Typical inputs** | "research + local edit", "image + integrate asset", "data analysis + productionize in repo". |
+| **Owns** | A single logical unit that requires **both** a native ChatGPT capability **and** local workspace work. It is a **composition route**, not a fallback executor. It always resolves a **local leg** independently and hands off that leg. |
+| **Must not own** | Local mutation itself — the **local leg** owns mutation as `chatgpt` (for `CHATGPT_DIRECT_LOCAL`) or `codex` (for `CODEX_DELEGATE`). `HYBRID` is **never** a mutation owner. |
+| **Typical inputs** | "research + one README edit", "image generation + integration into repo", "PDF/data analysis + production pipeline implementation", "browser investigation + repo fix". |
 | **Expected outputs** | Combined product result + local diff/evidence. |
-| **Mutation behavior** | Delegated to the local sub-route; `mutation_owner` set accordingly. |
-| **Approval behavior** | Product approvals natively + local approvals on the local sub-route. |
-| **Failure / escalation** | If the local part exceeds bounded scope, escalate that sub-route to `CODEX_DELEGATE`. |
+| **Mutation behavior** | Delegated to the local leg; `mutation_owner` is set by the local leg (`chatgpt` or `codex`), not by `HYBRID`. |
+| **Approval behavior** | Product approvals natively + local approvals on the local leg. |
+| **Failure / escalation** | If the local leg exceeds bounded scope, escalate that leg to `CODEX_DELEGATE`. |
 
 ---
 
 ## B. Routing decision rules
 
-A small, deterministic decision model — **understandable rules over opaque scoring**. The router asks the following **in order**; the first matching outcome wins.
+A small, deterministic decision model — **understandable rules over opaque scoring**. The router asks the **capability questions first**, then composes.
+
+**Conceptual order:**
+
+- **A.** Determine whether a **native ChatGPT capability** is required.
+- **B.** Determine whether a **local workspace capability** is required.
+- If **BOTH** are required → `HYBRID` (composition). Then route the **local leg** independently.
+- If only one is required → route that one directly.
 
 ```
 ROUTE(goal):
-  if goal requires a native ChatGPT capability AND no local mutation is needed:
+  requiresNative  = goal needs a native ChatGPT capability
+                    (web/deep research, browser, image gen/edit, vision,
+                     file/PDF/data analysis, docs/spreadsheets/presentations,
+                     apps/connectors)
+  requiresLocal   = goal needs local workspace capability
+                    (repo read/search/edit/verify, local Codex, git, publish)
+
+  # A. native required? B. local required?
+  if requiresNative and not requiresLocal:
         -> CHATGPT_NATIVE
 
-  if goal does NOT require local repository access AND is pure knowledge/creation:
-        -> CHATGPT_NATIVE
+  if not requiresNative and not requiresLocal:
+        -> CHATGPT_NATIVE          # pure knowledge / creation / reasoning
 
-  if goal requires local repository access:
-        if mutation is NOT required:
-              -> CHATGPT_DIRECT_LOCAL        (read / search / git status/diff / verify)
+  if not requiresNative and requiresLocal:
+        route the local leg directly (see below)
 
-        if mutation IS required:
-              if mutation is small AND bounded AND the exact intended change is already known:
-                    -> CHATGPT_DIRECT_LOCAL
+  if requiresNative and requiresLocal:
+        -> HYBRID                  # composition route, NOT a fallback executor
+           then route the local leg independently (see below)
 
-              if root cause is unknown OR work is multi-file OR requires iterative
-                 implementation/debug/test cycles OR is long-running:
-                    -> CODEX_DELEGATE
+  # local leg (chosen independently)
+  if read-only (no mutation):
+        -> CHATGPT_DIRECT_LOCAL    (read / search / git status/diff /
+                                    read_only verify only)
 
-  if goal requires BOTH a native ChatGPT capability AND local mutation:
-        -> HYBRID (then route the local sub-part by the above local rules)
+  if mutation small AND bounded AND exact intended change already known:
+        -> CHATGPT_DIRECT_LOCAL
+
+  if root cause unknown OR multi-file OR iterative implementation/debug/test
+     cycles OR long-running:
+        -> CODEX_DELEGATE
 
   # ownership guard (always, before any mutation)
   if mutation_owner is not none and not the requesting route:
@@ -127,23 +174,27 @@ ROUTE(goal):
         if operation is a read:       allowed
 ```
 
+**`HYBRID` is a composition route, not a late fallback executor.** It is selected **at routing time** when BOTH native and local are required — not after a local route is chosen first. The local leg inside `HYBRID` is routed independently (read-only / known-bounded → `CHATGPT_DIRECT_LOCAL`; unknown / complex / multi-file / iterative / long-running → `CODEX_DELEGATE`). `HYBRID` is **never** a `mutation_owner`.
+
+**Examples that MUST resolve as `HYBRID`:**
+- web research + one README edit;
+- image generation + integration into repo;
+- PDF/data analysis + production pipeline implementation;
+- browser investigation + repo fix.
+
 ### Decision inputs (the questions the router resolves)
 
 | # | Question | Resolution hint |
 |---|---|---|
-| 1 | Requires local repository access? | No → native route. |
-| 2 | Requires mutation? | No → `CHATGPT_DIRECT_LOCAL` read/verify. |
-| 3 | Mutation small and bounded? | Yes → `CHATGPT_DIRECT_LOCAL`. |
-| 4 | Exact intended change already known? | Yes + small → `CHATGPT_DIRECT_LOCAL`. |
-| 5 | Root cause unknown? | Yes → `CODEX_DELEGATE`. |
-| 6 | Multi-file? | Yes → `CODEX_DELEGATE`. |
-| 7 | Iterative impl/debug/test cycles? | Yes → `CODEX_DELEGATE`. |
-| 8 | Long-running? | Yes → `CODEX_DELEGATE`. |
-| 9 | Native capability needed (web/deep research, browser, image gen/edit, vision, doc/data analysis, apps/connectors)? | Yes + no local mutation → `CHATGPT_NATIVE`. |
-| 10 | Local Codex capability needed (shell, multi-file, long-running, publish)? | Yes → `CODEX_DELEGATE`. |
-| 11 | Active `mutation_owner` that is not the requester? | Mutation → fail closed; read → allowed. |
+| 1 | Requires native ChatGPT capability? | No + no local → `CHATGPT_NATIVE`. |
+| 2 | Requires local workspace capability? | No + no native → `CHATGPT_NATIVE`. |
+| 3 | BOTH native AND local required? | **Yes → `HYBRID`** (then route the local leg). |
+| 4 | Mutation required? | No → `CHATGPT_DIRECT_LOCAL` (read/search/git/read_only verify). |
+| 5 | Mutation small, bounded, exact change known? | Yes → `CHATGPT_DIRECT_LOCAL`. |
+| 6 | Root cause unknown, multi-file, iterative, or long-running? | Yes → `CODEX_DELEGATE`. |
+| 7 | Active `mutation_owner` that is not the requester? | Mutation → fail closed; read → allowed. |
 
-**Precedence:** local-mutation-prohibited guard always wins over capability selection. If ambiguity remains (e.g., "small" vs "multi-file" both plausible), default to the **more conservative** route (`CODEX_DELEGATE`) rather than a partial write.
+**Precedence:** capability-both-then-compose. `HYBRID` has precedence over a single local route when **both** native and local are required. The local-mutation-prohibited guard always wins over capability selection. If ambiguity remains (e.g., "small" vs "multi-file" both plausible), default to the **more conservative** local leg (`CODEX_DELEGATE`) rather than a partial write.
 
 ---
 
@@ -159,7 +210,7 @@ ROUTE(goal):
 | `edit` | Apply a **change-set** (small, diff-visible). | Base-hash / stale-write protection; blocked secret/cache/build paths. |
 | `git_status` | Report working-tree status. | Read-only, bounded. |
 | `git_diff` | Report diff of a change-set. | Diff-visible, bounded. |
-| `verify` | Run a **focused, allowlisted** verification command. | No general bash; fixed allowlist. |
+| `verify` | Run a **focused, allowlisted** verification command (see `verify_effect` below). | No general bash; fixed allowlist; classified `read_only` or `workspace_effect`. |
 
 **Separate `write`/`create` tool?** For v0.2, **no** — `edit` change-set primitives are sufficient. Creating a new small file is modeled as a change-set that adds that file. This avoids a second overlapping mutation primitive and keeps the surface minimal.
 
@@ -175,6 +226,21 @@ ROUTE(goal):
 **No arbitrary unrestricted filesystem access** — all paths are confined to the bound workspace, secret/cache/build paths are blocked.
 
 **Shell:** v0.2 must **not** expose a general bash tool. Provide only the narrow `verify` command backed by a **fixed allowlist** (e.g. a repo-resolved test filter, a documented linter, one build step). This keeps the Direct Local surface small and safe; anything needing general shell routes to `CODEX_DELEGATE`.
+
+### C.1 Verification side-effect model
+
+`verify` is **not** inherently read-only. Tests / build / lint commands may create **cache, coverage, build output, snapshots, temp files, or generated source**.
+
+```
+verify_effect = read_only | workspace_effect
+```
+
+Rules:
+- **`read_only` verify** — may run **without acquiring mutation ownership only when the command is explicitly classified / allowlisted as side-effect-free.**
+- **`workspace_effect` verify** — **requires the current local mutation owner** (`chatgpt` or `codex`).
+- **While `codex` owns an active mutating turn**, ChatGPT Direct may continue `read` / `search` / `git_status` / `git_diff`, but **MUST NOT run Direct Local `edit` or `verify` by default**.
+- **Do not build a second locking subsystem for verification** — reuse `mutation_owner`.
+- Keep `verify` as a **narrow allowlisted tool**; do **not** add general bash.
 
 ---
 
@@ -212,14 +278,14 @@ mutation_owner = none | chatgpt | codex
 
 | Concern | Rule |
 |---|---|
-| **Acquisition** | When a unit starts and will mutate, set `mutation_owner` to the executing route (`chatgpt` for `CHATGPT_DIRECT_LOCAL`, `codex` for `CODEX_DELEGATE`). When the unit is read-only, leave `none`. |
-| **Release** | On unit completion / `DONE`, clear to `none`. |
+| **Acquisition** | When a unit starts and will mutate, set `mutation_owner` to the executing route (`chatgpt` for `CHATGPT_DIRECT_LOCAL`, `codex` for `CODEX_DELEGATE`). When the unit is read-only, leave `none`. `HYBRID` itself is never an owner. |
+| **Release** | Clear to `none` on the **executor mutation unit reaching a reconciled terminal state and required post-state evidence being captured**. This is the **executor mutation unit completion**, **not** the global project/milestone `DONE`. For `codex`, ownership releases after the mutating turn/unit is reconciled — it does **not** require the whole milestone to be globally `DONE`. For `chatgpt` (`CHATGPT_DIRECT_LOCAL`), ownership releases after its bounded mutation unit is successfully applied/reconciled. |
 | **Failure** | If the writer fails, do **not** silently switch owner. Mark the unit `recovery_required` (or failed); release ownership only after the state is resolved/acknowledged. |
 | **Interrupt** | If `codex` owns a mutating turn and is interrupted, ownership **stays `codex`** until the interrupted turn is resolved/released. ChatGPT may read but must not mutate. |
 | **Read while another owner mutates** | Read is always allowed; only **mutation** is gated. |
 | **Stale ownership recovery** | On process restart, if an in-flight mutating unit cannot be resolved, keep/mark `recovery_required` and require explicit resume. Do **not** auto-reassign to a new writer without evidence. |
 
-**v0.2 scope:** single-process / single-session. **No distributed locking design.** A cross-session lease / lock file is deferred until evidence proves concurrent writers are necessary.
+**v0.2 scope:** single-process / single-session. **No distributed locking design.** A cross-session lease / lock file is deferred until evidence proves concurrent writers are necessary. Verification reuses `mutation_owner` — no second locking subsystem.
 
 ---
 
@@ -232,16 +298,17 @@ mutation_owner = none | chatgpt | codex
 | `CHATGPT_NATIVE → CHATGPT_DIRECT_LOCAL` | Product result must land as a small local edit. | Goal + small change intent + (optionally) product output. |
 | `CHATGPT_DIRECT_LOCAL → CODEX_DELEGATE` | Bounded edit reveals larger scope, unknown root cause, or multi-file need. | Goal + current diff + evidence + acceptance. |
 | `CHATGPT_NATIVE → CODEX_DELEGATE` | Product result must be integrated as a multi-file change. | Goal + acceptance + product output reference. |
-| `CHATGPT_NATIVE → HYBRID → CODEX_DELEGATE` | Native research/image/doc + implementation. | Goal + native output reference + accept/scope. |
+| `CHATGPT_NATIVE → HYBRID → CODEX_DELEGATE` | Native research/image/doc + implementation. | Goal + native output reference + accept/scope; local leg routed independently. |
 
 ### F.2 Worked examples
 
-1. **research → small README edit:** `CHATGPT_NATIVE` (research) → `CHATGPT_DIRECT_LOCAL` (small edit). Owner `chatgpt` for the edit.
+1. **web research + one README edit:** `HYBRID` — native research leg + small local edit leg (`CHATGPT_DIRECT_LOCAL`). Owner `chatgpt` for the edit leg.
 2. **inspect repo → discover large refactor → delegate Codex:** `CHATGPT_DIRECT_LOCAL` (read/search) → `CODEX_DELEGATE` (refactor). Owner `codex`.
-3. **generate image → delegate Codex to integrate asset:** `CHATGPT_NATIVE` (image) → `HYBRID` → `CODEX_DELEGATE` (integrate). Owner `codex` for the repo mutation.
-4. **PDF/data analysis → productionize result in repo:** `CHATGPT_NATIVE` (PDF/data analysis) → `CODEX_DELEGATE` (productionize). Owner `codex`.
-5. **simple config edit → focused verify → done:** `CHATGPT_DIRECT_LOCAL` (edit) + `verify` (focused) → `none`. Owner `chatgpt` for the edit.
+3. **generate image → delegate Codex to integrate asset:** `HYBRID` — native image leg + `CODEX_DELEGATE` integration leg. Owner `codex` for the repo mutation.
+4. **PDF/data analysis → productionize result in repo:** `HYBRID` — native analysis leg + `CODEX_DELEGATE` productionize leg. Owner `codex`.
+5. **simple config edit → focused verify → done:** `CHATGPT_DIRECT_LOCAL` (edit) + `verify` (workspace_effect, requires `chatgpt` owner) → `none`. Owner `chatgpt` for the edit; verify reuses the same owner.
 6. **debugging with unknown root cause → Codex from the start:** `CODEX_DELEGATE` directly. Owner `codex`.
+7. **browser investigation + repo fix:** `HYBRID` — native browser leg + `CODEX_DELEGATE` (or small `CHATGPT_DIRECT_LOCAL`) fix leg.
 
 ### F.3 Context handoff (no transcript dump)
 
@@ -279,7 +346,7 @@ Routing is the executor-selection layer that sits under Governance. Governance r
 - composer delivery recovery;
 - IAB transport-specific exactly-once machinery.
 
-Those existed to make a brittle IAB browser path work; MCP/App Server already provides the needed reliability. Only governance **semantics** carry forward.
+Those existed to make a brittle IAB browser path work. Replace with the **Transport identity & idempotency boundary** (§Transport identity & idempotency boundary): use native MCP/App Server identifiers + lifecycle as the primary correlation, and define only the **minimum** idempotency/reconciliation boundary required by implementation and real dogfood. Do **not** invent a general exactly-once protocol. Only governance **semantics** carry forward.
 
 ---
 
@@ -289,19 +356,19 @@ Those existed to make a brittle IAB browser path work; MCP/App Server already pr
 
 | Task | Default route | Possible escalation | Mutation owner | Reason |
 |---|---|---|---|---|
-| Web research | `CHATGPT_NATIVE` | → `CHATGPT_DIRECT_LOCAL` if result must be saved | `none` | Native strength. |
+| Web research | `CHATGPT_NATIVE` | → `HYBRID` if result must be saved to repo | `none` | Native strength. |
 | Literature research | `CHATGPT_NATIVE` | → `HYBRID` if local download | `none` | Native discovery/summary. |
-| Browser task | `CHATGPT_NATIVE` | — | `none` | Built-in/cloud browser native. |
+| Browser task | `CHATGPT_NATIVE` | → `HYBRID` if a repo fix follows | `none` | Built-in/cloud browser native. |
 | Image generation | `CHATGPT_NATIVE` | → `HYBRID` if integrate in repo | `none` | Native. |
 | Image editing | `CHATGPT_NATIVE` | — | `none` | Native. |
-| PDF understanding | `CHATGPT_NATIVE` | — | `none` | Native. |
-| Exploratory data analysis | `CHATGPT_NATIVE` (sandbox) | → `CODEX_DELEGATE` if must productionize | `none` | Sandbox, no repo. |
+| PDF understanding | `CHATGPT_NATIVE` | → `HYBRID` if productionize | `none` | Native. |
+| Exploratory data analysis | `CHATGPT_NATIVE` (sandbox) | → `HYBRID`/`CODEX_DELEGATE` if productionize | `none` | Sandbox, no repo. |
 | Doc/spreadsheet/presentation | `CHATGPT_NATIVE` | — | `none` | Native Work surface. |
 | Repo inspection | `CHATGPT_DIRECT_LOCAL` | → `CODEX_DELEGATE` if large refactor found | `none` | Workspace-scoped read. |
 | Code search | `CHATGPT_DIRECT_LOCAL` | — | `none` | Bounded search. |
 | One-line edit | `CHATGPT_DIRECT_LOCAL` | → `CODEX_DELEGATE` if scope grows | `chatgpt` | Small bounded write. |
 | Create one small config file | `CHATGPT_DIRECT_LOCAL` | — | `chatgpt` | Small change-set (add file). |
-| Focused test | `CHATGPT_DIRECT_LOCAL` | → `CODEX_DELEGATE` if long/full | `none` (read/verify) | Narrow `verify`. |
+| Focused test | `CHATGPT_DIRECT_LOCAL` | → `CODEX_DELEGATE` if long/full | `none` if `read_only`; `chatgpt` if `workspace_effect` | Narrow `verify`; side-effect classified. |
 | Multi-file feature | `CODEX_DELEGATE` | — | `codex` | Coherent multi-file. |
 | Unknown bug | `CODEX_DELEGATE` | — | `codex` | Unknown root cause. |
 | Refactor | `CODEX_DELEGATE` | — | `codex` | Large, multi-file. |
@@ -310,21 +377,23 @@ Those existed to make a brittle IAB browser path work; MCP/App Server already pr
 | Push | `CODEX_DELEGATE` | — | `codex` | Local git. |
 | PR | `CODEX_DELEGATE` | `CHATGPT_NATIVE` for review | `codex` | Local git + native review. |
 | Release | `CODEX_DELEGATE` | — | `codex` | Local git + publish gate. |
-| Mixed research + coding | `HYBRID` | → `CODEX_DELEGATE` | depends | Research native + code local. |
-| Mixed image + coding | `HYBRID` | → `CODEX_DELEGATE` | depends | Image native + integrate local. |
-| Mixed data analysis + production pipeline | `HYBRID` | → `CODEX_DELEGATE` | `codex` | Analysis native + pipeline local. |
+| Mixed research + coding | `HYBRID` | → `CODEX_DELEGATE` (local leg) | `chatgpt` / `codex` | Research native + code local; local leg routed independently. |
+| Mixed image + coding | `HYBRID` | → `CODEX_DELEGATE` (local leg) | `chatgpt` / `codex` | Image native + integrate local. |
+| Mixed data analysis + production pipeline | `HYBRID` | → `CODEX_DELEGATE` (local leg) | `codex` | Analysis native + production pipeline local. |
 
 ---
 
 ## I. Product scope (minimal)
 
 ### MUST HAVE (first v0.2 implementation)
-- Four-route router with the §B deterministic rules.
+- Four-route router with the §B deterministic rules (capability-both-then-compose; `HYBRID` as composition route).
 - `CHATGPT_DIRECT_LOCAL` minimal surface: `workspace_open`, `read`, `search`, `edit`, `git_status`, `git_diff`, `verify` (narrow allowlist, **no general bash**).
+- `verify_effect = read_only | workspace_effect` classification for the `verify` tool.
 - `CODEX_DELEGATE` surface: `codex_start`, `codex_get`, `codex_continue`, `codex_interrupt`, `codex_respond_approval` (thin facades over Codex App Server).
-- `mutation_owner = none | chatgpt | codex` state field + §E rules (single-session).
+- `mutation_owner = none | chatgpt | codex` state field + §E rules (single-session; verification reuses the owner, no second lock).
 - Base-hash / stale-write protection + diff-visible writes.
 - Transport composition: Custom MCP App + Secure Tunnel (brain-to-local) → orchestration bridge → Codex App Server.
+- Transport identity & idempotency boundary as the minimum correlation/reconciliation model (no general exactly-once).
 
 ### SHOULD HAVE (after dogfood)
 - change-set **preview / apply / rollback** primitive (observe → apply → rollback).
@@ -339,6 +408,7 @@ Those existed to make a brittle IAB browser path work; MCP/App Server already pr
 - separate `write`/`create` tool (change-set primitive is sufficient).
 - turning v0.2 into a full local IDE or another Codex implementation.
 - reimplementing ChatGPT-native capabilities (image, research, docs, connectors).
+- a general end-to-end exactly-once protocol (only a minimum reconciliation boundary is defined here).
 
 ---
 
@@ -352,4 +422,4 @@ Those existed to make a brittle IAB browser path work; MCP/App Server already pr
 
 ---
 
-*This RFC is design input only. No runtime/source/version changes were made. It finalizes for v0.2 the Routing contract; the N0 inventory references this document as `rfc-v0.2-capability-routing` (naming corrected to stay within product v0.2).*
+*This RFC is design input only. No runtime/source/version changes were made. Revision r1 fixes HYBRID routing precedence (composition, not late fallback), removes the exactly-once overclaim in favour of a minimum reconciliation boundary, adds a `verify_effect` side-effect model, and clarifies ownership release (executor unit completion vs global Brain DONE). The N0 inventory references this document as `rfc-v0.2-capability-routing`.*
