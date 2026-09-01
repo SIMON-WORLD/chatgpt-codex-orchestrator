@@ -3,17 +3,18 @@
 // Exposes a thin, stable MCP-facing facade: start / get / continue / interrupt /
 // respondApproval / resume / shutdown. It does NOT expose raw App Server protocol.
 //
-// Ownership: a mutating unit acquires `codex` ownership bound to a unitId BEFORE
-// any mutating turn/start. Only one unit may be active per workspace; a new unit
-// may begin only after the previous unit is reconciled / released. Interrupted /
-// unknown state blocks silent release.
+// Ownership: a mutating unit acquires `codex` ownership bound to a persisted
+// mutationUnitId BEFORE any mutating turn/start. Only one unit may be active per
+// workspace; a new unit may begin only after the previous unit is reconciled /
+// released. Interrupted / unknown state blocks silent release.
 //
-// Recovery: after a process death, active jobs are marked recovery_required and
-// the owner unit becomes unknown; resume() uses thread/resume + thread/read to
-// reattach by identity and NEVER silently creates a duplicate thread/turn.
+// Recovery: after a process/executor death, the persisted job carries its
+// mutationUnitId so a FRESH AppServerExecutor can reconstruct ownership. resume()
+// uses thread/resume + thread/read and NEVER silently creates a duplicate
+// thread/turn.
 
 import { AppServerClient } from './app-server-client.js';
-import { JobMap, makeJobId } from './job-map.js';
+import { JobMap, makeJobId, makeMutationUnitId } from './job-map.js';
 import { MutationOwner, MutationOwnerError } from '../state/mutation-owner.js';
 import { normalizeApproval, mapDecision, APPROVAL_DECISIONS, ApprovalError } from './approval.js';
 
@@ -27,11 +28,8 @@ export class AppServerExecutor {
     this.owner = new MutationOwner();
     this._approvals = new Map();      // approvalId -> { requestId, info, resolved }
     this._notifiers = new Set();
-    this._unitCounter = 0;
     this._setup();
   }
-
-  _nextUnitId() { return `${Date.now()}-${++this._unitCounter}`; }
 
   _setup() {
     this.client.onNotification((note) => this._handleNotification(note));
@@ -44,7 +42,6 @@ export class AppServerExecutor {
 
   _handleClientExit(evt) {
     if (this.client._closing) return; // clean shutdown, not an unexpected death
-    // Unexpected App Server death while active work exists.
     for (const job of this.jobMap.list()) {
       if (RECOVERY_STATES.includes(job.state)) {
         this.jobMap.update(job.jobId, { state: 'recovery_required', updatedAt: Date.now() });
@@ -63,17 +60,10 @@ export class AppServerExecutor {
       const job = this.jobMap.findByThread(threadId);
       const state = turn.status || (method === 'turn/completed' ? 'completed' : 'running');
       if (job) this.jobMap.update(job.jobId, { state, turnId: turn.id || job.turnId, updatedAt: Date.now() });
-      // Update owner unit toward reconciled terminal state (do not auto-release).
       if (TERMINAL_TURN_STATES.includes(turn.status)) this.owner.markUnitState('reconciled');
       else if (turn.status === 'interrupted') this.owner.markUnitState('interrupted');
     }
     this._emit(note);
-  }
-
-  _markReconciled(turnStatus) {
-    if (TERMINAL_TURN_STATES.includes(turnStatus)) this.owner.markUnitState('reconciled');
-    else if (turnStatus === 'interrupted') this.owner.markUnitState('interrupted');
-    else this.owner.markUnitState('running');
   }
 
   _handleServerRequest(req) {
@@ -81,6 +71,19 @@ export class AppServerExecutor {
     if (approval) {
       this._approvals.set(approval.approvalId, { requestId: req.id, info: approval, resolved: false });
     }
+  }
+
+  // Reconcile the owner unit for a resolved turn status. Accepts a unitId (the
+  // persisted mutationUnitId when available). If the owner is none (fresh
+  // executor) it acquires codex bound to unitId; then marks the appropriate state.
+  _reconcileOwner({ unitId, turnStatus }) {
+    const uid = unitId || makeMutationUnitId();
+    if (this.owner.owner === 'none') this.owner.acquire('codex', uid);
+    else if (this.owner.owner !== 'codex') this.owner.acquire('codex', uid); // will throw for a foreign owner
+    if (TERMINAL_TURN_STATES.includes(turnStatus)) this.owner.markUnitState('reconciled');
+    else if (turnStatus === 'interrupted') this.owner.markUnitState('interrupted');
+    else this.owner.markUnitState('running');
+    return uid;
   }
 
   async _ensureConnected() {
@@ -92,7 +95,8 @@ export class AppServerExecutor {
     await this._ensureConnected();
 
     const jobId = makeJobId();
-    this.jobMap.save(jobId, { jobId, threadId: null, turnId: null, state: 'created', createdAt: Date.now(), updatedAt: Date.now() });
+    const mutationUnitId = makeMutationUnitId();
+    this.jobMap.save(jobId, { jobId, mutationUnitId, threadId: null, turnId: null, state: 'created', createdAt: Date.now(), updatedAt: Date.now() });
 
     const threadParams = { ...(cwd ? { cwd } : {}), ...(sandbox ? { sandbox } : {}) };
     const threadRes = await this.client.request('thread/start', threadParams);
@@ -103,15 +107,13 @@ export class AppServerExecutor {
     }
     this.jobMap.update(jobId, { threadId, state: 'thread_ready', updatedAt: Date.now() });
 
-    // Acquire codex mutation ownership bound to this unit BEFORE turn/start.
-    const unitId = this._nextUnitId();
+    // Acquire codex ownership bound to the PERSISTED mutationUnitId BEFORE turn/start.
     try {
-      this.owner.acquire('codex', unitId);
+      this.owner.acquire('codex', mutationUnitId);
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
       throw e;
     }
-
     this.jobMap.update(jobId, { state: 'starting', updatedAt: Date.now() });
 
     let turnRes;
@@ -158,6 +160,7 @@ export class AppServerExecutor {
       jobId,
       threadId: job.threadId,
       turnId: job.turnId,
+      mutationUnitId: job.mutationUnitId || null,
       state: job.state,
       live,
       recoveryRequired,
@@ -180,11 +183,10 @@ export class AppServerExecutor {
     if (!job.threadId) throw new Error(`job ${jobId} has no threadId`);
     if (!instruction || typeof instruction !== 'string' || !instruction.trim()) throw new Error('continue requires a non-empty instruction');
 
-    // Acquire codex ownership for a NEW mutation unit; fails if the previous unit
-    // is still an unresolved active unit.
-    const unitId = this._nextUnitId();
-    this.owner.acquire('codex', unitId);
-    this.jobMap.update(jobId, { state: 'starting', updatedAt: Date.now() });
+    // Create a NEW mutation unit; persist its id before the new turn/start.
+    const mutationUnitId = makeMutationUnitId();
+    this.owner.acquire('codex', mutationUnitId); // fails if the previous unit is still active
+    this.jobMap.update(jobId, { mutationUnitId, state: 'starting', updatedAt: Date.now() });
 
     let turnRes;
     try {
@@ -204,8 +206,9 @@ export class AppServerExecutor {
   }
 
   // Official App Server recovery: initialize -> thread/resume -> thread/read
-  // -> reconcile persisted job state. Never blindly issues thread/start or an
-  // extra turn/start.
+  // -> reconcile persisted job state AND reconstruct mutation ownership from the
+  // persisted mutationUnitId. Never blindly issues thread/start or an extra
+  // turn/start.
   async resume({ jobId }) {
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
@@ -216,7 +219,6 @@ export class AppServerExecutor {
       throw new Error(`cannot reconcile job ${jobId}: no thread identity; refusing to create a duplicate`);
     }
 
-    // thread/resume reopens the existing thread (official recovery).
     let resumed;
     try {
       resumed = await this.client.request('thread/resume', { threadId: job.threadId, ...(job.cwd ? { cwd: job.cwd } : {}) });
@@ -231,16 +233,17 @@ export class AppServerExecutor {
     const thread = read && read.thread;
     const turns = thread && Array.isArray(thread.turns) ? thread.turns.filter((t) => t && t.id) : [];
 
+    const unitId = job.mutationUnitId || makeMutationUnitId();
+
     let resolvedTurnId = job.turnId || null;
     if (resolvedTurnId) {
       const known = turns.find((t) => t.id === resolvedTurnId);
       if (known) {
         const state = TERMINAL_TURN_STATES.includes(known.status) ? known.status : (known.status === 'inProgress' ? 'running' : known.status);
         this.jobMap.update(jobId, { turnId: resolvedTurnId, state, updatedAt: Date.now() });
-        this._markReconciled(known.status);
+        this._reconcileOwner({ unitId, turnStatus: known.status });
         return this.get({ jobId });
       }
-      // persisted turnId not found in the resumed thread -> fall through to reconcile
       resolvedTurnId = null;
     }
 
@@ -250,7 +253,7 @@ export class AppServerExecutor {
         const turnId = active[0].id;
         const state = active[0].status === 'inProgress' ? 'running' : active[0].status;
         this.jobMap.update(jobId, { turnId, state, updatedAt: Date.now() });
-        this._markReconciled(active[0].status);
+        this._reconcileOwner({ unitId, turnStatus: active[0].status });
         return this.get({ jobId });
       }
       if (active.length !== 1 || turns.length === 0) {

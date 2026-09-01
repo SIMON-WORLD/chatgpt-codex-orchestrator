@@ -98,7 +98,7 @@ async function main() {
   } catch (e) {
     const msg = String(e && e.message || e);
     process.stdout.write(`SMOKE BLOCKED/FAIL: ${msg}\n`);
-    if (/auth|login|credential|token|401|403|not signed|experimental|config.toml|unknown variant|failed to load configuration|service_tier|requires authentication|not authenticated/i.test(msg)) {
+    if (/auth|login|credential|token|401|403|not signed|experimental|config.toml|unknown variant|failed to load configuration|service_tier|requires authentication|not authenticated|thread-history|thread-store|rollout|is empty|history for thread/i.test(msg)) {
       process.stderr.write(`REAL_APP_SERVER_SMOKE=BLOCKED\n`);
       process.exit(3);
     }

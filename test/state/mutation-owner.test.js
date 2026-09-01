@@ -93,3 +93,32 @@ test('release when already none is a no-op', () => {
   const r = m.release();
   assert.equal(r.released, false);
 });
+
+test('same-unit known/unknown cannot silently become running', () => {
+  const m = new MutationOwner();
+  m.acquire('codex', 'unit-1');
+  m.markUnitState('unknown');
+  assert.throws(() => m.acquire('codex', 'unit-1'), /reconcile first/);
+  assert.equal(m.unitState, 'unknown');
+});
+
+test('same-unit interrupted cannot silently become running', () => {
+  const m = new MutationOwner();
+  m.acquire('codex', 'unit-1');
+  m.markUnitState('interrupted');
+  assert.throws(() => m.acquire('codex', 'unit-1'), /reconcile first/);
+  assert.equal(m.unitState, 'interrupted');
+});
+
+test('same-unit reconciled is kept reconciled unless a new mutation unit is created', () => {
+  const m = new MutationOwner();
+  m.acquire('codex', 'unit-1');
+  m.markUnitState('reconciled');
+  // same unit reconcile -> still throws (not silently running)
+  assert.throws(() => m.acquire('codex', 'unit-1'), /reconcile first/);
+  assert.equal(m.unitState, 'reconciled');
+  // a NEW mutation unit may be acquired.
+  const r = m.acquire('codex', 'unit-2');
+  assert.equal(r.unitState, 'running');
+  assert.equal(m.unitId, 'unit-2');
+});

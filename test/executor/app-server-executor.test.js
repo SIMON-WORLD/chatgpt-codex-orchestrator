@@ -334,3 +334,44 @@ test('pending binary approval replay surfaced again, no second mutation', async 
   assert.equal(job.threadId, r.threadId);
   assert.equal(job.turnId, r.turnId); // no second mutation/turn
 });
+
+test('mutationUnitId is persisted with the job and changed on continue', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await startExecutor(exec);
+  const job = exec.load(r.jobId);
+  assert.ok(job.mutationUnitId && job.mutationUnitId.length > 0);
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const c = await exec.continue({ jobId: r.jobId, instruction: 'x' });
+  const job2 = exec.load(r.jobId);
+  assert.notEqual(job2.mutationUnitId, job.mutationUnitId);
+});
+
+test('full executor restart reconstructs ownership from persisted mutationUnitId', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const execA = makeExecutor({ dataRoot: root, slowTurn: true });
+  const rA = await startExecutor(execA);
+  const persisted = execA.load(rA.jobId);
+  assert.ok(persisted.mutationUnitId);
+  await execA.shutdown(); // executor A disappears; turn still inProgress (slow)
+  const execB = makeExecutor({ dataRoot: root });
+  t.after(() => execB.shutdown());
+  await execB.resume({ jobId: rA.jobId });
+  assert.equal(execB.owner.owner, 'codex');
+  assert.equal(execB.owner.unitId, persisted.mutationUnitId);
+  assert.equal(execB.owner.unitState, 'running');
+});
+
+test('active recovered job blocks a new mutation after restart', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const execA = makeExecutor({ dataRoot: root, slowTurn: true });
+  const rA = await startExecutor(execA);
+  await execA.shutdown();
+  const execB = makeExecutor({ dataRoot: root });
+  t.after(() => execB.shutdown());
+  await execB.resume({ jobId: rA.jobId });
+  await assert.rejects(() => execB.start({ prompt: 'b' }), MutationOwnerError);
+  const jobB = execB.jobMap.list().find((j) => j.state === 'recovery_required' && j.jobId !== rA.jobId && j.threadId && !j.turnId);
+  assert.ok(jobB);
+});

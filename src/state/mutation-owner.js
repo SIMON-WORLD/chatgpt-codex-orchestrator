@@ -52,10 +52,12 @@ export class MutationOwner {
       return { acquired: true, owner, unitId: u, unitState: 'running' };
     }
 
-    // Same owner.
+    // Same owner, same unitId. Idempotent only when appropriate: NEVER silently
+    // convert an unknown/interrupted/reconciled unit back to running. Recovery
+    // must explicitly reconcile first.
     if (this._unitId === u) {
-      this._unitState = 'running';
-      return { acquired: true, owner, unitId: u, unitState: 'running' };
+      if (this._unitState === 'running') return { acquired: true, owner, unitId: u, unitState: 'running' };
+      throw new MutationOwnerError(`cannot acquire ${u}: unit is ${this._unitState}; reconcile first`);
     }
 
     // Different unitId: only allowed if the current unit is reconciled.

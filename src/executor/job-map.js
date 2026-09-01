@@ -13,6 +13,8 @@ import { runtimePaths } from '../runtime-paths.js';
 
 export function makeJobId() { return crypto.randomUUID(); }
 
+export function makeMutationUnitId() { return crypto.randomUUID(); }
+
 function jobMapDir(dataRoot) { return path.join(runtimePaths(dataRoot).runtime, 'job-maps'); }
 
 export class JobMap {
