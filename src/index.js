@@ -43,3 +43,10 @@ export { CodexWorkerClient } from './worker-client.js';
 export { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, BRAIN_PROVIDERS, DEFAULT_TAKEOVER_MESSAGE, ConversationNotFoundError, ConversationAmbiguityError, newDirectTaskState, evaluatePublicationGate, evaluateDoneGate, isPublishForbiddenState } from './direct-mode.js';
 
 export { createDirectRun, DIRECT_ALPHA4_MODE, assertDirectAlpha4Mode } from './direct-run-controller.js';
+
+// --- v0.2 M1: Codex App Server executor (additive, non-default) ---------------
+export { AppServerClient, DEFAULT_APP_SERVER_LISTEN, DEFAULT_CODEX_BIN } from './executor/app-server-client.js';
+export { AppServerExecutor, TERMINAL_TURN_STATES } from './executor/app-server-executor.js';
+export { JobMap, makeJobId } from './executor/job-map.js';
+export { normalizeApproval, isApprovalMethod, buildApprovalResponse, APPROVAL_DECISIONS, ApprovalError } from './executor/approval.js';
+export { MutationOwner, MutationOwnerError, MUTATION_OWNERS } from './state/mutation-owner.js';
