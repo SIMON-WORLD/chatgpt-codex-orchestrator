@@ -72,10 +72,11 @@ function pendingForJob(job, approvals) {
 }
 
 export class AppServerExecutor {
-  constructor({ dataRoot = null, codexBin = null, listen = null, cwd = null, client = null, jobMap = null } = {}) {
+  constructor({ dataRoot = null, codexBin = null, listen = null, cwd = null, client = null, jobMap = null, mutationOwner = null } = {}) {
     this.client = client || new AppServerClient({ codexBin: codexBin || undefined, listen: listen || undefined, cwd: cwd || undefined });
     this.jobMap = jobMap || new JobMap({ dataRoot });
-    this.owner = new MutationOwner();
+    // ONE shared mutation-ownership authority (injected); if none supplied, a local\n    // owner is used so existing M1 direct behavior remains valid.
+    this.owner = mutationOwner || new MutationOwner();
     this._approvals = new Map();      // approvalId -> { requestId, info, resolved }
     this._notifiers = new Set();
     this._setup();

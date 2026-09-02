@@ -3,13 +3,16 @@
 // whole file. Binary detection operates on a small probe, not the whole file.
 
 import fs from 'node:fs';
-import { redactSecrets } from '../safety.js';
+import crypto from 'node:crypto';
 import { WorkspaceError } from './workspace.js';
 import { isSensitivePath } from './sensitive.js';
+import { redactSecrets } from '../safety.js';
+
 
 const DEFAULT_MAX_BYTES = 64 * 1024;
 const DEFAULT_MAX_LINES = 2000;
 const HARD_MAX_BYTES = 4 * 1024 * 1024;
+const EDITABLE_MAX_BYTES = 256 * 1024;
 const PROBE_BYTES = 8192;
 
 function looksBinary(buf) {
@@ -42,10 +45,13 @@ export function readFile({ workspaceId, path: relPath, maxBytes = DEFAULT_MAX_BY
     const truncatedLines = lines.length > maxLines;
     const content = truncatedLines ? lines.slice(0, maxLines).join('\n') : chunk;
 
+    const full = !(st.size > maxBytes) && !truncatedLines && st.size <= EDITABLE_MAX_BYTES;
+    const sha = full ? crypto.createHash('sha256').update(buf.subarray(0, n)).digest('hex') : null;
     return {
       path: relPath,
       bytes: st.size,
       content: redactSecrets(content),
+      sha256: sha,
       truncated: st.size > maxBytes || truncatedLines,
     };
   } finally {

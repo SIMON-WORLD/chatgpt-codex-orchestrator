@@ -23,8 +23,8 @@ function sendJson(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
-export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null } = {}) {
-  const factory = () => createToolsServer({ workspaceRegistry, appServerExecutor });
+export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, verifyService = null, verifyChecks = {} } = {}) {
+  const factory = () => createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, verifyService, verifyChecks });
   const handler = createMcpHandler(factory);
   const nodeHandler = toNodeHandler(handler);
   const validateHost = localhostHostValidation();

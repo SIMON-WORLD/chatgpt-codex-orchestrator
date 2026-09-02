@@ -58,3 +58,9 @@ export { WorkspaceRegistry, WorkspaceError, detectGitRepo } from './local/worksp
 export { readFile, READ_DEFAULTS } from './local/read.js';
 export { search, SEARCH_DEFAULTS } from './local/search.js';
 export { gitStatus, gitDiff, GIT_DIFF_MODES } from './local/git.js';
+
+// --- v0.2 M3: bounded Direct Local edit + verify (additive, non-default) -------
+export { ChangeSetService, computeSha256, EDIT_BOUNDS } from './local/change-set.js';
+export { OperationState, OPERATION_STATUSES } from './state/operation-state.js';
+export { VerifyService, VERIFY_EFFECTS } from './local/verify.js';
+export { isBlockedMutationPath } from './local/sensitive.js';
