@@ -46,8 +46,16 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     if (owner && owner !== appServerExecutor.owner) throw new Error('mutationOwner must be shared with appServerExecutor; refusing unsafe concurrency');
     if (!owner) owner = appServerExecutor.owner;
   }
-  const changeSet = changeSetService || (owner ? new ChangeSetService({ workspaceRegistry, operationState: operationState || new OperationState(), mutationOwner: owner }) : null);
-  const verify = verifyService || (owner ? new VerifyService({ workspaceRegistry, mutationOwner: owner, verifyChecks }) : null);
+  // Externally injected Direct mutation services must use the SAME mutation owner.
+  if (changeSetService && changeSetService.owner && owner && changeSetService.owner !== owner) throw new Error('changeSetService.mutationOwner must be shared; refusing unsafe concurrency');
+  if (verifyService && verifyService.owner && owner && verifyService.owner !== owner) throw new Error('verifyService.mutationOwner must be shared; refusing unsafe concurrency');
+  // Direct Local mutation tools are only auto-registered when explicitly configured
+  // (operationState for edit, verifyChecks for verify). A codex-delegate-only server must
+  // NOT auto-create an OperationState (which requires a data root) just because an owner
+  // happens to be present.
+  const hasVerifyChecks = Object.keys(verifyChecks || {}).length > 0;
+  const changeSet = changeSetService || (operationState && owner ? new ChangeSetService({ workspaceRegistry, operationState, mutationOwner: owner }) : null);
+  const verify = verifyService || (owner && hasVerifyChecks ? new VerifyService({ workspaceRegistry, mutationOwner: owner, verifyChecks }) : null);
 
   const server = new McpServer({ name: 'chatgpt-codex-orchestrator', version: '0.2.0-dev' });
 
