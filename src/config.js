@@ -47,6 +47,9 @@ export const DEFAULT_V02_CONFIG = {
     listen: 'stdio://',
     cwd: null,
     runtimeProfile: null,       // isolated CODEX_HOME profile dir (M5 phase C)
+    model: null,                // optional model override; null => Codex default
+    caBundle: null,             // trusted CA bundle path for Codex outbound TLS (CODEX_CA_CERTIFICATE)
+    sslCertFile: null,          // SSL_CERT_FILE override for Codex outbound TLS
     spawnArgs: null,            // override app-server argv after the binary (e.g. [codexJs, app-server, --listen, stdio://])
     extraArgs: [],
   },
@@ -56,6 +59,9 @@ export const DEFAULT_V02_CONFIG = {
     profile: null,              // tunnel profile filename
     profileDir: null,           // tunnel profile directory
     localMcpUrl: null,          // local MCP URL the tunnel forwards (e.g. http://127.0.0.1:8745/mcp)
+    spawnArgs: null,           // override tunnel-client argv after the executable (for tests)
+    healthUrl: null,
+    healthUrl: null,           // full tunnel health /readyz URL used to probe real readiness
   },
 };
 
@@ -92,6 +98,7 @@ export function loadV02Config(overrides = {}, { configPath = null } = {}) {
   if (process.env.TUNNEL_PROFILE) cfg.tunnel.profile = process.env.TUNNEL_PROFILE;
   if (process.env.TUNNEL_PROFILE_DIR) cfg.tunnel.profileDir = process.env.TUNNEL_PROFILE_DIR;
   if (process.env.TUNNEL_LOCAL_MCP_URL) cfg.tunnel.localMcpUrl = process.env.TUNNEL_LOCAL_MCP_URL;
+  if (process.env.TUNNEL_HEALTH_URL) cfg.tunnel.healthUrl = process.env.TUNNEL_HEALTH_URL;
   cfg.workspaceRoots = normalizeRoots(cfg.workspaceRoots, cfg.workspaceRoot);
   cfg.paths = runtimePaths(cfg.dataRoot);
   return cfg;

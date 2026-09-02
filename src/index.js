@@ -73,3 +73,4 @@ export { GovernanceService, createGovernanceService, GovernanceError, GOV_CONTRO
 // --- v0.2 M5: production runtime assembly + Brain-local transport ------------
 export { loadV02Config, DEFAULT_V02_CONFIG } from './config.js';
 export { BrainLocalRuntime, createBrainLocalRuntime, v02Doctor } from './transport/brain-local.js';
+export { resolveCodexAppServer, discoverCodexAppServer } from './transport/codex.js';

@@ -65,6 +65,8 @@ async function main() {
     appServer: st.appServer,
     tunnel: st.tunnel,
     workspace: st.workspace,
+    readyForLocalMcp: st.readyForLocalMcp,
+    readyForTunnel: st.readyForTunnel,
     readyForChatGPT: st.readyForChatGPT,
   };
   process.stdout.write('V02_RUNTIME ' + JSON.stringify(report) + '\n');

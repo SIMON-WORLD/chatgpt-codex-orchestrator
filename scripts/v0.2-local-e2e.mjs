@@ -18,7 +18,8 @@ import { createBrainLocalRuntime, loadV02Config } from '../src/transport/brain-l
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_FIXTURE = path.join(__dirname, '..', 'test-fixtures', 'executor', 'fake-app-server.mjs');
-const CODEX_JS = 'C:/Users/Administrator/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js';
+import { discoverCodexAppServer, resolveCodexAppServer } from '../src/transport/codex.js';
+const DISCOVERED = discoverCodexAppServer();
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function textOf(res) { const t = res && res.content && res.content.find((c) => c.type === 'text'); return t ? t.text : ''; }
@@ -35,9 +36,10 @@ async function main() {
   runGit(workspace, ['config', 'user.name', 'e2e']);
 
   const codexConfig = useReal
-    ? { bin: process.execPath, spawnArgs: [CODEX_JS, 'app-server', '--listen', 'stdio://'], cwd: dataRoot }
+    ? { bin: DISCOVERED.bin, spawnArgs: DISCOVERED.argv, cwd: dataRoot }
     : { bin: process.execPath, spawnArgs: [FAKE_FIXTURE], cwd: dataRoot, extraArgs: [] };
   const config = loadV02Config({
+    port: 0,
     workspaceRoot: workspace,
     dataRoot,
     codex: codexConfig,
