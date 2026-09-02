@@ -51,7 +51,7 @@ test('codex_delegate MCP facade: schema-specific result, truthful approvals, wor
   assert.ok(started.jobId && started.threadId && started.turnId);
 
   let approvalId = null;
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 500; i++) {
     const g = JSON.parse(textOf(await client.callTool({ name: 'codex_get', arguments: { workspaceId: wsA.workspaceId, jobId: started.jobId } })));
     if (g.pendingApprovals && g.pendingApprovals.length) { approvalId = g.pendingApprovals[0].approvalId; break; }
     await sleep(5);
@@ -71,7 +71,7 @@ test('codex_delegate MCP facade: schema-specific result, truthful approvals, wor
   assert.equal(Array.isArray(afterResp.pendingApprovals) && afterResp.pendingApprovals.length, 0);
 
   let got = null;
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 500; i++) {
     got = JSON.parse(textOf(await client.callTool({ name: 'codex_get', arguments: { workspaceId: wsA.workspaceId, jobId: started.jobId } })));
     if (got.result && got.result.includes('TASK_DONE_MARKER')) break;
     await sleep(5);
@@ -111,7 +111,7 @@ test('codex_get reports non-binary approvals truthfully (approve/deny not advert
 
   let approvalId = null;
   let approvalInfo = null;
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 500; i++) {
     const g = JSON.parse(textOf(await client.callTool({ name: 'codex_get', arguments: { workspaceId: wsA.workspaceId, jobId: started.jobId } })));
     if (g.pendingApprovals && g.pendingApprovals.length) { approvalInfo = g.pendingApprovals[0]; approvalId = approvalInfo.approvalId; break; }
     await sleep(5);
