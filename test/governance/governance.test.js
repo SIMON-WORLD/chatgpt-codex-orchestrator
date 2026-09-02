@@ -194,3 +194,50 @@ test('transition returns a valid compact handoff and per-step state is isolated'
   assert.equal(st.steps.s2.acceptance[0].id, 'a2');
   assert.equal(st.steps.s2.machineGate, 'pending');
 });
+
+// ---- r1/phaseA: taskId binding, TASK reissue idempotency, authority contract ----
+
+test('taskId is bound once and stays stable across transition/recordResult', () => {
+  const g = setup();
+  g.transition({ taskId: 't1', control: 'PLAN' });
+  g.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1' }] });
+  // Omitted taskId uses the bound one.
+  const r = g.recordResult({ stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+  assert.equal(r.taskId, 't1');
+});
+
+test('taskId mismatch raises GovernanceError on transition and recordResult', () => {
+  const g = setup();
+  g.transition({ taskId: 't1', control: 'PLAN' });
+  assert.throws(() => g.transition({ taskId: 't2', stepId: 's1', control: 'TASK' }), /taskId mismatch/);
+  g.transition({ taskId: 't1', stepId: 's1', control: 'TASK' });
+  assert.throws(() => g.recordResult({ taskId: 't9', stepId: 's1', executorStatus: 'success' }), /taskId mismatch/);
+});
+
+test('a fresh step TASK reissue is idempotent and keeps executorStatus/gate', () => {
+  const g = setup();
+  g.transition({ taskId: 't1', control: 'PLAN' });
+  g.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1' }] });
+  const r2 = g.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1' }] });
+  assert.equal(r2.ok, true);
+  assert.equal(r2.nextAction, 'execute');
+  const st = g.status();
+  assert.equal(st.steps.s1.executorStatus, 'unknown');
+  assert.equal(st.steps.s1.machineGate, 'pending');
+});
+
+test('TASK reissue on a step that already has a RESULT does NOT clear it and blocks', () => {
+  const g = setup();
+  g.transition({ taskId: 't1', control: 'PLAN' });
+  g.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1' }] });
+  g.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+  assert.equal(g.status().steps.s1.machineGate, 'pass');
+  const r = g.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1' }] });
+  assert.equal(r.blocked, true);
+  assert.equal(r.nextAction, 'blocked_task_reissue');
+  // RESULT is preserved, not wiped.
+  const st = g.status();
+  assert.equal(st.steps.s1.executorStatus, 'success');
+  assert.equal(st.steps.s1.machineGate, 'pass');
+  assert.equal(st.steps.s1.evidence.length, 1);
+});

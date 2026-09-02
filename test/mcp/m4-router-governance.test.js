@@ -133,3 +133,12 @@ test('contradictory router facts -> isError through MCP', async (t) => {
   assert.equal(res.isError, true);
   assert.match(textOf(res), /readOnly and mutationRequired are contradictory/);
 });
+
+test('governance_transition rejects executor RESULT fields (strict authority contract)', async (t) => {
+  const { srv, client } = await setup();
+  t.after(() => client.close());
+  t.after(() => srv.close());
+  // executorStatus / evidence / changed / publication are NOT part of governance_transition.
+  const res = await client.callTool({ name: 'governance_transition', arguments: { taskId: 't1', stepId: 's1', control: 'TASK', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] } });
+  assert.equal(res.isError, true);
+});

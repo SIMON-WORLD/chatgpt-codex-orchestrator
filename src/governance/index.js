@@ -72,6 +72,13 @@ export class GovernanceService {
   _requireTask(control) {
     if (!this.state.taskId) throw new GovernanceError(`a taskId is required before a ${control} transition`);
   }
+  // Bind the taskId once. After the first bind it stays stable: a different taskId is
+  // a GovernanceError, and an omitted taskId uses the already-bound taskId.
+  _bindTask(taskId) {
+    if (taskId == null) return;
+    if (this.state.taskId && this.state.taskId !== taskId) throw new GovernanceError(`taskId mismatch: already bound to ${this.state.taskId}, got ${taskId}`);
+    if (!this.state.taskId) this.state.taskId = taskId;
+  }
   _pushHistory(entry) { this.state.history.push({ ...entry, at: Date.now() }); }
 
   _step(stepId) { return this.state.steps[stepId] || null; }
@@ -110,7 +117,7 @@ export class GovernanceService {
   // ---- Brain controls -------------------------------------------------------
   transition({ taskId = null, stepId = null, control, route = null, localRoute = null, acceptance = null, reviseDelta = null, whyBlocked = '', minimalUserAction = '', expectedFields = [], question = '', resumeControlId = null } = {}) {
     this._requireControl(control);
-    if (taskId) this.state.taskId = taskId;
+    this._bindTask(taskId);
     this._requireTask(control);
 
     // Terminal guard: after a successful terminal DONE, no other control is accepted.
@@ -153,16 +160,26 @@ export class GovernanceService {
           this.state.previousStepId = this.state.currentStepId;
         }
         this.state.currentStepId = stepId;
-        const step = this._step(stepId) || newStep(stepId, acceptance);
-        this.state.steps[stepId] = step;
-        if (acceptance) this._setCurrentStepAcceptance(step, acceptance);
-        // A freshly authorized step is not yet executed.
-        step.executorStatus = 'unknown';
-        step.machineGate = 'pending';
-        step.brainAcceptance = 'pending';
-        step.evidence = [];
-        step.changed = [];
-        nextAction = 'execute';
+        const existing = this._step(stepId);
+        if (existing) {
+          // Re-issue TASK on the SAME step. Never clear a RESULT.
+          const hasResult = existing.executorStatus !== 'unknown' || existing.machineGate !== 'pending' || existing.evidence.length > 0 || existing.changed.length > 0;
+          if (hasResult) {
+            blocked = true;
+            reason = 'TASK reissue on a step that already has a RESULT: use REVISE to re-execute this step, or a new stepId to advance';
+            nextAction = 'blocked_task_reissue';
+            break;
+          }
+          // Idempotent reissue of the same execution authorization (still fresh): keep
+          // executorStatus/gate/evidence unchanged, refresh the acceptance contract.
+          if (acceptance) this._setCurrentStepAcceptance(existing, acceptance);
+          existing.brainAcceptance = 'pending';
+          nextAction = 'execute';
+        } else {
+          const step = newStep(stepId, acceptance);
+          this.state.steps[stepId] = step;
+          nextAction = 'execute';
+        }
         break;
       }
 
@@ -264,9 +281,8 @@ export class GovernanceService {
 
   // ---- Executor RESULT ingestion --------------------------------------------
   recordResult({ taskId = null, stepId = null, executorStatus = 'unknown', evidence = null, changed = null, publication = null } = {}) {
-    if (!taskId && !this.state.taskId) throw new GovernanceError('recordResult requires a taskId');
-    if (taskId) this.state.taskId = taskId;
-    if (this.state.taskId && taskId && taskId !== this.state.taskId) throw new GovernanceError('recordResult taskId mismatch');
+    this._bindTask(taskId);
+    if (!this.state.taskId) throw new GovernanceError('recordResult requires a taskId');
     if (!stepId) throw new GovernanceError('recordResult requires a stepId');
     if (stepId !== this.state.currentStepId) throw new GovernanceError(`recordResult must target the active step ${String(this.state.currentStepId)}, got ${stepId}`);
 

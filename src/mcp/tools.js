@@ -135,7 +135,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
 
   if (governance) {
     server.registerTool('governance_transition', {
-      description: 'Record a Brain governance control (PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE) with acceptance, evidence, and gate transition.',
+      description: 'Record a Brain governance control (PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE) with acceptance contract and revise delta. Executor RESULT fields belong only to governance_record_result.',
       annotations: M,
       inputSchema: z.object({
         taskId: z.string().optional(),
@@ -144,15 +144,11 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
         localRoute: z.enum(['CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE']).optional(),
         acceptance: z.array(z.object({ id: z.string(), required: z.boolean().optional(), requiredEvidenceLevel: z.string().optional() })).optional(),
-        evidence: z.array(z.object({ acceptanceId: z.string(), status: z.string().optional(), evidenceLevel: z.string().optional() })).optional(),
         reviseDelta: z.object({ preserve: z.array(z.string()).optional(), invalidate: z.array(z.string()).optional() }).optional(),
-        executorStatus: z.enum(['success', 'failure', 'unknown']).optional(),
-        changed: z.array(z.string()).optional(),
-        publication: z.object({ ok: z.boolean().optional(), externalReadback: z.any().optional() }).optional(),
         whyBlocked: z.string().optional(),
         minimalUserAction: z.string().optional(),
         question: z.string().optional(),
-      }),
+      }).strict(),
     }, async (args) => {
       try { return text(governance.transition(args)); } catch (e) { return errText(e.message); }
     });
