@@ -84,6 +84,7 @@ test('codex_delegate MCP facade: schema-specific result, truthful approvals, wor
     assert.equal(got.result.includes(neg), false, 'result must not contain ' + neg);
   }
 
+
   const cont = JSON.parse(textOf(await client.callTool({ name: 'codex_continue', arguments: { workspaceId: wsA.workspaceId, jobId: started.jobId, instruction: 'more' } })));
   assert.equal(cont.threadId, started.threadId);
   assert.notEqual(cont.turnId, started.turnId);
@@ -91,11 +92,6 @@ test('codex_delegate MCP facade: schema-specific result, truthful approvals, wor
   const ir = JSON.parse(textOf(await client.callTool({ name: 'codex_interrupt', arguments: { workspaceId: wsA.workspaceId, jobId: started.jobId } })));
   assert.equal(ir.state, 'interrupted');
 
-  // Legacy/unbound job (no workspaceRoot) fails closed through MCP.
-  const legacy = await executor.start({ prompt: 'legacy', cwd: repoA });
-  const legacyRes = await client.callTool({ name: 'codex_get', arguments: { workspaceId: wsA.workspaceId, jobId: legacy.jobId } });
-  assert.equal(legacyRes.isError, true);
-  assert.ok(textOf(legacyRes).includes('predates workspace authorization'));
 });
 
 test('codex_get reports non-binary approvals truthfully (approve/deny not advertised)', async (t) => {
@@ -123,4 +119,19 @@ test('codex_get reports non-binary approvals truthfully (approve/deny not advert
 
   const resp = await client.callTool({ name: 'codex_respond_approval', arguments: { workspaceId: wsA.workspaceId, jobId: started.jobId, approvalId, decision: 'approve' } });
   assert.equal(resp.isError, true);
+});
+
+test('legacy/unbound Codex job (no workspaceRoot) fails closed through MCP', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-legacy-'));
+  const repoA = path.join(root, 'repoA'); fs.mkdirSync(repoA); fs.writeFileSync(path.join(repoA, 'a.txt'), 'hi', 'utf8');
+  const { executor, srv, client } = await setup(root, {});
+  t.after(() => srv.close());
+  t.after(() => executor.shutdown());
+  t.after(() => client.close());
+  const wsA = JSON.parse(textOf(await client.callTool({ name: 'workspace_open', arguments: { path: repoA } })));
+  // Create a job WITHOUT workspaceRoot (legacy path) directly on the executor.
+  const legacy = await executor.start({ prompt: 'legacy', cwd: repoA });
+  const legacyRes = await client.callTool({ name: 'codex_get', arguments: { workspaceId: wsA.workspaceId, jobId: legacy.jobId } });
+  assert.equal(legacyRes.isError, true);
+  assert.ok(textOf(legacyRes).includes('predates workspace authorization'));
 });
