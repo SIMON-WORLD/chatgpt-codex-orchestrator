@@ -40,8 +40,10 @@ function extractAssistantText(turn) {
         for (const c of item.content) if (c && c.type === 'input_text' && typeof c.text === 'string') out.push(c.text);
       }
     } else if (item.type === 'message') {
-      // Only assistant/output content; exclude user input_text.
-      if (Array.isArray(item.content)) {
+      // Require the message to actually be assistant output: role === 'assistant'
+      // AND content.type === 'output_text'. A user message with output_text is NOT
+      // assistant output and is excluded.
+      if (item.role === 'assistant' && Array.isArray(item.content)) {
         for (const c of item.content) if (c && c.type === 'output_text' && typeof c.text === 'string') out.push(c.text);
       }
     }

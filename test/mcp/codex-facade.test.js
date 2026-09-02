@@ -80,7 +80,7 @@ test('codex_delegate MCP facade: schema-specific result, truthful approvals, wor
   assert.ok(got.result);
   assert.ok(got.result.includes('TASK_DONE_MARKER'));
   assert.ok(got.result.includes('ASSISTANT_OUTPUT_TEXT_MARKER'));
-  for (const neg of ['USER_INPUT_MARKER', 'REASONING_MARKER', 'FUNCTION_CALL_MARKER', 'TOOL_OUTPUT_MARKER', 'TOOL_INPUT_MARKER']) {
+  for (const neg of ['USER_INPUT_MARKER', 'USER_OUTPUT_TEXT_MARKER', 'REASONING_MARKER', 'FUNCTION_CALL_MARKER', 'TOOL_OUTPUT_MARKER', 'TOOL_INPUT_MARKER']) {
     assert.equal(got.result.includes(neg), false, 'result must not contain ' + neg);
   }
 

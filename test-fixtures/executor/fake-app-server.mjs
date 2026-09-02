@@ -168,6 +168,7 @@ function handle(msg) {
       setTimeout(() => {
         const done = fakeTurn(turnId, 'completed', [
           { id: 'item-user', type: 'message', role: 'user', content: [{ type: 'input_text', text: 'USER_INPUT_MARKER' }] },
+          { id: 'item-userout', type: 'message', role: 'user', content: [{ type: 'output_text', text: 'USER_OUTPUT_TEXT_MARKER' }] },
           { id: 'item-reason', type: 'reasoning', summary: [], content: [{ type: 'text', text: 'REASONING_MARKER' }], encrypted_content: null },
           { id: 'item-fc', type: 'function_call', name: 'bash', arguments: '{"cmd":"FUNCTION_CALL_MARKER"}', call_id: 'c1' },
           { id: 'item-fco', type: 'function_call_output', call_id: 'c1', output: { type: 'text', text: 'TOOL_OUTPUT_MARKER' } },
