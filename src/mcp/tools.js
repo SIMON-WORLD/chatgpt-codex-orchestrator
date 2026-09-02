@@ -6,6 +6,7 @@
 // the job's persisted canonical workspaceRoot is compared against the resolved
 // root BEFORE any App Server action. Mismatch fails closed.
 
+import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import { readFile } from '../local/read.js';
@@ -21,12 +22,19 @@ function errText(message) { return { content: [{ type: 'text', text: `error: ${m
 
 const workspaceIdSchema = z.string().min(1);
 
+function rootsEqual(a, b) {
+  if (!a || !b) return false;
+  // Both roots are canonicalized through WorkspaceRegistry / realpath.
+  if (process.platform === 'win32') return String(a).toLowerCase().replace(/\\/g, '/') === String(b).toLowerCase().replace(/\\/g, '/');
+  return path.resolve(String(a)) === path.resolve(String(b));
+}
+
 function assertSameWorkspace(registry, workspaceId, job) {
   if (!workspaceId) throw new WorkspaceError('workspaceId is required for Codex operations');
   const ws = registry.get(workspaceId);
-  if (job && job.workspaceRoot) {
-    const norm = (p) => String(p).toLowerCase().replace(/\\/g, '/');
-    if (norm(ws.root) !== norm(job.workspaceRoot)) throw new WorkspaceError('job does not belong to this workspace (workspaceRoot mismatch)');
+  if (job) {
+    if (!job.workspaceRoot) throw new WorkspaceError('job predates workspace authorization; must be resumed or recreated through the bound M2 path (no workspaceRoot)');
+    if (!rootsEqual(ws.root, job.workspaceRoot)) throw new WorkspaceError('job does not belong to this workspace (workspaceRoot mismatch)');
   }
   return ws.root;
 }

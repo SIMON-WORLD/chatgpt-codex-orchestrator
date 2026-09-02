@@ -25,6 +25,7 @@ let approvalRequested = false;
 let approvalResolved = false;
 
 const EMIT_APPROVAL = process.env.FAKE_APP_SERVER_APPROVAL === '1';
+const EMIT_APPROVAL_NONBINARY = process.env.FAKE_APP_SERVER_APPROVAL_NONBINARY === '1';
 const DIE_MS = process.env.FAKE_APP_SERVER_DIE_MS ? Number(process.env.FAKE_APP_SERVER_DIE_MS) : null;
 const FAIL_TURN_START = process.env.FAKE_APP_SERVER_FAIL_TURN_START === '1';
 const SLOW_TURN = process.env.FAKE_APP_SERVER_SLOW_TURN === '1';
@@ -86,28 +87,26 @@ function threadWithTurns(threadId) {
 }
 
 function maybeEmitApproval(threadId, turnId) {
-  if (!EMIT_APPROVAL || approvalRequested) return;
+  if ((!EMIT_APPROVAL && !EMIT_APPROVAL_NONBINARY) || approvalRequested) return;
   approvalRequested = true;
   approvalResolved = false;
   const reqId = 'req-approval-1';
-  serverRequests.set(reqId, { method: 'item/commandExecution/requestApproval', resolved: false });
-  process.stdout.write(JSON.stringify({
-    id: reqId, method: 'item/commandExecution/requestApproval',
-    params: {
-      threadId, turnId, itemId: 'item-1', startedAtMs: Date.now(),
-      approvalId: 'cb-1', reason: 'fake approval', command: 'echo hi', cwd: process.cwd(),
-      commandActions: [], availableDecisions: ['accept', 'acceptForSession', 'decline'],
-    },
-  }) + '\n');
+  const method = EMIT_APPROVAL_NONBINARY ? 'item/permissions/requestApproval' : 'item/commandExecution/requestApproval';
+  serverRequests.set(reqId, { method, resolved: false });
+  const params = EMIT_APPROVAL_NONBINARY
+    ? { threadId, turnId, itemId: 'item-1', startedAtMs: Date.now(), cwd: process.cwd(), reason: 'fake non-binary approval', permissions: { oauth: null } }
+    : { threadId, turnId, itemId: 'item-1', startedAtMs: Date.now(), approvalId: 'cb-1', reason: 'fake approval', command: 'echo hi', cwd: process.cwd(), commandActions: [], availableDecisions: ['accept', 'acceptForSession', 'decline'] };
+  process.stdout.write(JSON.stringify({ id: reqId, method, params }) + '\n');
 }
 
 function maybeReEmitApproval(threadId, turnId) {
   if (!approvalRequested || approvalResolved) return;
-  serverRequests.set('req-approval-1', { method: 'item/commandExecution/requestApproval', resolved: false });
-  process.stdout.write(JSON.stringify({
-    id: 'req-approval-1', method: 'item/commandExecution/requestApproval',
-    params: { threadId, turnId, itemId: 'item-1', startedAtMs: Date.now(), approvalId: 'cb-1', reason: 'fake approval', command: 'echo hi', cwd: process.cwd(), commandActions: [], availableDecisions: ['accept', 'acceptForSession', 'decline'] },
-  }) + '\n');
+  const method = EMIT_APPROVAL_NONBINARY ? 'item/permissions/requestApproval' : 'item/commandExecution/requestApproval';
+  serverRequests.set('req-approval-1', { method, resolved: false });
+  const params = EMIT_APPROVAL_NONBINARY
+    ? { threadId, turnId, itemId: 'item-1', startedAtMs: Date.now(), cwd: process.cwd(), reason: 'fake non-binary approval', permissions: { oauth: null } }
+    : { threadId, turnId, itemId: 'item-1', startedAtMs: Date.now(), approvalId: 'cb-1', reason: 'fake approval', command: 'echo hi', cwd: process.cwd(), commandActions: [], availableDecisions: ['accept', 'acceptForSession', 'decline'] };
+  process.stdout.write(JSON.stringify({ id: 'req-approval-1', method, params }) + '\n');
 }
 
 function handle(msg) {
@@ -167,7 +166,16 @@ function handle(msg) {
       saveState();
       notify('turn/started', { threadId, turn });
       setTimeout(() => {
-        const done = fakeTurn(turnId, 'completed', [{ id: 'item-1', type: 'agent_message', payload: 'task done' }], { startedAt: 0, completedAt: Date.now() });
+        const done = fakeTurn(turnId, 'completed', [
+          { id: 'item-user', type: 'message', role: 'user', content: [{ type: 'input_text', text: 'USER_INPUT_MARKER' }] },
+          { id: 'item-reason', type: 'reasoning', summary: [], content: [{ type: 'text', text: 'REASONING_MARKER' }], encrypted_content: null },
+          { id: 'item-fc', type: 'function_call', name: 'bash', arguments: '{"cmd":"FUNCTION_CALL_MARKER"}', call_id: 'c1' },
+          { id: 'item-fco', type: 'function_call_output', call_id: 'c1', output: { type: 'text', text: 'TOOL_OUTPUT_MARKER' } },
+          { id: 'item-tool', type: 'custom_tool_call', call_id: 'c1', name: 'tool', input: '{"x":"TOOL_INPUT_MARKER"}' },
+          { id: 'item-toolout', type: 'custom_tool_call_output', call_id: 'c1', output: { type: 'text', text: 'TOOL_OUTPUT_MARKER' } },
+          { id: 'item-sim', type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ASSISTANT_OUTPUT_TEXT_MARKER' }] },
+          { id: 'item-am', type: 'agent_message', author: 'assistant', recipient: 'user', content: [{ type: 'input_text', text: 'TASK_DONE_MARKER' }] },
+        ], { startedAt: 0, completedAt: Date.now() });
         turns.set(turnId, done);
         saveState();
         notify('turn/completed', { threadId, turn: done });

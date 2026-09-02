@@ -16,28 +16,36 @@
 import { AppServerClient } from './app-server-client.js';
 import { JobMap, makeJobId, makeMutationUnitId } from './job-map.js';
 import { MutationOwner, MutationOwnerError } from '../state/mutation-owner.js';
-import { normalizeApproval, mapDecision, APPROVAL_DECISIONS, ApprovalError } from './approval.js';
+import { normalizeApproval, mapDecision, APPROVAL_DECISIONS, ApprovalError, SUPPORTED_BINARY_METHODS } from './approval.js';
 
 const TERMINAL_TURN_STATES = ['completed', 'failed'];
 const RECOVERY_STATES = ['created', 'thread_ready', 'starting', 'running'];
 
 const MAX_RESULT_CHARS = 8000;
 
-function collectText(value, out) {
-  if (value == null) return;
-  if (typeof value === 'string') { if (value.trim()) out.push(value); return; }
-  if (typeof value !== 'object') return;
-  if (Array.isArray(value)) { for (const v of value) collectText(v, out); return; }
-  if (typeof value.text === 'string') out.push(value.text);
-  if (typeof value.payload === 'string') out.push(value.payload);
-  if (typeof value.content === 'string') out.push(value.content);
-  if (typeof value.role === 'string') out.push(value.role);
-  for (const k of Object.keys(value)) { if (k === 'text' || k === 'payload' || k === 'content') continue; collectText(value[k], out); }
-}
-
+// Schema-specific, allowlisted result extractor (authority: codex app-server
+// generate-ts --experimental). Only final user-visible assistant/agent message
+// text is exposed:
+//   - agent_message  -> input_text content only (exclude encrypted_content)
+//   - message        -> output_text content only, when it is assistant output
+// Everything else (reasoning, shell, function/tool calls, outputs, images,
+// user/input messages, metadata) is deliberately NOT exposed.
 function extractAssistantText(turn) {
+  const items = turn && Array.isArray(turn.items) ? turn.items : [];
   const out = [];
-  collectText(turn ? turn.items : [], out);
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'agent_message') {
+      if (Array.isArray(item.content)) {
+        for (const c of item.content) if (c && c.type === 'input_text' && typeof c.text === 'string') out.push(c.text);
+      }
+    } else if (item.type === 'message') {
+      // Only assistant/output content; exclude user input_text.
+      if (Array.isArray(item.content)) {
+        for (const c of item.content) if (c && c.type === 'output_text' && typeof c.text === 'string') out.push(c.text);
+      }
+    }
+  }
   return out.join(' ').trim().slice(0, MAX_RESULT_CHARS) || null;
 }
 
@@ -47,13 +55,15 @@ function pendingForJob(job, approvals) {
     if (entry.resolved) continue;
     const info = entry.info;
     if (info.threadId && job.threadId && info.threadId !== job.threadId) continue;
+    const binary = SUPPORTED_BINARY_METHODS.includes(info.method);
     pending.push({
       approvalId: info.approvalId,
       kind: info.kind,
       method: info.method,
       reason: info.reason || null,
       itemId: info.itemId || null,
-      supportedDecisionMode: ['approve', 'deny'],
+      supportedDecisionMode: binary ? ['approve', 'deny'] : null,
+      requiresStructuredResponse: !binary,
     });
   }
   return pending;

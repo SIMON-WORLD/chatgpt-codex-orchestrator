@@ -19,12 +19,20 @@ function gitCmd(registry, workspaceId, args, { maxOutput = MAX_OUTPUT } = {}) {
     let truncated = false;
     child.stdout.on('data', (d) => {
       if (truncated) return;
-      size += d.length;
-      if (size <= maxOutput + 1) output += d.toString('utf8');
-      if (size > maxOutput) { truncated = true; try { child.kill('SIGTERM'); } catch {} }
+      const remain = maxOutput - size;
+      if (remain <= 0) { truncated = true; try { child.kill('SIGTERM'); } catch {} return; }
+      // A single chunk larger than the remaining capacity contributes only the
+      // remaining prefix (keep bytes, not dropped entirely).
+      const keep = d.subarray(0, remain);
+      output += keep.toString('utf8');
+      size += keep.length;
+      if (size >= maxOutput) { truncated = true; try { child.kill('SIGTERM'); } catch {} }
     });
     child.stderr.on('data', (d) => { stderr += d; });
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
+      // Termination BY OUR OWN output bound is a successful truncated result,
+      // not a git failure.
+      if (truncated) return resolve({ output, truncated });
       if (code !== 0) return reject(new WorkspaceError(`git failed: ${stderr.slice(0, 300)}`));
       resolve({ output, truncated });
     });

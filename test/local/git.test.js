@@ -54,3 +54,22 @@ test('git_status on non-git workspace fails closed', async () => {
   const ws = reg.open({ path: root });
   await assert.rejects(() => gitStatus({ workspaceId: ws.workspaceId }, reg), WorkspaceError);
 });
+
+test('large git diff returns truncated=true rather than error', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gitbig-'));
+  const repo = path.join(root, 'repo');
+  fs.mkdirSync(repo);
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: repo });
+  execFileSync('git', ['config', 'user.name', 't'], { cwd: repo });
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'small\n', 'utf8');
+  execFileSync('git', ['add', 'a.txt'], { cwd: repo });
+  execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: repo });
+  // A tracked-file change whose diff far exceeds the output bound.
+  fs.writeFileSync(path.join(repo, 'a.txt'), ('x'.repeat(80) + '\n').repeat(3000), 'utf8');
+  const reg = new WorkspaceRegistry({ allowedRoots: [root] });
+  const ws = reg.open({ path: repo });
+  const r = await gitDiff({ workspaceId: ws.workspaceId, mode: 'worktree' }, reg);
+  assert.equal(r.truncated, true);
+  assert.ok(Buffer.byteLength(r.diff, 'utf8') <= 200 * 1024);
+});
