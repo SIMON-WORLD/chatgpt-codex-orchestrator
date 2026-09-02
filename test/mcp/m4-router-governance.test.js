@@ -142,3 +142,41 @@ test('governance_transition rejects executor RESULT fields (strict authority con
   const res = await client.callTool({ name: 'governance_transition', arguments: { taskId: 't1', stepId: 's1', control: 'TASK', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] } });
   assert.equal(res.isError, true);
 });
+
+test('sequential tasks through one persistent MCP runtime: t1 DONE -> t2 PLAN -> t2 DONE', async (t) => {
+  const { srv, client } = await setup();
+  t.after(() => client.close());
+  t.after(() => srv.close());
+
+  async function tx(args) { return await call(client, 'governance_transition', args); }
+  async function rr(args) { return await call(client, 'governance_record_result', args); }
+
+  // t1 complete DONE.
+  await tx({ taskId: 't1', control: 'PLAN' });
+  await tx({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }] });
+  await rr({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+  await tx({ taskId: 't1', stepId: 's1', control: 'DONE' });
+  let st = await call(client, 'governance_status', {});
+  assert.equal(st.control, 'DONE');
+  assert.ok(st.acceptedSteps.includes('s1'));
+
+  // post-DONE recordResult rejected (terminal immutable).
+  const post = await client.callTool({ name: 'governance_record_result', arguments: { taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] } });
+  assert.equal(post.isError, true);
+
+  // t2 starts fresh via PLAN in the SAME runtime.
+  const plan2 = await tx({ taskId: 't2', control: 'PLAN' });
+  assert.equal(plan2.ok, true);
+  st = await call(client, 'governance_status', {});
+  assert.equal(st.taskId, 't2');
+  assert.deepEqual(st.steps, {});
+  assert.deepEqual(st.acceptedSteps, []);
+
+  await tx({ taskId: 't2', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }] });
+  await rr({ taskId: 't2', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+  const done2 = await tx({ taskId: 't2', stepId: 's1', control: 'DONE' });
+  assert.equal(done2.ok, true);
+  st = await call(client, 'governance_status', {});
+  assert.equal(st.control, 'DONE');
+  assert.ok(st.acceptedSteps.includes('s1'));
+});

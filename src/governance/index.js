@@ -80,6 +80,58 @@ export class GovernanceService {
     if (!this.state.taskId) this.state.taskId = taskId;
   }
   _pushHistory(entry) { this.state.history.push({ ...entry, at: Date.now() }); }
+  // Terminal state: this task reached a successful (terminal) DONE.
+  _isTerminalDone() { return this.state.control === 'DONE'; }
+
+  // Reset task-scoped state for a NEW sequential task in the same persistent runtime.
+  // Does NOT touch taskId (the caller binds the new id), proofLedger, or metrics.
+  _resetTask() {
+    this.state.taskId = null;
+    this.state.control = null;
+    this.state.route = null;
+    this.state.localRoute = null;
+    this.state.planRevision = 0;
+    this.state.currentStepId = null;
+    this.state.previousStepId = null;
+    this.state.steps = {};
+    this.state.awaitingUser = false;
+    this.state.askUser = null;
+    this.state.publicationRequired = false;
+    this.state.publishResult = null;
+    this.state.published = false;
+    this.state.history = [];
+  }
+
+  // Keep each acceptance item's .status truthful against current evidence.
+  _syncAcceptanceStatus(step) {
+    for (const a of step.acceptance) {
+      const ev = step.evidence.find((e) => e.acceptanceId === a.id);
+      if (ev) a.status = ev.status;
+      else if (a.status == null) a.status = 'missing';
+      // When evidence is cleared (e.g. REVISE) the caller sets a.status = 'pending'.
+    }
+  }
+
+  // Idempotent result for a repeated DONE on a terminal task.
+  _terminalDoneResult() {
+    const cur = this.currentStep;
+    return {
+      ok: true, accepted: true, blocked: false, reason: null,
+      control: 'DONE',
+      taskId: this.state.taskId,
+      stepId: this.state.currentStepId,
+      previousStepId: this.state.previousStepId,
+      route: this.state.route,
+      localRoute: this.state.localRoute,
+      executorStatus: cur ? cur.executorStatus : 'success',
+      machineGate: cur ? cur.machineGate : 'pass',
+      brainAcceptance: 'accepted',
+      publicationRequired: this.state.publicationRequired,
+      nextAction: 'done',
+      handoff: this._buildHandoff('DONE', 'done', false),
+    };
+  }
+
 
   _step(stepId) { return this.state.steps[stepId] || null; }
   get currentStep() { return this._step(this.state.currentStepId); }
@@ -117,11 +169,19 @@ export class GovernanceService {
   // ---- Brain controls -------------------------------------------------------
   transition({ taskId = null, stepId = null, control, route = null, localRoute = null, acceptance = null, reviseDelta = null, whyBlocked = '', minimalUserAction = '', expectedFields = [], question = '', resumeControlId = null } = {}) {
     this._requireControl(control);
+    // Sequential task boundary in one persistent runtime: a NEW taskId at a terminal-DONE
+    // + PLAN boundary starts a fresh task lifecycle. Otherwise a taskId change is rejected.
+    if (taskId != null && this.state.taskId && taskId !== this.state.taskId) {
+      if (this._isTerminalDone() && control === 'PLAN') { this._resetTask(); }
+      else { throw new GovernanceError(`cannot start new task ${taskId}: current task ${this.state.taskId} is not terminal DONE at a PLAN boundary`); }
+    }
     this._bindTask(taskId);
     this._requireTask(control);
 
-    // Terminal guard: after a successful terminal DONE, no other control is accepted.
-    if (this.state.control === 'DONE' && control !== 'DONE') {
+    // Terminal guard: after a successful terminal DONE on THIS task, no other control is
+    // accepted. Repeated DONE is idempotent (state is immutable after DONE).
+    if (this._isTerminalDone()) {
+      if (control === 'DONE') return this._terminalDoneResult();
       const life = validateLifecycleAfterDone(control);
       throw new GovernanceError(life.reason);
     }
@@ -281,6 +341,9 @@ export class GovernanceService {
 
   // ---- Executor RESULT ingestion --------------------------------------------
   recordResult({ taskId = null, stepId = null, executorStatus = 'unknown', evidence = null, changed = null, publication = null } = {}) {
+    // Terminal contract: after a successful DONE, the task state is immutable. A RESULT
+    // cannot be ingested again (fail-closed); the state is left completely unchanged.
+    if (this._isTerminalDone()) throw new GovernanceError('governance is terminal after DONE: recordResult is not allowed on this task');
     this._bindTask(taskId);
     if (!this.state.taskId) throw new GovernanceError('recordResult requires a taskId');
     if (!stepId) throw new GovernanceError('recordResult requires a stepId');
@@ -290,6 +353,7 @@ export class GovernanceService {
     step.executorStatus = executorStatus;
 
     if (evidence) step.evidence = (evidence || []).map(normalizeEvidence).filter((e) => e && e.acceptanceId);
+    this._syncAcceptanceStatus(step);
     if (changed) {
       step.changed = Array.isArray(changed) ? changed : (changed ? [changed] : []);
       const staleCount = this.proofLedger.invalidateOnChange(step.changed);

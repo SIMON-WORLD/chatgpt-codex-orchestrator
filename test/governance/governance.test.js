@@ -209,7 +209,8 @@ test('taskId is bound once and stays stable across transition/recordResult', () 
 test('taskId mismatch raises GovernanceError on transition and recordResult', () => {
   const g = setup();
   g.transition({ taskId: 't1', control: 'PLAN' });
-  assert.throws(() => g.transition({ taskId: 't2', stepId: 's1', control: 'TASK' }), /taskId mismatch/);
+  // A different taskId is only allowed at a terminal-DONE + PLAN boundary; elsewhere rejected.
+  assert.throws(() => g.transition({ taskId: 't2', stepId: 's1', control: 'TASK' }), /cannot start new task t2/);
   g.transition({ taskId: 't1', stepId: 's1', control: 'TASK' });
   assert.throws(() => g.recordResult({ taskId: 't9', stepId: 's1', executorStatus: 'success' }), /taskId mismatch/);
 });
@@ -240,4 +241,87 @@ test('TASK reissue on a step that already has a RESULT does NOT clear it and blo
   assert.equal(st.steps.s1.executorStatus, 'success');
   assert.equal(st.steps.s1.machineGate, 'pass');
   assert.equal(st.steps.s1.evidence.length, 1);
+});
+
+// ---- M5 final closure: DONE immutability, acceptance truth, sequential tasks ----
+
+test('DONE is terminal: post-DONE recordResult is rejected and state is immutable', () => {
+  const g = setup();
+  g.transition({ taskId: 't1', control: 'PLAN' });
+  g.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }] });
+  g.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+  const done = g.transition({ taskId: 't1', stepId: 's1', control: 'DONE' });
+  assert.equal(done.ok, true);
+  const stA = g.status();
+  assert.equal(stA.control, 'DONE');
+  assert.equal(stA.steps.s1.brainAcceptance, 'accepted');
+  assert.ok(stA.acceptedSteps.includes('s1'));
+  const snapA = JSON.stringify(stA);
+  assert.throws(() => g.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] }), /terminal after DONE/);
+  const snapB = JSON.stringify(g.status());
+  assert.equal(snapA, snapB); // state unchanged
+});
+
+test('repeated DONE is idempotent (terminal state stable)', () => {
+  const g = setup();
+  g.transition({ taskId: 't1', control: 'PLAN' });
+  g.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1' }] });
+  g.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+  const d1 = g.transition({ taskId: 't1', stepId: 's1', control: 'DONE' });
+  const snap = JSON.stringify(g.status());
+  const d2 = g.transition({ taskId: 't1', stepId: 's1', control: 'DONE' });
+  assert.equal(d2.ok, true);
+  assert.equal(d2.control, 'DONE');
+  assert.equal(JSON.stringify(g.status()), snap);
+});
+
+test('same taskId after DONE rejects TASK/REVISE/REPLAN/PUBLISH', () => {
+  const g = setup();
+  g.transition({ taskId: 't1', control: 'PLAN' });
+  g.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1' }] });
+  g.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+  g.transition({ taskId: 't1', stepId: 's1', control: 'DONE' });
+  assert.throws(() => g.transition({ taskId: 't1', stepId: 's2', control: 'TASK' }), /DONE is terminal/);
+  assert.throws(() => g.transition({ taskId: 't1', stepId: 's1', control: 'REVISE' }), /DONE is terminal/);
+  assert.throws(() => g.transition({ taskId: 't1', stepId: 's1', control: 'REPLAN' }), /DONE is terminal/);
+  assert.throws(() => g.transition({ taskId: 't1', stepId: 's1', control: 'PUBLISH' }), /DONE is terminal/);
+});
+
+test('acceptance.status is truthful against evidence (no missing/pass contradiction)', () => {
+  const g = setup();
+  g.transition({ taskId: 't1', control: 'PLAN' });
+  g.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }] });
+  g.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+  const st = g.status();
+  assert.equal(st.steps.s1.acceptance[0].status, 'pass');
+  assert.equal(st.steps.s1.machineGate, 'pass');
+  assert.notEqual(st.steps.s1.acceptance[0].status, 'missing');
+});
+
+test('sequential tasks in one persistent runtime: t1 DONE then t2 PLAN/TASK/RESULT/DONE', () => {
+  const g = setup();
+  // t1
+  g.transition({ taskId: 't1', control: 'PLAN' });
+  g.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }] });
+  g.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+  g.transition({ taskId: 't1', stepId: 's1', control: 'DONE' });
+  const st1 = g.status();
+  assert.equal(st1.control, 'DONE');
+  assert.ok(st1.acceptedSteps.includes('s1'));
+  // t2 starts via PLAN
+  const plan2 = g.transition({ taskId: 't2', control: 'PLAN' });
+  assert.equal(plan2.ok, true);
+  const st2 = g.status();
+  assert.equal(st2.taskId, 't2');
+  assert.equal(st2.currentStepId, null);
+  assert.deepEqual(st2.steps, {});
+  assert.deepEqual(st2.acceptedSteps, []);
+  assert.equal(st2.publicationRequired, false);
+  assert.equal(st2.awaitingUser, false);
+  // t2 lifecycle
+  g.transition({ taskId: 't2', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }] });
+  g.recordResult({ taskId: 't2', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+  const done2 = g.transition({ taskId: 't2', stepId: 's1', control: 'DONE' });
+  assert.equal(done2.ok, true);
+  assert.equal(g.status().control, 'DONE');
 });
