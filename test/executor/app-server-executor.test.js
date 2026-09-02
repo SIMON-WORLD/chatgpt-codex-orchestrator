@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { AppServerExecutor } from '../../src/executor/app-server-executor.js';
+import { AppServerExecutor, extractAssistantText } from '../../src/executor/app-server-executor.js';
 import { AppServerClient } from '../../src/executor/app-server-client.js';
 import { JobMap } from '../../src/executor/job-map.js';
 import { ApprovalError } from '../../src/executor/approval.js';
@@ -374,4 +374,29 @@ test('active recovered job blocks a new mutation after restart', async (t) => {
   await assert.rejects(() => execB.start({ prompt: 'b' }), MutationOwnerError);
   const jobB = execB.jobMap.list().find((j) => j.state === 'recovery_required' && j.jobId !== rA.jobId && j.threadId && !j.turnId);
   assert.ok(jobB);
+});
+
+
+test('extractAssistantText handles real App Server agentMessage (camelCase text)', () => {
+  const turn = { status: 'completed', items: [
+    { type: 'userMessage', text: 'hi' },
+    { type: 'agentMessage', text: 'REAL_CODEX_SMOKE_OK', phase: 'final_answer' },
+  ] };
+  assert.equal(extractAssistantText(turn), 'REAL_CODEX_SMOKE_OK');
+});
+
+test('extractAssistantText handles legacy agent_message input_text content', () => {
+  const turn = { items: [
+    { type: 'agent_message', content: [{ type: 'input_text', text: 'hello legacy' }] },
+  ] };
+  assert.equal(extractAssistantText(turn), 'hello legacy');
+});
+
+test('extractAssistantText excludes user/assistant non-output items', () => {
+  const turn = { items: [
+    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'keep' }] },
+    { type: 'message', role: 'user', content: [{ type: 'output_text', text: 'drop' }] },
+    { type: 'reasoning', content: [{ type: 'text', text: 'drop-2' }] },
+  ] };
+  assert.equal(extractAssistantText(turn), 'keep');
 });
