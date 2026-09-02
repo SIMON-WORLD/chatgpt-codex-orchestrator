@@ -69,3 +69,7 @@ export { isBlockedMutationPath } from './local/sensitive.js';
 export { CapabilityRouter, createCapabilityRouter, decideRoute, normalizeFacts, validateConsistency, RouterError, ROUTES, FACT_KEYS, MUTATION_OWNERS as ROUTE_MUTATION_OWNERS } from './router/capability-router.js';
 export { buildHandoff, validateHandoff, HANDOFF_FIELDS, HandoffError } from './state/handoff.js';
 export { GovernanceService, createGovernanceService, GovernanceError, GOV_CONTROLS, GOV_ROUTES, governanceGateOk } from './governance/index.js';
+
+// --- v0.2 M5: production runtime assembly + Brain-local transport ------------
+export { loadV02Config, DEFAULT_V02_CONFIG } from './config.js';
+export { BrainLocalRuntime, createBrainLocalRuntime, v02Doctor } from './transport/brain-local.js';
