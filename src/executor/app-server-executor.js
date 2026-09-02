@@ -16,10 +16,60 @@
 import { AppServerClient } from './app-server-client.js';
 import { JobMap, makeJobId, makeMutationUnitId } from './job-map.js';
 import { MutationOwner, MutationOwnerError } from '../state/mutation-owner.js';
-import { normalizeApproval, mapDecision, APPROVAL_DECISIONS, ApprovalError } from './approval.js';
+import { normalizeApproval, mapDecision, APPROVAL_DECISIONS, ApprovalError, SUPPORTED_BINARY_METHODS } from './approval.js';
 
 const TERMINAL_TURN_STATES = ['completed', 'failed'];
 const RECOVERY_STATES = ['created', 'thread_ready', 'starting', 'running'];
+
+const MAX_RESULT_CHARS = 8000;
+
+// Schema-specific, allowlisted result extractor (authority: codex app-server
+// generate-ts --experimental). Only final user-visible assistant/agent message
+// text is exposed:
+//   - agent_message  -> input_text content only (exclude encrypted_content)
+//   - message        -> output_text content only, when it is assistant output
+// Everything else (reasoning, shell, function/tool calls, outputs, images,
+// user/input messages, metadata) is deliberately NOT exposed.
+function extractAssistantText(turn) {
+  const items = turn && Array.isArray(turn.items) ? turn.items : [];
+  const out = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    if (item.type === 'agent_message') {
+      if (Array.isArray(item.content)) {
+        for (const c of item.content) if (c && c.type === 'input_text' && typeof c.text === 'string') out.push(c.text);
+      }
+    } else if (item.type === 'message') {
+      // Require the message to actually be assistant output: role === 'assistant'
+      // AND content.type === 'output_text'. A user message with output_text is NOT
+      // assistant output and is excluded.
+      if (item.role === 'assistant' && Array.isArray(item.content)) {
+        for (const c of item.content) if (c && c.type === 'output_text' && typeof c.text === 'string') out.push(c.text);
+      }
+    }
+  }
+  return out.join(' ').trim().slice(0, MAX_RESULT_CHARS) || null;
+}
+
+function pendingForJob(job, approvals) {
+  const pending = [];
+  for (const [, entry] of approvals) {
+    if (entry.resolved) continue;
+    const info = entry.info;
+    if (info.threadId && job.threadId && info.threadId !== job.threadId) continue;
+    const binary = SUPPORTED_BINARY_METHODS.includes(info.method);
+    pending.push({
+      approvalId: info.approvalId,
+      kind: info.kind,
+      method: info.method,
+      reason: info.reason || null,
+      itemId: info.itemId || null,
+      supportedDecisionMode: binary ? ['approve', 'deny'] : null,
+      requiresStructuredResponse: !binary,
+    });
+  }
+  return pending;
+}
 
 export class AppServerExecutor {
   constructor({ dataRoot = null, codexBin = null, listen = null, cwd = null, client = null, jobMap = null } = {}) {
@@ -91,12 +141,12 @@ export class AppServerExecutor {
     else if (!this.client._connected) await this.client.connect();
   }
 
-  async start({ prompt, cwd = null, sandbox = null } = {}) {
+  async start({ prompt, cwd = null, sandbox = null, workspaceRoot = null, workspaceId = null } = {}) {
     await this._ensureConnected();
 
     const jobId = makeJobId();
     const mutationUnitId = makeMutationUnitId();
-    this.jobMap.save(jobId, { jobId, mutationUnitId, threadId: null, turnId: null, state: 'created', createdAt: Date.now(), updatedAt: Date.now() });
+    this.jobMap.save(jobId, { jobId, mutationUnitId, workspaceRoot, workspaceId, threadId: null, turnId: null, state: 'created', createdAt: Date.now(), updatedAt: Date.now() });
 
     const threadParams = { ...(cwd ? { cwd } : {}), ...(sandbox ? { sandbox } : {}) };
     const threadRes = await this.client.request('thread/start', threadParams);
@@ -156,16 +206,23 @@ export class AppServerExecutor {
     if (!this.client.isRunning) recoveryRequired = true;
 
     const turn = thread && Array.isArray(thread.turns) ? thread.turns.find((t) => t && t.id === job.turnId) || null : null;
+    const assistantText = turn ? extractAssistantText(turn) : null;
+    const pendingApprovals = pendingForJob(job, this._approvals);
     return {
       jobId,
       threadId: job.threadId,
       turnId: job.turnId,
       mutationUnitId: job.mutationUnitId || null,
+      workspaceRoot: job.workspaceRoot || null,
+      workspaceId: job.workspaceId || null,
       state: job.state,
       live,
       recoveryRequired,
       readErrorCode,
       threadStatus: thread ? thread.status : null,
+      result: assistantText,
+      assistantText,
+      pendingApprovals,
       turn: turn ? {
         id: turn.id,
         status: turn.status,
