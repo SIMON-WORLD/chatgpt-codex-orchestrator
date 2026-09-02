@@ -19,23 +19,42 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function setupCodexProfile(dataRoot, model) {
   const home = path.join(dataRoot, 'codex-profile');
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
-  const lines = [
-    '# orchestrator v0.2 isolated Codex runtime profile',
-    'model_provider = "openai"',
-    'approval_policy = "never"',
-    'sandbox_mode = "read-only"',
-  ];
-  // Model is configurable; omit to use the Codex default.
-  if (model) lines.push(`model = "${model}"`);
-  fs.writeFileSync(path.join(home, 'config.toml'), lines.join('\n'), 'utf8');
-  return home;
+  const userHome = process.env.USER_CODEX_HOME || path.join(os.homedir(), '.codex');
+  // Copy the user's auth.json into the isolated profile (user-local credential, never in repo/report).
+  let copiedAuth = false;
+  const userAuth = path.join(userHome, 'auth.json');
+  if (fs.existsSync(userAuth)) { fs.copyFileSync(userAuth, path.join(home, 'auth.json')); copiedAuth = true; }
+  // Build a MINIMAL config reusing the user's local model provider + bearer token (if any)
+  // so the App Server routes to the reachable local endpoint instead of api.openai.com.
+  const lines = ['model_provider = "openai-chat-completions"', 'approval_policy = "never"', 'sandbox_mode = "read-only"'];
+  if (model) lines.push('model = "' + model + '"');
+  let baseUrl = 'http://127.0.0.1:19100/v1';
+  let token = null;
+  const userConfig = path.join(userHome, 'config.toml');
+  if (fs.existsSync(userConfig)) {
+    const raw = fs.readFileSync(userConfig, 'utf8');
+    const bu = raw.match(/base_url\s*=\s*"([^"]+)"/);
+    if (bu) baseUrl = bu[1];
+    const tk = raw.match(/experimental_bearer_token\s*=\s*"([^"]+)"/);
+    if (tk) token = tk[1];
+  }
+  lines.push('[model_providers.openai-chat-completions]');
+  lines.push('name = "deepseek"');
+  lines.push('base_url = "' + baseUrl + '"');
+  lines.push('wire_api = "responses"');
+  lines.push('requires_openai_auth = true');
+  if (token) lines.push('experimental_bearer_token = "' + token + '"');
+  fs.writeFileSync(path.join(home, 'config.toml'), lines.join('\n') + '\n', 'utf8');
+  return { home, copiedAuth };
 }
 
 async function main() {
   const dataRoot = process.env.V02_SMOKE_DATA_ROOT || path.join(os.tmpdir(), 'v02-codesmoke-' + Date.now());
   fs.mkdirSync(dataRoot, { recursive: true });
   const model = process.env.CODEX_MODEL || null;
-  const profileHome = setupCodexProfile(dataRoot, model);
+  const profile = setupCodexProfile(dataRoot, model);
+  const profileHome = profile.home;
+  process.stdout.write('codex_profile_auth=' + (profile.copiedAuth ? 'copied' : 'absent') + '\n');
 
   const codex = discoverCodexAppServer();
   const client = new AppServerClient({

@@ -118,17 +118,17 @@ export class BrainLocalRuntime {
     if (this.mcp.httpServer && this.mcp.httpServer.listening) return true;
     try {
       const host = this.mcp.host === '0.0.0.0' ? '127.0.0.1' : this.mcp.host;
-      const res = await fetch(`${host}:${this.mcp.port}/readyz`);
+      const res = await fetch(`http://${host}:${this.mcp.port}/readyz`);
       return res.ok;
     } catch { return false; }
   }
 
   async _tunnelReady() {
     const url = this._tunnelHealthUrl();
-    if (!url) {
-      // No health URL configured -> cannot prove real readiness; only report process-alive.
-      return !!this.tunnelProcess && this.tunnelProcess.exitCode === null;
-    }
+    // readyForTunnel requires REAL /readyz proof. Without a configured health URL we
+    // cannot prove the tunnel is ready, so it is NOT ready (process-alive is not a
+    // substitute for readiness).
+    if (!url) return false;
     try {
       const res = await fetch(url);
       return res.ok;
