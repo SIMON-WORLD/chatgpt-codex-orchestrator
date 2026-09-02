@@ -39,6 +39,9 @@ function extractAssistantText(turn) {
       if (Array.isArray(item.content)) {
         for (const c of item.content) if (c && c.type === 'input_text' && typeof c.text === 'string') out.push(c.text);
       }
+    } else if (item.type === 'agentMessage') {
+      // Real App Server uses camelCase agentMessage with a direct `text` field.
+      if (typeof item.text === 'string' && item.text) out.push(item.text);
     } else if (item.type === 'message') {
       // Require the message to actually be assistant output: role === 'assistant'
       // AND content.type === 'output_text'. A user message with output_text is NOT
@@ -365,4 +368,4 @@ export class AppServerExecutor {
   async shutdown() { await this.client.close(); }
 }
 
-export { TERMINAL_TURN_STATES };
+export { TERMINAL_TURN_STATES, extractAssistantText };

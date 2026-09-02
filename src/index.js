@@ -74,3 +74,4 @@ export { GovernanceService, createGovernanceService, GovernanceError, GOV_CONTRO
 export { loadV02Config, DEFAULT_V02_CONFIG } from './config.js';
 export { BrainLocalRuntime, createBrainLocalRuntime, v02Doctor } from './transport/brain-local.js';
 export { resolveCodexAppServer, discoverCodexAppServer } from './transport/codex.js';
+export { discoverProvider, prepareIsolatedCodexHome, injectProviderTokenEnv, probeResponsesCompatibility, PROVIDER_TOKEN_ENV } from './transport/codex-profile.js';

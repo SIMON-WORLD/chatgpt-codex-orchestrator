@@ -19,6 +19,7 @@ import { createBrainLocalRuntime, loadV02Config } from '../src/transport/brain-l
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_FIXTURE = path.join(__dirname, '..', 'test-fixtures', 'executor', 'fake-app-server.mjs');
 import { discoverCodexAppServer, resolveCodexAppServer } from '../src/transport/codex.js';
+import { discoverProvider, prepareIsolatedCodexHome, injectProviderTokenEnv } from '../src/transport/codex-profile.js';
 const DISCOVERED = discoverCodexAppServer();
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -35,8 +36,10 @@ async function main() {
   runGit(workspace, ['config', 'user.email', 'e2e@example.com']);
   runGit(workspace, ['config', 'user.name', 'e2e']);
 
+  let provider = null;
+  if (useReal) { provider = discoverProvider(); const ph = prepareIsolatedCodexHome(provider, dataRoot, { model: process.env.CODEX_MODEL || null }); injectProviderTokenEnv(provider); }
   const codexConfig = useReal
-    ? { bin: DISCOVERED.bin, spawnArgs: DISCOVERED.argv, cwd: dataRoot }
+    ? { bin: DISCOVERED.bin, spawnArgs: DISCOVERED.argv, cwd: dataRoot, runtimeProfile: provider ? path.join(dataRoot, 'codex-profile') : null }
     : { bin: process.execPath, spawnArgs: [FAKE_FIXTURE], cwd: dataRoot, extraArgs: [] };
   const config = loadV02Config({
     port: 0,
@@ -71,27 +74,27 @@ async function main() {
 
     // Advance to the Codex step.
     await call('governance_transition', { taskId: 't1', stepId: 's2', control: 'TASK', acceptance: [{ id: 'a2', required: true }], route: 'CODEX_DELEGATE' });
-    const started = await call('codex_start', { workspaceId: ws.workspaceId, prompt: 'do it' });
+    const started = await call('codex_start', { workspaceId: ws.workspaceId, prompt: useReal ? 'Reply with exactly REAL_CODEX_E2E_OK' : 'do it' });
     if (!started.jobId) throw new Error('codex_start did not return jobId');
     let got = null;
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 300; i++) {
       const g = await call('codex_get', { workspaceId: ws.workspaceId, jobId: started.jobId });
       got = g.result;
-      if (got && (got.includes('TASK_DONE_MARKER') || got.includes('ASSISTANT_OUTPUT_TEXT_MARKER'))) break;
-      await sleep(20);
+      if (got && (useReal ? got.includes('REAL_CODEX_E2E_OK') : (got.includes('TASK_DONE_MARKER') || got.includes('ASSISTANT_OUTPUT_TEXT_MARKER')))) break;
+      await sleep(useReal ? 300 : 20);
     }
-    if (!got || !(got.includes('TASK_DONE_MARKER') || got.includes('ASSISTANT_OUTPUT_TEXT_MARKER'))) throw new Error('codex_get did not return the expected assistant result');
+    if (!got || !(useReal ? got.includes('REAL_CODEX_E2E_OK') : (got.includes('TASK_DONE_MARKER') || got.includes('ASSISTANT_OUTPUT_TEXT_MARKER')))) throw new Error('codex_get did not return the expected assistant result');
     await call('governance_record_result', { taskId: 't1', stepId: 's2', executorStatus: 'success', evidence: [{ acceptanceId: 'a2', status: 'pass' }] });
     const done = await call('governance_transition', { taskId: 't1', stepId: 's2', control: 'DONE' });
     if (done.blocked) throw new Error('DONE blocked: ' + done.reason);
 
-    process.stdout.write('PRODUCTION_LOCAL_E2E=PASS\n');
+    process.stdout.write((useReal ? 'PRODUCTION_REAL_CODEX_E2E=PASS' : 'PRODUCTION_LOCAL_E2E=PASS') + '\n');
     process.stdout.write('route=' + route.route + ' codexResult=' + (got || '').slice(0, 60) + '\n');
     await client.close();
     await runtime.close();
     process.exit(0);
   } catch (e) {
-    process.stdout.write('PRODUCTION_LOCAL_E2E=FAIL\n');
+    process.stdout.write((useReal ? 'PRODUCTION_REAL_CODEX_E2E=FAIL' : 'PRODUCTION_LOCAL_E2E=FAIL') + '\n');
     process.stdout.write('reason=' + String(e.message || e).slice(0, 300) + '\n');
     try { await client.close(); } catch {}
     try { await runtime.close(); } catch {}
