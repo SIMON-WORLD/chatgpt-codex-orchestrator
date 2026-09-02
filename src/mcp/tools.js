@@ -13,6 +13,8 @@ import { WorkspaceError } from '../local/workspace.js';
 import { ChangeSetService } from '../local/change-set.js';
 import { OperationState } from '../state/operation-state.js';
 import { VerifyService } from '../local/verify.js';
+import { createCapabilityRouter } from '../router/capability-router.js';
+import { createGovernanceService } from '../governance/index.js';
 
 const R = { readOnlyHint: true };
 const M = { readOnlyHint: false, destructiveHint: true };
@@ -38,7 +40,7 @@ function assertSameWorkspace(registry, workspaceId, job) {
   return ws.root;
 }
 
-export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, verifyService = null, operationState = null, verifyChecks = {} } = {}) {
+export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, verifyService = null, operationState = null, verifyChecks = {}, capabilityRouter = null, governanceService = null } = {}) {
   // Shared mutation-ownership authority: when a Codex executor is present, Direct
   // Local mutation MUST use the SAME owner instance.
   let owner = mutationOwner;
@@ -103,6 +105,75 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       inputSchema: z.object({ workspaceId: workspaceIdSchema, check: z.string() }),
     }, async ({ workspaceId, check }) => {
       try { return text(await verify.run({ workspaceId, check })); } catch (e) { return errText(e.message); }
+    });
+  }
+
+  // ---- Capability Router + Governance (M4) ---------------------------------
+  const router = capabilityRouter || createCapabilityRouter();
+  const governance = governanceService || createGovernanceService();
+
+  if (router) {
+    server.registerTool('route_decide', {
+      description: 'Deterministic capability routing over structured task facts (read-only). No model/NL reasoning.',
+      annotations: R,
+      inputSchema: z.object({
+        requiresNative: z.boolean().optional(),
+        requiresLocal: z.boolean().optional(),
+        readOnly: z.boolean().optional(),
+        mutationRequired: z.boolean().optional(),
+        exactChangeKnown: z.boolean().optional(),
+        boundedChange: z.boolean().optional(),
+        multiFile: z.boolean().optional(),
+        unknownRootCause: z.boolean().optional(),
+        iterative: z.boolean().optional(),
+        longRunning: z.boolean().optional(),
+      }),
+    }, async (facts) => {
+      try { return text(router.decideStrict(facts)); } catch (e) { return errText(e.message); }
+    });
+  }
+
+  if (governance) {
+    server.registerTool('governance_transition', {
+      description: 'Record a Brain governance control (PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE) with acceptance contract and revise delta. Executor RESULT fields belong only to governance_record_result.',
+      annotations: M,
+      inputSchema: z.object({
+        taskId: z.string().optional(),
+        stepId: z.string().optional(),
+        control: z.enum(['PLAN', 'TASK', 'REVISE', 'REPLAN', 'ASK_USER', 'PUBLISH', 'DONE']),
+        route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
+        localRoute: z.enum(['CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE']).optional(),
+        acceptance: z.array(z.object({ id: z.string(), required: z.boolean().optional(), requiredEvidenceLevel: z.string().optional() })).optional(),
+        reviseDelta: z.object({ preserve: z.array(z.string()).optional(), invalidate: z.array(z.string()).optional() }).optional(),
+        whyBlocked: z.string().optional(),
+        minimalUserAction: z.string().optional(),
+        question: z.string().optional(),
+      }).strict(),
+    }, async (args) => {
+      try { return text(governance.transition(args)); } catch (e) { return errText(e.message); }
+    });
+
+    server.registerTool('governance_record_result', {
+      description: 'Ingest an executor RESULT for the active step: writes executorStatus, evidence, machine gate, changed/proof invalidation, and optional publication result.',
+      annotations: M,
+      inputSchema: z.object({
+        taskId: z.string().optional(),
+        stepId: z.string(),
+        executorStatus: z.enum(['success', 'failure', 'unknown']),
+        evidence: z.array(z.object({ acceptanceId: z.string(), status: z.string().optional(), evidenceLevel: z.string().optional(), kind: z.string().optional(), summary: z.string().optional() })).optional(),
+        changed: z.array(z.string()).optional(),
+        publication: z.object({ ok: z.boolean().optional(), externalReadback: z.any().optional() }).optional(),
+      }),
+    }, async (args) => {
+      try { return text(governance.recordResult(args)); } catch (e) { return errText(e.message); }
+    });
+
+    server.registerTool('governance_status', {
+      description: 'Return compact current governance state (read-only).',
+      annotations: R,
+      inputSchema: z.object({}),
+    }, async () => {
+      try { return text(governance.status()); } catch (e) { return errText(e.message); }
     });
   }
 
