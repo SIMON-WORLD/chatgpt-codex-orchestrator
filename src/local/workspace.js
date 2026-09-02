@@ -1,4 +1,4 @@
-// chatgpt-codex-orchestrator: explicit workspace binding + containment (v0.2 M2).
+// chatgpt-codex-orchestrator: explicit workspace binding + containment (v0.2 M2/M3).
 // workspace_open is mandatory before any local repo operation. The authorization
 // boundary is the configured allowedRoots, NOT an implicit arbitrary process cwd.
 //
@@ -15,13 +15,11 @@ export class WorkspaceError extends Error {
 
 function isWithin(root, target) {
   const norm = (p) => path.resolve(p);
-  const r = norm(root);
-  const t = norm(target);
+  const r = norm(root); const t = norm(target);
   if (t === r) return true;
   return t.startsWith(r + path.sep);
 }
 
-// Case-insensitive containment for Windows.
 function isWithinCI(root, target) {
   const norm = (p) => path.resolve(p);
   const r = process.platform === 'win32' ? norm(root).toLowerCase() : norm(root);
@@ -37,9 +35,8 @@ function realpathOrNull(p) {
 export class WorkspaceRegistry {
   constructor({ allowedRoots = null } = {}) {
     this.allowedRoots = (allowedRoots && allowedRoots.length ? allowedRoots : [process.cwd()])
-      .map((r) => path.resolve(r))
-      .filter(Boolean);
-    this._workspaces = new Map(); // workspaceId -> { workspaceId, root, isGitRepo }
+      .map((r) => path.resolve(r)).filter(Boolean);
+    this._workspaces = new Map();
   }
 
   get hasAllowedRoots() { return this.allowedRoots.length > 0; }
@@ -55,15 +52,11 @@ export class WorkspaceRegistry {
   open({ path: rawPath } = {}) {
     if (!rawPath || typeof rawPath !== 'string') throw new WorkspaceError('workspace_open requires a path');
     const requested = path.resolve(rawPath);
-    let canonical = realpathOrNull(requested);
+    const canonical = realpathOrNull(requested);
     if (!canonical) throw new WorkspaceError(`workspace path does not exist: ${requested}`);
-    if (!fs.existsSync(canonical) || !fs.statSync(canonical).isDirectory()) {
-      throw new WorkspaceError(`workspace path is not a directory: ${canonical}`);
-    }
+    if (!fs.existsSync(canonical) || !fs.statSync(canonical).isDirectory()) throw new WorkspaceError(`workspace path is not a directory: ${canonical}`);
     const allowed = this._allowedRootFor(canonical);
-    if (!allowed) {
-      throw new WorkspaceError(`workspace path not within configured allowed roots: ${canonical}`);
-    }
+    if (!allowed) throw new WorkspaceError(`workspace path not within configured allowed roots: ${canonical}`);
     const workspaceId = crypto.randomUUID();
     const isGitRepo = detectGitRepo(canonical);
     const ws = { workspaceId, root: canonical, isGitRepo, allowedRoot: allowed };
@@ -77,25 +70,35 @@ export class WorkspaceRegistry {
     return ws;
   }
 
-  // Resolve a relative path inside the bound workspace with containment checks.
+  // Read-path resolution with containment checks (existing target).
   resolve(workspaceId, relPath) {
     const ws = this.get(workspaceId);
     if (!relPath) throw new WorkspaceError('resolve requires a path');
     const target = path.resolve(ws.root, relPath);
     if (!isWithin(ws.root, target)) throw new WorkspaceError(`path escapes workspace: ${relPath}`);
-    // Symlink/junction escape: if the target exists, ensure its real path stays in root.
     const real = realpathOrNull(target);
     if (real && !isWithin(ws.root, real)) throw new WorkspaceError(`symlink escapes workspace: ${relPath}`);
     return { workspace: ws, absolute: target };
+  }
+
+  // Write-safe resolution: for an EXISTING target, canonicalize the resolved path
+  // and reject symlink/junction escape. For a NEW target, canonicalize the nearest
+  // existing parent and reject parent escape / .. / absolute escape.
+  resolveWritable(workspaceId, relPath, { forCreate = false } = {}) {
+    const ws = this.get(workspaceId);
+    if (!relPath) throw new WorkspaceError('resolveWritable requires a path');
+    if (path.isAbsolute(relPath)) throw new WorkspaceError(`absolute path not allowed: ${relPath}`);
+    const target = path.resolve(ws.root, relPath);
+    if (!isWithin(ws.root, target)) throw new WorkspaceError(`path escapes workspace: ${relPath}`);
+    const probe = forCreate ? (fs.existsSync(target) ? target : path.dirname(target)) : target;
+    const real = realpathOrNull(probe);
+    if (real && !isWithin(ws.root, real)) throw new WorkspaceError(`symlink/junction escapes workspace: ${relPath}`);
+    return { workspace: ws, absolute: target, exists: fs.existsSync(target) };
   }
 
   getWorkspace(workspaceId) { return this.get(workspaceId); }
 }
 
 export function detectGitRepo(root) {
-  try {
-    const dotGit = path.join(root, '.git');
-    if (fs.existsSync(dotGit)) return true;
-    return false;
-  } catch { return false; }
+  try { return fs.existsSync(path.join(root, '.git')); } catch { return false; }
 }

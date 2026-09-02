@@ -38,3 +38,19 @@ export function isIgnoredSearchDir(name) {
     lower === '.next' || lower === '.venv' || lower === 'venv' || lower === '.state' ||
     lower === 'coverage';
 }
+
+// Blocked for DIRECT LOCAL mutation: high-risk / internal / generated / cache /
+// dependency paths. Ordinary application source (e.g. src/secret-utils.js,
+// src/token-parser.js) remains writable if otherwise allowed.
+const BLOCKED_MUTATION_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverage', '.state', '.codex', 'credentials', 'secrets', 'runtime']);
+
+export function isBlockedMutationPath(relPath) {
+  const parts = String(relPath || '').replace(/\\/g, '/').split('/').filter(Boolean);
+  for (let i = 0; i < parts.length; i++) {
+    const lower = parts[i].toLowerCase();
+    if (BLOCKED_MUTATION_DIRS.has(lower)) return true;
+    if (SENSITIVE_DIRS.has(lower)) return true;
+    if (isSensitivePath(parts.slice(0, i + 1).join('/'))) return true;
+  }
+  return false;
+}
