@@ -3,7 +3,7 @@
 // routing target; it does not reason over natural language and never calls a model.
 // It is the executor-selection layer that sits under Governance.
 
-import { decideRoute, normalizeFacts, RouterError, ROUTES, MUTATION_OWNERS, FACT_KEYS } from './decide.js';
+import { decideRoute, normalizeFacts, validateConsistency, RouterError, ROUTES, MUTATION_OWNERS, FACT_KEYS } from './decide.js';
 
 export class CapabilityRouter {
   constructor({ decide = decideRoute } = {}) {
@@ -24,4 +24,4 @@ export class CapabilityRouter {
 
 export function createCapabilityRouter(opts) { return new CapabilityRouter(opts); }
 
-export { decideRoute, normalizeFacts, RouterError, ROUTES, MUTATION_OWNERS, FACT_KEYS };
+export { decideRoute, normalizeFacts, validateConsistency, RouterError, ROUTES, MUTATION_OWNERS, FACT_KEYS };

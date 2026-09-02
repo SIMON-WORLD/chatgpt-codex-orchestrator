@@ -157,6 +157,21 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       try { return text(governance.transition(args)); } catch (e) { return errText(e.message); }
     });
 
+    server.registerTool('governance_record_result', {
+      description: 'Ingest an executor RESULT for the active step: writes executorStatus, evidence, machine gate, changed/proof invalidation, and optional publication result.',
+      annotations: M,
+      inputSchema: z.object({
+        taskId: z.string().optional(),
+        stepId: z.string(),
+        executorStatus: z.enum(['success', 'failure', 'unknown']),
+        evidence: z.array(z.object({ acceptanceId: z.string(), status: z.string().optional(), evidenceLevel: z.string().optional(), kind: z.string().optional(), summary: z.string().optional() })).optional(),
+        changed: z.array(z.string()).optional(),
+        publication: z.object({ ok: z.boolean().optional(), externalReadback: z.any().optional() }).optional(),
+      }),
+    }, async (args) => {
+      try { return text(governance.recordResult(args)); } catch (e) { return errText(e.message); }
+    });
+
     server.registerTool('governance_status', {
       description: 'Return compact current governance state (read-only).',
       annotations: R,

@@ -35,7 +35,20 @@ export function normalizeFacts(facts) {
     else if (typeof v === 'boolean') out[k] = v;
     else throw new RouterError(`routing fact '${k}' must be a boolean`);
   }
-  return out;
+  return validateConsistency(out);
+}
+
+// Structural consistency rules (RFC v0.2 capability-routing §B / Task r1 item 7).
+// Contradictory facts are a deterministic RouterError, never silently coerced.
+export function validateConsistency(f) {
+  const localWorkFacts = ['readOnly', 'mutationRequired', 'exactChangeKnown', 'boundedChange', 'multiFile', 'unknownRootCause', 'iterative', 'longRunning'];
+  if (!f.requiresLocal) {
+    if (localWorkFacts.some((k) => f[k])) throw new RouterError('local execution facts provided but requiresLocal is false');
+  }
+  if (f.readOnly && f.mutationRequired) throw new RouterError('readOnly and mutationRequired are contradictory');
+  if (f.mutationRequired && f.readOnly) throw new RouterError('mutationRequired and readOnly are contradictory');
+  if (f.requiresLocal && !f.readOnly && !f.mutationRequired) throw new RouterError('requiresLocal must claim a readOnly or mutationRequired path');
+  return f;
 }
 
 // Route the local leg independently. Returns a READ-ONLY route name always.

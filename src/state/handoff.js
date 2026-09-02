@@ -26,7 +26,7 @@ export function buildHandoff(input = {}) {
   } = input;
 
   if (machineGate !== 'pending' && !['pass', 'fail'].includes(machineGate)) throw new HandoffError('machineGate must be pending|pass|fail');
-  if (brainAcceptance !== 'pending' && !['accepted', 'rejected'].includes(brainAcceptance)) throw new HandoffError('brainAcceptance must be pending|accepted|rejected');
+  if (brainAcceptance !== 'pending' && !['accepted', 'rejected', 'revise'].includes(brainAcceptance)) throw new HandoffError('brainAcceptance must be pending|accepted|rejected|revise');
 
   const handoff = { machineGate, brainAcceptance };
   if (taskId) handoff.taskId = taskId;
@@ -53,6 +53,6 @@ export function validateHandoff(handoff) {
     if (!known.has(k)) throw new HandoffError('unexpected handoff field: ' + k);
   }
   if (handoff.machineGate !== undefined && !['pending', 'pass', 'fail'].includes(handoff.machineGate)) throw new HandoffError('invalid machineGate');
-  if (handoff.brainAcceptance !== undefined && !['pending', 'accepted', 'rejected'].includes(handoff.brainAcceptance)) throw new HandoffError('invalid brainAcceptance');
+  if (handoff.brainAcceptance !== undefined && !['pending', 'accepted', 'rejected', 'revise'].includes(handoff.brainAcceptance)) throw new HandoffError('invalid brainAcceptance');
   return true;
 }

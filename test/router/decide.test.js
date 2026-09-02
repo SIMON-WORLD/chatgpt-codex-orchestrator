@@ -106,3 +106,23 @@ test('missing facts default to false', () => {
   const d = decideRoute({});
   assert.equal(d.route, 'CHATGPT_NATIVE');
 });
+
+// ---- r1: contradiction / consistency validation ----------------------------
+
+test('requiresLocal=false with local execution facts -> RouterError', () => {
+  assert.throws(() => decideRoute({ requiresLocal: false, readOnly: true }), /local execution facts provided but requiresLocal is false/);
+  assert.throws(() => decideRoute({ requiresLocal: false, mutationRequired: true }), /local execution facts provided but requiresLocal is false/);
+});
+
+test('readOnly and mutationRequired contradictory -> RouterError', () => {
+  assert.throws(() => decideRoute({ requiresLocal: true, readOnly: true, mutationRequired: true }), /readOnly and mutationRequired are contradictory/);
+});
+
+test('requiresLocal=true must claim a readOnly or mutationRequired path -> RouterError', () => {
+  assert.throws(() => decideRoute({ requiresLocal: true, readOnly: false, mutationRequired: false }), /requiresLocal must claim a readOnly or mutationRequired path/);
+});
+
+test('normalizeFacts applies the same consistency validation', () => {
+  assert.throws(() => normalizeFacts({ requiresLocal: false, multiFile: true }), /local execution facts provided but requiresLocal is false/);
+  assert.doesNotThrow(() => normalizeFacts({ requiresLocal: true, readOnly: true, mutationRequired: false }));
+});
