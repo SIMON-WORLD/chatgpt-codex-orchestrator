@@ -64,3 +64,8 @@ export { ChangeSetService, computeSha256, EDIT_BOUNDS } from './local/change-set
 export { OperationState, OPERATION_STATUSES } from './state/operation-state.js';
 export { VerifyService, VERIFY_EFFECTS } from './local/verify.js';
 export { isBlockedMutationPath } from './local/sensitive.js';
+
+// --- v0.2 M4: Capability Router + Governance (additive, non-default) ---------
+export { CapabilityRouter, createCapabilityRouter, decideRoute, normalizeFacts, RouterError, ROUTES, FACT_KEYS, MUTATION_OWNERS as ROUTE_MUTATION_OWNERS } from './router/capability-router.js';
+export { buildHandoff, validateHandoff, HANDOFF_FIELDS, HandoffError } from './state/handoff.js';
+export { GovernanceService, createGovernanceService, GovernanceError, GOV_CONTROLS, GOV_ROUTES, governanceGateOk } from './governance/index.js';
