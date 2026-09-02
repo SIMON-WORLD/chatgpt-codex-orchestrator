@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TaskManager } from '../src/task-manager.js';
+import { TaskManager } from '../src/legacy/task-manager.js';
 import { newTaskState, saveState } from '../src/task-state.js';
 
 function dir() { const d = path.join(os.tmpdir(), 'tm-' + Date.now()); fs.mkdirSync(d, { recursive: true }); return d; }

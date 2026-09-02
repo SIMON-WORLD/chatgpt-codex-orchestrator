@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import net from 'node:net';
-import { CodexWorkerClient } from '../src/worker-client.js';
+import { CodexWorkerClient } from '../src/legacy/worker-client.js';
 
 const TOKEN = 'secret-token-abc123';
 

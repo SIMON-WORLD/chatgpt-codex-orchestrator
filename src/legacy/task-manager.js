@@ -12,13 +12,13 @@ import path from 'node:path';
 import {
   newTaskState, saveState, loadState, addStep, findStep, setStepStatus, compactStep,
   bumpReviseRetries, resetReviseRetries, defaultVerificationPolicy,
-} from './task-state.js';
-import { runtimePaths } from './runtime-paths.js';
+} from '../task-state.js';
+import { runtimePaths } from '../runtime-paths.js';
 import {
   parseBrainOutput, buildResult, resultToText, checkAcceptanceGate, registerAcceptances, applyEvidence,
   normalizeEvidence, parseEvidenceBlock, buildCompactTask, buildFullTaskPacket, packetSize, ProtocolError,
-} from './protocol.js';
-import { buildVerificationPlan, resolveVerificationCommands, resolveVerificationLevel, isDocOnlyStep, assertMandatoryVerification } from './verification.js';
+} from '../protocol.js';
+import { buildVerificationPlan, resolveVerificationCommands, resolveVerificationLevel, isDocOnlyStep, assertMandatoryVerification } from '../verification.js';
 
 const STEP_ID_PREFIX = 'step-';
 

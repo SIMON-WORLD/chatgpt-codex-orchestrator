@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TaskService } from '../src/task-service.js';
+import { TaskService } from '../src/legacy/task-service.js';
 
 function dir() { const d = path.join(os.tmpdir(), 'adv-' + Date.now()); fs.mkdirSync(d, { recursive: true }); return d; }
 class B { constructor(replies){ this.replies=[...replies]; this.conversationId='c'; this.conversationUrl='https://chatgpt.com/c/c'; this.ownedTabId='t'; this.sent=0; }

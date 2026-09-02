@@ -3,8 +3,8 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TaskService } from '../src/task-service.js';
-import { TaskManager } from '../src/task-manager.js';
+import { TaskService } from '../src/legacy/task-service.js';
+import { TaskManager } from '../src/legacy/task-manager.js';
 import { newTaskState, saveState, loadState, setStepStatus, addStep, compactStep, findStep } from '../src/task-state.js';
 import { buildCompactTask, buildFullTaskPacket, buildResult, packetSize, parseBrainOutput, normalizeResult, resultToText } from '../src/protocol.js';
 

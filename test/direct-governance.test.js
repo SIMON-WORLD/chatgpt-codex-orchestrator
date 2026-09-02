@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import { evaluateDirectAcceptanceGate, createProofLedger, createDirectGovernance, planVerification, verifyTierPrecondition, buildBootstrapEvidence, createDirectMetrics, attemptLateReplyRecovery, normalizeRelevantPath } from '../src/direct-governance.js';
 import { createPublicationTransaction, publicationReadyForDone, buildExternalEvidence, parseRemoteRef } from '../src/publication-transaction.js';
 import { CONTROLS, isTerminalControl, validateLifecycleAfterDone, parseBrainOutput } from '../src/protocol.js';
-import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, evaluatePublicationGate, evaluateDoneGate } from '../src/direct-mode.js';
-import { createTabFacade } from '../src/iab-transport.js';
+import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, evaluatePublicationGate, evaluateDoneGate } from '../src/legacy/direct-mode.js';
+import { createTabFacade } from '../src/legacy/iab-transport.js';
 
 test('missing acceptance evidence blocks completion', () => {
   const gate = evaluateDirectAcceptanceGate({ acceptance: ['U1', 'U2'], evidence: [{ acceptanceId: 'U1', status: 'pass' }] });

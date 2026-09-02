@@ -1,6 +1,6 @@
 // chatgpt-codex-orchestrator: LoopController - closes the Brain <-> Codex executor loop.
 // ChatGPT = planner/reviewer. Codex = executor. The loop continues until DONE or ASK_USER.
-import { parseControl, extractDirective } from './directives.js';
+import { parseControl, extractDirective } from '../directives.js';
 
 export class LoopController {
   constructor({ brain, executor, logger = () => {}, maxTurns = 20 }) {

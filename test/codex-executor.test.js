@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CodexExecutor, loadCodexConfig } from '../src/codex-executor.js';
+import { CodexExecutor, loadCodexConfig } from '../src/legacy/codex-executor.js';
 
 function tempConfig() {
   const cfg = [

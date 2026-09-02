@@ -4,9 +4,9 @@
 // A task lock prevents two runtimes from driving the same task simultaneously.
 import path from 'node:path';
 import { TaskManager } from './task-manager.js';
-import { newTaskState } from './task-state.js';
-import { TaskLock } from './task-lock.js';
-import { makeTaskId } from './task-state.js';
+import { newTaskState } from '../task-state.js';
+import { TaskLock } from '../task-lock.js';
+import { makeTaskId } from '../task-state.js';
 
 export class TaskService {
   constructor({ stateDir, runtime }) {

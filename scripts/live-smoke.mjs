@@ -3,7 +3,7 @@
 //   import { runLiveSmoke } from 'file:///.../scripts/live-smoke.mjs'
 //   const ev = await runLiveSmoke()
 //   nodeRepl.write(JSON.stringify(ev, null, 2))
-import { InAppBrowserTransport, openBrainSession } from '../src/iab-transport.js';
+import { InAppBrowserTransport, openBrainSession } from '../src/legacy/iab-transport.js';
 
 function nonce(prefix) {
   return prefix + '_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);

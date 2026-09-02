@@ -6,10 +6,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { evaluateMilestoneAcceptance, evaluateEvidenceLevel, validateStructuredEnvelope, formatRepairPrompt, buildTakeoverContract, applyBrainAcceptanceTransition, extractCanonicalEnvelope, createDirectRunCoordinator, createDirectRunLedger, computePayloadHash, applyReviseDelta, buildAskUserEnvelope } from '../src/protocol-integrity.js';
 import { createDirectGovernance, createProofLedger, createDirectMetrics } from '../src/direct-governance.js';
-import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, evaluatePublicationGate, evaluateDoneGate } from '../src/direct-mode.js';
+import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, evaluatePublicationGate, evaluateDoneGate } from '../src/legacy/direct-mode.js';
 import { isTerminalControl, validateLifecycleAfterDone, parseBrainOutput } from '../src/protocol.js';
-import { AtomicTurnController, ReplyTimeoutError, ComposerTimeoutError } from '../src/atomic-turn.js';
-import { createTabFacade } from '../src/iab-transport.js';
+import { AtomicTurnController, ReplyTimeoutError, ComposerTimeoutError } from '../src/legacy/atomic-turn.js';
+import { createTabFacade } from '../src/legacy/iab-transport.js';
 
 const skillPath = fileURLToPath(new URL('../skills/brain-command/SKILL.md', import.meta.url));
 

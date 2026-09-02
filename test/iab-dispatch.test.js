@@ -4,7 +4,7 @@
 // and that we never double-send.
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { AtomicTurnController } from '../src/atomic-turn.js';
+import { AtomicTurnController } from '../src/legacy/atomic-turn.js';
 
 const CONV = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const CONV_URL = 'https://chatgpt.com/c/' + CONV;

@@ -5,7 +5,7 @@
 
 ---
 
-> **Default path (current Batch): Direct Brain Loop.** The default `$brain-command` uses the current Codex agent + the Codex built-in browser to talk to ChatGPT (one dedicated conversation), executes each `TASK` directly, sends a compact `RESULT`, and publishes on `DONE`. It does **not** start a worker, a ready file, or a nested Codex executor (see `skills/brain-command/SKILL.md` and `src/direct-mode.js`).
+> **Default path (current Batch): Direct Brain Loop.** The default `$brain-command` uses the current Codex agent + the Codex built-in browser to talk to ChatGPT (one dedicated conversation), executes each `TASK` directly, sends a compact `RESULT`, and publishes on `DONE`. It does **not** start a worker, a ready file, or a nested Codex executor (see `skills/brain-command/SKILL.md` and `src/legacy/direct-mode.js`).
 >
 > **Existing conversation:** `$brain-command --conversation "<title>"` / `--conversation-url <url>` / `--adopt-current` adopt an existing ChatGPT history conversation (no new conversation).
 >
@@ -195,3 +195,27 @@ Compaction is Orchestrator-owned. When a step reaches `reviewed`, the manager wr
 - [SKILL](../SKILL.md)
 - [CHANGELOG](../CHANGELOG.md)
 - [Development History](development-history.md)
+
+---
+
+## M6: Legacy IAB Isolation (v0.2 structure)
+
+As of v0.2 M6 the repository distinguishes two runtime paths explicitly:
+
+### Canonical v0.2
+
+ChatGPT -> Custom MCP App -> Secure Tunnel -> local MCP (v0.2 MCP server) -> Router / Governance -> Direct Local (read/search/edit/verify) or Codex App Server
+
+- Production runtime: src/transport/brain-local.js + scripts/v0.2-start.mjs (/mcp, /healthz, /readyz).
+- Canonical import closure does NOT include src/legacy/** (enforced by test/legacy/canonical-import-isolation.test.js).
+- Canonical MCP/Router/Governance/Codex-AppServer path: src/mcp/**, src/router/**, src/local/**, src/executor/app-server-*, src/state/handoff.js, src/governance/index.js.
+
+### Legacy (Alpha.4 IAB / detached runtime)
+
+IAB / Alpha.4 browser transport (Codex in-app browser) -> explicit legacy fallback (feature frozen)
+
+- Legacy modules isolated under src/legacy/: iab-transport, atomic-turn, direct-mode, direct-run-controller, loop-controller, codex-executor, task-manager, task-service, worker-client.
+- Reusable non-browser logic extracted (isPlaceholder / extractConversationId -> src/text-utils.js) so the canonical closure does not depend on the browser composer.
+- Explicit selection: the legacy launcher requires BRAIN_COMMAND_LEGACY=1 (or legacyOptIn: true) to run; the path is non-canonical / experimental.
+- IAB is NOT deleted. Removing it after a successful real-project dogfood (M7) will be a separate decision.
+- M7 will perform real-project dogfood and consider the v0.2 default flip.

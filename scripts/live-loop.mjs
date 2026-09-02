@@ -3,9 +3,9 @@
 //   const { runLiveLoop } = await import('file:///.../scripts/live-loop.mjs')
 //   const ev = await runLiveLoop({ repoDir, goal })
 //   nodeRepl.write(JSON.stringify(ev, null, 2))
-import { InAppBrowserTransport, openBrainSession } from '../src/iab-transport.js';
-import { CodexExecutor } from '../src/codex-executor.js';
-import { LoopController } from '../src/loop-controller.js';
+import { InAppBrowserTransport, openBrainSession } from '../src/legacy/iab-transport.js';
+import { CodexExecutor } from '../src/legacy/codex-executor.js';
+import { LoopController } from '../src/legacy/loop-controller.js';
 
 export async function runLiveLoop({ repoDir, goal, turnOptions = {} }) {
   const transport = new InAppBrowserTransport();

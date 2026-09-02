@@ -10,7 +10,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { normalizeEvidence } from './protocol.js';
-import { isPlaceholder } from './atomic-turn.js';
+import { isPlaceholder } from './text-utils.js';
 import { evaluateEvidenceLevel } from './protocol-integrity.js';
 
 // --- 1) Acceptance gate ------------------------------------------------------
