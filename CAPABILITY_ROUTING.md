@@ -275,7 +275,7 @@ Read-only capability 不应取得 writer mutation ownership。
 
 ## 11. Failure / Reroute Policy
 
-Capability execution 失败时，Brain基于真实失败原因决定：
+Capability execution 失败时，Brain 基于真实失败原因决定：
 
 - capability 本身不可用 → runtime snapshot 更新，选择可用 provider/route；
 - executor implementation failure → `REVISE`；
@@ -289,7 +289,7 @@ Capability execution 失败时，Brain基于真实失败原因决定：
 
 ### M7-A Native-only
 
--真实 ChatGPT Product Capability 任务；
+- 真实 ChatGPT Product Capability 任务；
 - `route = CHATGPT_NATIVE`；
 - Codex calls = 0；
 - 不需要 local 时 Local MCP calls = 0；
