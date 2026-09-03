@@ -63,9 +63,13 @@ ChatGPT 当前 runtime 已有 capability 足够完成任务时，应直接执行
 
 **Attempt #1:** nested `.git` hygiene — **FAIL as product task / PASS as failure-discovery dogfood**；真实暴露 Codex write contract 与 mutation reconciliation P0。
 
-**Hardening:** R1–R6 — **ACCEPTED** via PR #11。Lifecycle contract 现包含 explicit accessMode、read-only non-writer semantics、durable turn↔unit identity、public `codex_reconcile`、identity-safe process-death recovery、foreign-owner fail-closed 与 cross-route regressions。
+**Lifecycle hardening:** R1–R6 — **ACCEPTED** via PR #11。Contract 现包含 explicit accessMode、read-only non-writer semantics、durable turn↔unit identity、public `codex_reconcile`、identity-safe process-death recovery、foreign-owner fail-closed 与 cross-route regressions。
 
-**Next:** 部署 accepted `main`、Refresh Custom MCP schema 后运行 **M7-B attempt #2**。只有 real-project attempt #2 通过，才能认为 hardening 在生产链路上被验证。
+**Attempt #2:** nested `.git` hygiene — **FAIL as product task / PASS as failure-discovery dogfood**；lifecycle/recovery 未再次成为 blocker，但真实暴露 Orchestrator requested `workspace_write` 与 Codex effective runtime permission 不一致。
+
+**Runtime-permission hardening:** R1–R3 — **ACCEPTED** via PR #13。Contract 现包含 credential-safe isolated profile、per-job sandbox/approval/network policy、authoritative `thread/settings/updated` effective evidence、pre-turn fail-closed verification、durable verified snapshot、exact approval/network matching、bounded writable-root verification，以及 real read-only / workspace-write App Server smoke。
+
+**Next:** 部署最新 accepted `main`、Refresh Custom MCP schema 后运行 **M7-B attempt #3**。只有 real-project attempt #3 通过，才能认为 lifecycle + runtime-permission hardening 在生产链路上共同被验证。
 
 ### M7-C — Hybrid
 
