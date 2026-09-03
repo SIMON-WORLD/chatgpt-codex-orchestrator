@@ -57,7 +57,7 @@ The exported `CONTROLS`, `RESULT_STATUSES`, and result helpers live in [`src/pro
 
 ## Task Lifecycle
 
-The lifecycle is owned by [`TaskService`](../src/task-service.js) over a durable store backed by [`TaskManager`](../src/task-manager.js) and [`task-state`](../src/task-state.js).
+The lifecycle is owned by [`TaskService`](../src/legacy/task-service.js) over a durable store backed by [`TaskManager`](../src/legacy/task-manager.js) and [`task-state`](../src/task-state.js).
 
 - `startTask({ goal, repoDir, conversation })` creates state and drives the loop (up to `maxRounds`).
 - `createTask(...)` creates a task **without** running the engine; the host then calls `advanceTask(taskId)` repeatedly.

@@ -6,6 +6,40 @@
 
 ---
 
+## v0.2 候选架构（非默认）— M5/M6 状态
+
+> 与当前 released `v0.1.0-alpha.3` 分离。**v0.2 还不是 CLI/Skill 的默认入口**；默认仍是 Alpha.3 的 IAB Direct Brain Loop（feature-frozen）。
+
+**Canonical v0.2 运行路径：**
+
+```
+ChatGPT (Custom MCP App)
+→ OpenAI Secure Tunnel
+→ local MCP
+→ Router / Governance
+→ Direct Local  或  Codex App Server
+```
+
+```mermaid
+flowchart LR
+    CG[ChatGPT Brain / Custom MCP App] --> T[OpenAI Secure Tunnel]
+    T --> MCP[local MCP]
+    MCP --> RG[Router / Governance]
+    RG --> DL[Direct Local]
+    RG --> CA[Codex App Server]
+```
+
+| v0.2 里程碑 | 状态 |
+|---|---|
+| M1–M4 App Server / local MCP / Router + Governance | 已落地 |
+| M5 Secure Tunnel + real ChatGPT / Codex App Server E2E | **已完成** |
+| M6 legacy IAB 结构隔离（`src/legacy/`） | **已完成** |
+| M7 real-project dogfood + operational default flip | **待定 / 未开始** |
+
+- **IAB / Alpha.4 路径 feature-frozen**：已隔离到 `src/legacy/`，**未删除**。
+- v0.2 运行期 Node 要求与 `package.json` 一致：**`Node.js >= 22`**。
+- `src/index.js` 是 **compatibility barrel**，不是 v0.2 canonical runtime 的 import root；canonical 入口是 `scripts/v0.2-start.mjs`、`src/transport/brain-local.js` 及 `src/{mcp,router,governance,local,executor,state,transport}`。
+
 ## 为什么做这个项目
 
 用 ChatGPT 做规划、用 Codex 做执行来驱动一个编码任务，第一次很容易，但要持续下去却很难：对话会漂移、执行上下文会重置、进程失败会丢失进度，而且“ChatGPT 要什么”和“Codex 实际做了什么”之间缺乏清晰的契约。
@@ -72,7 +106,9 @@ Alpha.3 是当前冻结的 dogfood 基线。
 
 未来方向（非 Alpha.3 要求）：原生 ChatGPT Desktop Brain transport（若出现受支持接口）、Claude / DeepSeek BrainProvider、长运行 feature-branch checkpoint 策略。这些现在不实现。
 
-## 架构
+## 架构（Alpha.3 IAB 默认路径）
+
+> 上图描述 Alpha.3 的 Direct Brain Loop 默认路径；v0.2 canonical 见上文「v0.2 候选架构」。
 
 ```mermaid
 flowchart TD
@@ -91,7 +127,7 @@ flowchart TD
 
 ### 前置条件
 
-- Node.js `>= 18`
+- Node.js `>= 22`
 - ESM 项目（`"type": "module"`）
 - 一次**真实**的 ChatGPT-Brain 运行需要 Codex 内置浏览器（`iab`）运行时——见 [SKILL.md](SKILL.md)
 

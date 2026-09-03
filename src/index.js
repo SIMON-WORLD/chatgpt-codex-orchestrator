@@ -1,3 +1,11 @@
+// chatgpt-codex-orchestrator: COMPATIBILITY BARREL.
+// This module re-exports BOTH the legacy Alpha.3 / Alpha.4 IAB path and the v0.2
+// canonical path (ChatGPT Custom MCP App -> OpenAI Secure Tunnel -> local MCP ->
+// Router/Governance -> Direct Local or Codex App Server) for backward compatibility.
+// It is NOT the canonical v0.2 runtime import root. Canonical v0.2 production
+// entries are scripts/v0.2-start.mjs, src/transport/brain-local.js, and the direct
+// v0.2 modules under src/{mcp,router,governance,local,executor,state,transport}.
+
 export {
   BrainSession,
   InAppBrowserTransport,

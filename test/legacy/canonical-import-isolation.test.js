@@ -2,6 +2,10 @@
 // Proves the canonical v0.2 runtime import closure does NOT include src/legacy/** or any
 // legacy IAB / Alpha.4 module. If the canonical path regresses and imports legacy, this
 // test fails.
+//
+// The scanner is deliberately strengthened to also catch side-effect and dynamic imports
+// (import 'x' / import('x')) so a future canonical module cannot reintroduce legacy via
+// those forms without the gate failing.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,6 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const srcDir = path.join(repoRoot, 'src');
 const legacyDir = path.join(srcDir, 'legacy');
+const FIXTURE = path.join(repoRoot, 'test-fixtures', 'legacy-import-forms.js');
 
 const CANONICAL_ENTRY = [
   'src/transport/brain-local.js',
@@ -54,13 +59,28 @@ function resolveFile(spec, fromFile) {
   return p;
 }
 
+// Small deterministic import scanner. Detects the four import forms a canonical module may
+// use: `import ... from 'x'`, `export ... from 'x'`, side-effect `import 'x'`, and dynamic
+// `import('x')`. Returns specifiers (duplicates removed).
+function importSpecifiers(source) {
+  const out = new Set();
+  const patterns = [
+    // import ... from 'x'  /  export ... from 'x'
+    /(?:import|export)\s[^'"]*?from\s*['"]([^'"]+)['"]/g,
+    // side-effect import 'x'
+    /(?:^|[;\n\r{}])\s*import\s*['"]([^'"]+)['"]/g,
+    // dynamic import('x')
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ];
+  for (const re of patterns) {
+    let m;
+    while ((m = re.exec(source))) out.add(m[1]);
+  }
+  return [...out];
+}
+
 function importsOf(file) {
-  const s = fs.readFileSync(file, 'utf8');
-  const out = [];
-  const re = /(?:import|export)\s[^'"]*from\s*['"]([^'"]+)['"]/g;
-  let m; while ((m = re.exec(s))) out.push(m[1]);
-  // Also handle `import 'x'` side-effect? Ignore here (no side-effect-only in this codebase).
-  return out;
+  return importSpecifiers(fs.readFileSync(file, 'utf8'));
 }
 
 function canonicalClosure() {
@@ -80,16 +100,18 @@ function canonicalClosure() {
   return { resolved, visited };
 }
 
+function isLegacyHit(rel) {
+  if (rel.startsWith('src/legacy/')) return true;
+  const base = path.basename(rel, '.js');
+  return LEGACY_MODS.has(base);
+}
+
 test('canonical v0.2 runtime import closure excludes src/legacy/** and legacy modules', () => {
   const { resolved } = canonicalClosure();
   const legacyHits = [];
   for (const f of resolved) {
     const rel = path.relative(repoRoot, f).replace(/\\/g, '/');
-    if (rel.startsWith('src/legacy/')) legacyHits.push(rel);
-    else {
-      const base = path.basename(f, '.js');
-      if (LEGACY_MODS.has(base)) legacyHits.push(rel + ' (legacy symbol: ' + base + ')');
-    }
+    if (isLegacyHit(rel)) legacyHits.push(rel);
   }
   assert.deepEqual(legacyHits, [], 'canonical v0.2 runtime must not import legacy: ' + legacyHits.join(', '));
 });
@@ -102,4 +124,33 @@ test('canonical closure is non-empty and reaches Governance/Codex/MCP', () => {
   assert.ok(rels.some((r) => r === 'src/mcp/tools.js'));
   assert.ok(rels.some((r) => r === 'src/executor/app-server-executor.js'));
   assert.ok(!rels.some((r) => r.startsWith('src/legacy/')));
+});
+
+// Focused tests proving the strengthened scanner detects a legacy import in every form the
+// canonical runtime could use.
+test('importSpecifiers detects a legacy import in every import form (fixture)', () => {
+  const src = fs.readFileSync(FIXTURE, 'utf8');
+  const specs = importSpecifiers(src);
+  assert.ok(specs.includes('./legacy/direct-run-controller.js'), 'import ... from');
+  assert.ok(specs.includes('./legacy/direct-mode.js'), 'export ... from');
+  assert.ok(specs.includes('./legacy/iab-transport.js'), 'side-effect import');
+  assert.ok(specs.includes('./legacy/worker-client.js'), 'dynamic import');
+  for (const spec of specs.filter((x) => x.includes('/legacy/'))) {
+    assert.ok(isLegacyHit('src/' + spec), 'legacy specifier not recognised: ' + spec);
+  }
+});
+
+test('importSpecifiers only captures relative specifiers and dedupes', () => {
+  const src = [
+    "import a from 'node:fs';",
+    "import b from 'zod';",
+    "export { c } from './state/handoff.js';",
+    "import './state/handoff.js';",      // duplicate relative side-effect
+    "const d = await import('./state/handoff.js');", // duplicate relative dynamic
+  ].join('\n');
+  const specs = importSpecifiers(src);
+  // non-relative (package/builtin) specifiers are kept by the scanner but ignored by resolveFile;
+  // the relative one should appear exactly once.
+  const rel = specs.filter((s) => s.startsWith('./') || s.startsWith('../'));
+  assert.deepEqual(rel, ['./state/handoff.js']);
 });

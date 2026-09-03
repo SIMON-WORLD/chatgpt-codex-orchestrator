@@ -1,6 +1,6 @@
 ---
 name: chatgpt-codex-orchestrator
-description: "Alpha entry for the ChatGPT-command orchestrator (v0.1.0-alpha.3). Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as executor. The canonical launcher Skill is `brain-command`; its default path is the Direct Brain Loop (current Codex agent + built-in browser + ChatGPT). The detached worker/TaskService runtime is legacy/experimental."
+description: "Alpha entry for the ChatGPT-command orchestrator (v0.1.0-alpha.3). Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as executor. The canonical launcher Skill is `brain-command`; its default path is the Direct Brain Loop (current Codex agent + built-in browser + ChatGPT). The detached worker/TaskService runtime is legacy/experimental. Released Alpha.3 operational default = legacy IAB Direct Brain Loop (feature-frozen); v0.2 canonical architecture (ChatGPT Custom MCP App -> Secure Tunnel -> local MCP -> Router/Governance -> Direct Local or Codex App Server) is NOT yet the CLI/Skill default (M7 decides the flip)."
 ---
 
 # ChatGPT-command orchestrator (v0.1.0-alpha.3)
@@ -14,6 +14,17 @@ The canonical launcher Skill is **`brain-command`**. Its default path is the **D
 **Browser isolation:** canonical Direct Mode uses the Codex **in-app browser (iab) only** — it never attaches to the user's Edge/Chrome/external browser and there is no fallback; if the IAB is unavailable, stop and report instead of switching browser backend.
 
 **Existing conversation:** `$brain-command --conversation "<title>"` / `--conversation-url <url>` / `--adopt-current` continue an existing ChatGPT conversation (no new conversation). By default a new dedicated Brain conversation is created.
+
+## v0.2 canonical (M5/M6 status — NOT the default)
+
+The released operational default remains the **Direct Brain Loop** over the built-in IAB (Alpha.3, feature-frozen). A separate **v0.2 canonical** path exists and is evolving:
+
+`ChatGPT (Custom MCP App)` → `OpenAI Secure Tunnel` → `local MCP` → `Router/Governance` → `Direct Local` or `Codex App Server`.
+
+- **M5** completed the Secure Tunnel + real ChatGPT/Codex App Server production E2E.
+- **M6** completed the structural isolation of the IAB / Alpha.4 implementation under `src/legacy/`.
+- **M7** is the real-project dogfood + **operational default flip** decision; it has **not** happened yet, so v0.2 is not the default entry for all CLI/Skill invocations.
+- The IAB path is **feature-frozen**, **not deleted**.
 
 ## Legacy / experimental runtime (not the default)
 
