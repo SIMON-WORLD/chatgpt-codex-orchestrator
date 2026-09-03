@@ -24,7 +24,7 @@ async function waitFor(fn, timeout = 3000) {
   return false;
 }
 
-function makeExecutor({ approval = '0', die = null, dataRoot = null, failTurnStart = false, slowTurn = false, turnFail = false, noConfirmInterrupt = false, forceEffectiveSandbox = null, forceWritableRoots = null, forceNetworkAccess = null, forceApprovalPolicy = null, noSettingsUpdate = false } = {}) {
+function makeExecutor({ approval = '0', die = null, dataRoot = null, failTurnStart = false, slowTurn = false, turnFail = false, noConfirmInterrupt = false, forceEffectiveSandbox = null, forceWritableRoots = null, forceNetworkAccess = null, forceApprovalPolicy = null, noSettingsUpdate = false, failSettingsUpdate = false } = {}) {
   const root = dataRoot || fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
   const env = { ...process.env, FAKE_APP_SERVER_APPROVAL: approval, FAKE_APP_SERVER_STATE_DIR: root };
   if (forceEffectiveSandbox) env.FAKE_APP_SERVER_FORCE_EFFECTIVE_SANDBOX = forceEffectiveSandbox;
@@ -32,6 +32,7 @@ function makeExecutor({ approval = '0', die = null, dataRoot = null, failTurnSta
   if (forceNetworkAccess) env.FAKE_APP_SERVER_FORCE_NETWORK_ACCESS = forceNetworkAccess;
   if (forceApprovalPolicy) env.FAKE_APP_SERVER_FORCE_APPROVAL_POLICY = forceApprovalPolicy;
   if (noSettingsUpdate) env.FAKE_APP_SERVER_NO_SETTINGS_UPDATE = '1';
+  if (failSettingsUpdate) env.FAKE_APP_SERVER_FAIL_SETTINGS_UPDATE = '1';
   if (die !== null) env.FAKE_APP_SERVER_DIE_MS = String(die);
   if (failTurnStart) env.FAKE_APP_SERVER_FAIL_TURN_START = '1';
   if (slowTurn) env.FAKE_APP_SERVER_SLOW_TURN = '1';
@@ -1220,7 +1221,7 @@ test('R2 writableRoots mismatch -> fail closed', async (t) => {
   fs.mkdirSync(ws, { recursive: true });
   const exec = makeExecutor({ dataRoot: root, forceWritableRoots: JSON.stringify([path.join(root, 'elsewhere')]) });
   t.after(() => exec.shutdown());
-  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' }), /writable roots do not narrow/);
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' }), /writable roots do not bound/);
   assert.equal(exec.owner.owner, 'none');
   const turns = readFakeTurns(root);
   assert.equal(turns.filter((x) => x.status === 'inProgress' || x.status === 'completed').length, 0, 'no task turn before verification');
@@ -1309,4 +1310,118 @@ test('R2 fresh executor recovery preserves durable effective snapshot', async (t
   const g = await exec2.get({ jobId: r0.jobId });
   assert.equal(g.effectiveVerified, true);
   assert.equal(g.effectiveSandbox, 'workspace-write');
+});
+
+// ---- M7 R3: exact effective-contract verification ---------------------------
+
+test('R3 exact workspace root -> PASS', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceWritableRoots: JSON.stringify([ws]) });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' });
+  assert.equal(r.effectiveVerified, true);
+  assert.equal(r.permissionContract.effectiveWritableRootMatch, true);
+});
+
+test('R3 empty writableRoots + cwd exact workspace -> PASS', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceWritableRoots: '[]' });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' });
+  assert.equal(r.effectiveVerified, true);
+  assert.equal(r.permissionContract.effectiveWritableRootMatch, true);
+});
+
+test('R3 parent root -> FAIL closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceWritableRoots: JSON.stringify([root]) });
+  t.after(() => exec.shutdown());
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' }), /writable roots do not bound/);
+  assert.equal(exec.owner.owner, 'none');
+  assert.equal(Object.values(exec.jobMap.list()).filter((j) => j.state === 'recovery_required').length >= 1, true);
+});
+
+test('R3 drive/filesystem root -> FAIL closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceWritableRoots: JSON.stringify([path.parse(ws).root]) });
+  t.after(() => exec.shutdown());
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' }), /writable roots do not bound/);
+  assert.equal(exec.owner.owner, 'none');
+});
+
+test('R3 sibling root -> FAIL closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceWritableRoots: JSON.stringify([path.join(root, 'sibling')]) });
+  t.after(() => exec.shutdown());
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' }), /writable roots do not bound/);
+  assert.equal(exec.owner.owner, 'none');
+});
+
+test('R3 extra root outside workspace -> FAIL closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceWritableRoots: JSON.stringify([ws, path.join(root, 'outside')]) });
+  t.after(() => exec.shutdown());
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' }), /writable roots do not bound/);
+  assert.equal(exec.owner.owner, 'none');
+});
+
+test('R3 workspace root + descendant-only extra root -> PASS', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceWritableRoots: JSON.stringify([ws, path.join(ws, 'sub')]) });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' });
+  assert.equal(r.effectiveVerified, true);
+  assert.equal(r.permissionContract.effectiveWritableRootMatch, true);
+});
+
+test('R3 approvalPolicy exact: requested on-request but effective never -> FAIL', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceApprovalPolicy: 'never' });
+  t.after(() => exec.shutdown());
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' }), /approvalPolicy=on-request/);
+});
+
+test('R3 approvalPolicy exact: requested on-request but effective other policy -> FAIL', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceApprovalPolicy: 'untrusted' });
+  t.after(() => exec.shutdown());
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' }), /approvalPolicy=on-request/);
+});
+
+test('R3 approvalPolicy exact: requested never but effective on-request -> FAIL', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceApprovalPolicy: 'on-request' });
+  t.after(() => exec.shutdown());
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'read_only', workspaceRoot: ws, workspaceId: 'w1' }), /approvalPolicy=never/);
+});
+
+test('R3 networkAccess exact for read_only: requested false but effective true -> FAIL', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceNetworkAccess: 'true' });
+  t.after(() => exec.shutdown());
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'read_only', workspaceRoot: ws, workspaceId: 'w1' }), /networkAccess/);
+  assert.equal(exec.owner.owner, 'none');
+});
+
+test('R3 thread/settings/update request failure -> immediate fail closed, no orphan waiter, owner none', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws'); fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, failSettingsUpdate: true });
+  t.after(() => exec.shutdown());
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' }), /thread\/settings\/update failed/);
+  assert.equal(exec.owner.owner, 'none');
+  assert.equal(exec._settingsWaiters.size, 0, 'no lingering settings waiter entry');
+  const jobs = Object.values(exec.jobMap.list()).filter((j) => j.state === 'recovery_required');
+  assert.equal(jobs[0].effectiveVerified, false);
 });

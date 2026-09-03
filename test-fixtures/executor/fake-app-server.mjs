@@ -143,6 +143,7 @@ function handle(msg) {
     }
 
     case 'thread/settings/update': {
+      if (process.env.FAKE_APP_SERVER_FAIL_SETTINGS_UPDATE === '1') return respondError(id, { code: -32000, message: 'fake settings update failure' });
       const threadId = params && params.threadId;
       const thread = threads.get(threadId);
       if (!thread) return respondError(id, { code: -32601, message: `thread not found: ${threadId}` });

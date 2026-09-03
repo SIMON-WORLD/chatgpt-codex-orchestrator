@@ -83,39 +83,60 @@ export function effectiveSandboxMode(resSandbox) {
   return null;
 }
 
-// --- Path helpers for writable-root containment ---------------------------------
+// --- Path helpers for writable-root bounding -------------------------------------
+const IS_WIN = process.platform === 'win32';
 function normPath(p) { return String(p == null ? '' : p).replace(/[\\/]+$/, ''); }
-export function rootsEqual(a, b) { if (!a || !b) return false; return normPath(a).toLowerCase() === normPath(b).toLowerCase(); }
-export function isWithin(child, parent) { if (!child || !parent) return false; const c = normPath(child).toLowerCase(); const p = normPath(parent).toLowerCase(); return c === p || c.startsWith(p + path.sep); }
+function eqPath(a, b) { if (!a || !b) return false; const x = normPath(a); const y = normPath(b); return IS_WIN ? x.toLowerCase() === y.toLowerCase() : x === y; }
+export function rootsEqual(a, b) { return eqPath(a, b); }
+// child is within parent (same path or a descendant). Platform-safe: case-insensitive on win32.
+export function isWithin(child, parent) {
+  if (!child || !parent) return false;
+  const c = normPath(child); const p = normPath(parent);
+  const cEq = IS_WIN ? c.toLowerCase() : c;
+  const pEq = IS_WIN ? p.toLowerCase() : p;
+  if (cEq === pEq) return true;
+  return cEq.startsWith(pEq + '\\') || cEq.startsWith(pEq + '/');
+}
 
 // Verify the App Server's AUTHORITATIVE effective permission (from the
 // `thread/settings/updated` notification's ThreadSettings) against the requested job
 // contract. We NEVER infer `effective = requested`; evidence must come from the real
 // effective ThreadSettings. Throws on mismatch.
 export function verifyEffectiveThreadSettings({ accessMode, sandboxPolicy, approvalPolicy, cwd = null, workspaceRoot = null, networkAccess = null, activePermissionProfile = null }) {
-  const requested = SANDBOX_MODE_BY_ACCESS[accessMode];
   const effType = sandboxPolicy && sandboxPolicy.type;
+  const effNetwork = !!(sandboxPolicy && sandboxPolicy.networkAccess === true);
+  const reqNetwork = networkAccess === true;
+
   if (accessMode === 'read_only') {
     if (effType !== 'readOnly') throw new Error(`effective permission mismatch: requested read_only but effective sandboxPolicy=${effType || 'unknown'}`);
     if (approvalPolicy !== 'never') throw new Error(`effective permission mismatch: read_only requires approvalPolicy=never but effective=${JSON.stringify(approvalPolicy)}`);
-    return { effectiveSandbox: READ_ONLY, effectiveApprovalPolicy: approvalPolicy, effectiveVerified: true, effectiveWritableRoots: [], effectiveNetworkAccess: sandboxPolicy.networkAccess === true, effectiveWritableRootMatch: true };
+    if (reqNetwork !== effNetwork) throw new Error(`effective permission mismatch: networkAccess requested=${reqNetwork} but effective=${sandboxPolicy && sandboxPolicy.networkAccess}`);
+    return { effectiveSandbox: READ_ONLY, effectiveApprovalPolicy: approvalPolicy, effectiveVerified: true, effectiveWritableRoots: [], effectiveNetworkAccess: effNetwork, effectiveWritableRootMatch: true };
   }
+
+  // workspace_write: EXACT approval policy (on-request), not merely != never.
   if (effType !== 'workspaceWrite') throw new Error(`effective permission mismatch: requested workspace_write but effective sandboxPolicy=${effType || 'unknown'}`);
-  if (approvalPolicy === 'never') throw new Error('effective permission mismatch: workspace_write requires approvals but effective approvalPolicy=never');
+  if (approvalPolicy !== 'on-request') throw new Error(`effective permission mismatch: workspace_write requires approvalPolicy=on-request but effective=${JSON.stringify(approvalPolicy)}`);
+  if (reqNetwork !== effNetwork) throw new Error(`effective permission mismatch: networkAccess requested=${reqNetwork} but effective=${sandboxPolicy && sandboxPolicy.networkAccess}`);
+
   const writableRoots = Array.isArray(sandboxPolicy.writableRoots) ? sandboxPolicy.writableRoots : [];
-  // Real App Server normalizes writableRoots to [] and scopes writes to cwd. If empty,
-  // fall back to requiring cwd to be the target workspace; else require containment.
-  // When no target workspace is known (lifecycle-only tests), skip the containment check.
   let writableRootMatch = null;
   if (workspaceRoot != null) {
-    if (writableRoots.length) writableRootMatch = writableRoots.some((r) => rootsEqual(r, workspaceRoot) || isWithin(workspaceRoot, r));
-    else writableRootMatch = cwd != null && rootsEqual(cwd, workspaceRoot);
-    if (!writableRootMatch) throw new Error('effective permission mismatch: writable roots do not narrow to the target workspace');
+    if (writableRoots.length) {
+      // EXACT + BOUNDED: at least one effective root must be exactly the workspace root, and
+      // EVERY effective root must be the workspace root or a descendant of it. A parent,
+      // drive/file-system root, or sibling root that would escape the workspace boundary is
+      // rejected (workspaceRoot being a descendant of an effective root NEVER passes).
+      const hasExact = writableRoots.some((r) => rootsEqual(r, workspaceRoot));
+      const allInside = writableRoots.every((r) => rootsEqual(r, workspaceRoot) || isWithin(r, workspaceRoot));
+      writableRootMatch = hasExact && allInside;
+    } else {
+      // Real App Server normalizes writableRoots to [] and scopes writes to cwd.
+      writableRootMatch = cwd != null && rootsEqual(cwd, workspaceRoot);
+    }
+    if (!writableRootMatch) throw new Error('effective permission mismatch: writable roots do not bound the target workspace');
   }
-  if (networkAccess != null && (sandboxPolicy.networkAccess === true) !== (networkAccess === true)) {
-    throw new Error(`effective permission mismatch: networkAccess requested=${networkAccess} but effective=${sandboxPolicy.networkAccess}`);
-  }
-  return { effectiveSandbox: WORKSPACE_WRITE, effectiveApprovalPolicy: approvalPolicy, effectiveVerified: true, effectiveWritableRoots: writableRoots, effectiveNetworkAccess: sandboxPolicy.networkAccess === true, effectiveWritableRootMatch: writableRootMatch };
+  return { effectiveSandbox: WORKSPACE_WRITE, effectiveApprovalPolicy: approvalPolicy, effectiveVerified: true, effectiveWritableRoots: writableRoots, effectiveNetworkAccess: effNetwork, effectiveWritableRootMatch: !!writableRootMatch };
 }
 
 function permissionContract(job) {
@@ -222,7 +243,8 @@ export class AppServerExecutor {
       if (w) {
         clearTimeout(w.timer);
         this._settingsWaiters.delete(threadId);
-        w.resolve(params.threadSettings || null);
+        w.settled = true;
+        w.resolve({ ok: true, settings: params.threadSettings || null });
       }
       this._emit(note);
       return;
@@ -397,13 +419,29 @@ export class AppServerExecutor {
   }
 
   _waitForThreadSettings(threadId, timeoutMs = 10000) {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    const timer = setTimeout(() => {
+      const w = this._settingsWaiters.get(threadId);
+      if (w) {
+        clearTimeout(w.timer);
         this._settingsWaiters.delete(threadId);
-        reject(new Error('timed out waiting for effective thread settings'));
-      }, timeoutMs);
-      this._settingsWaiters.set(threadId, { resolve, reject, timer });
-    });
+        if (!w.settled) { w.settled = true; w.resolve({ ok: false, reason: 'timed out waiting for effective thread settings' }); }
+      }
+    }, timeoutMs);
+    const entry = { resolve, timer, promise, settled: false };
+    this._settingsWaiters.set(threadId, entry);
+    return entry;
+  }
+
+  // Cancel a pending settings waiter (clear timer + remove map entry + settle safely, no
+  // orphan promise / no unhandled rejection after a thread/settings/update request failure).
+  _cancelSettingsWait(threadId, reason = 'settings wait cancelled') {
+    const w = this._settingsWaiters.get(threadId);
+    if (!w) return;
+    clearTimeout(w.timer);
+    this._settingsWaiters.delete(threadId);
+    if (!w.settled) { w.settled = true; w.resolve({ ok: false, reason }); }
   }
 
   // Authoritative permission bootstrap: apply the job contract via thread/settings/update,
@@ -412,14 +450,16 @@ export class AppServerExecutor {
   async _bootstrapVerifyPermission({ jobId, threadId, accessMode, sandboxPolicy, approvalPolicy, workspaceRoot, networkAccess }) {
     // Register the waiter BEFORE sending the update so a synchronous
     // thread/settings/updated notification is not missed.
-    const settingsPromise = this._waitForThreadSettings(threadId, 10000);
+    const waiter = this._waitForThreadSettings(threadId, 10000);
     try {
       await this.client.request('thread/settings/update', { threadId, sandboxPolicy, approvalPolicy, ...(workspaceRoot ? { cwd: workspaceRoot } : {}) });
     } catch (e) {
-      this._settingsWaiters.delete(threadId);
+      this._cancelSettingsWait(threadId, 'thread/settings/update request failed');
       throw new Error('permission verification: thread/settings/update failed: ' + String(e.message || e).slice(0, 160));
     }
-    const settings = await settingsPromise;
+    const res = await waiter.promise;
+    if (!res.ok) throw new Error('permission verification: ' + res.reason);
+    const settings = res.settings;
     if (!settings) throw new Error('permission verification: no effective thread settings received');
     const verified = verifyEffectiveThreadSettings({
       accessMode,
