@@ -106,3 +106,61 @@ test('unexpected App Server death -> owner unknown -> Direct Local / new Codex s
   assert.equal(shared.owner, 'codex');
   assert.throws(() => shared.acquire('chatgpt', 'other'), /owned by codex|not reconciled/);
 });
+
+
+// ---- M7 hardening R2 -----------------------------------------------------
+
+test('writer death -> codex_get -> codex_reconcile terminal -> release -> Direct Local apply works', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm7x-'));
+  const { shared, exec, srv, client, repo } = await setup(root, { die: 1500 });
+  t.after(() => exec.shutdown()); t.after(() => client.close()); t.after(() => srv.close());
+  const ws = JSON.parse(textOf(await client.callTool({ name: 'workspace_open', arguments: { path: repo } })));
+  const started = JSON.parse(textOf(await client.callTool({ name: 'codex_start', arguments: { workspaceId: ws.workspaceId, prompt: 'do it', accessMode: 'workspace_write' } })));
+  assert.ok(started.jobId);
+  // The fake App Server dies while the writer job is (or was) active.
+  await waitFor(() => !exec.client.isRunning, 3000);
+  // codex_get reports structured recovery guidance.
+  const got = JSON.parse(textOf(await client.callTool({ name: 'codex_get', arguments: { workspaceId: ws.workspaceId, jobId: started.jobId } })));
+  assert.equal(got.recoveryRequired, true);
+  assert.equal(got.nextAction, 'codex_reconcile');
+  // codex_reconcile reconnects + reattaches + sees terminal -> release.
+  const rec = JSON.parse(textOf(await client.callTool({ name: 'codex_reconcile', arguments: { workspaceId: ws.workspaceId, jobId: started.jobId } })));
+  assert.equal(rec.resolution, 'terminal');
+  assert.equal(rec.ownershipReleased, true);
+  await waitFor(() => shared.owner === 'none', 3000);
+  assert.equal(shared.owner, 'none');
+  // Direct Local apply now works.
+  const rd = JSON.parse(textOf(await client.callTool({ name: 'read', arguments: { workspaceId: ws.workspaceId, path: 'a.txt' } })));
+  const p = JSON.parse(textOf(await client.callTool({ name: 'edit', arguments: { workspaceId: ws.workspaceId, mode: 'preview', change: { path: 'a.txt', baseHash: rd.sha256, replacements: [{ oldText: 'world', newText: 'there' }] } } })));
+  const a = JSON.parse(textOf(await client.callTool({ name: 'edit', arguments: { workspaceId: ws.workspaceId, mode: 'apply', changeSetId: p.changeSetId } })));
+  assert.equal(a.status, 'applied');
+});
+
+test('reconcile inProgress -> writer retained -> Direct Local mutation rejected', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm7x-'));
+  const { shared, exec, srv, client, repo } = await setup(root, { slow: true });
+  t.after(() => exec.shutdown()); t.after(() => client.close()); t.after(() => srv.close());
+  const ws = JSON.parse(textOf(await client.callTool({ name: 'workspace_open', arguments: { path: repo } })));
+  const started = JSON.parse(textOf(await client.callTool({ name: 'codex_start', arguments: { workspaceId: ws.workspaceId, prompt: 'do it', accessMode: 'workspace_write' } })));
+  assert.equal(shared.owner, 'codex');
+  const rec = JSON.parse(textOf(await client.callTool({ name: 'codex_reconcile', arguments: { workspaceId: ws.workspaceId, jobId: started.jobId } })));
+  assert.equal(rec.resolution, 'in_progress');
+  assert.equal(rec.ownershipReleased, false);
+  assert.equal(shared.owner, 'codex'); // writer retained
+  // Direct Local apply stays blocked.
+  const rd = JSON.parse(textOf(await client.callTool({ name: 'read', arguments: { workspaceId: ws.workspaceId, path: 'a.txt' } })));
+  const p = JSON.parse(textOf(await client.callTool({ name: 'edit', arguments: { workspaceId: ws.workspaceId, mode: 'preview', change: { path: 'a.txt', baseHash: rd.sha256, replacements: [{ oldText: 'world', newText: 'there' }] } } })));
+  const applyRes = await client.callTool({ name: 'edit', arguments: { workspaceId: ws.workspaceId, mode: 'apply', changeSetId: p.changeSetId } });
+  assert.ok(/owned by codex|MutationOwner/.test(textOf(applyRes)), 'Direct Local apply must stay blocked while codex holds writer: ' + textOf(applyRes));
+});
+
+test('codex_reconcile is exposed with workspaceId+jobId schema', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm7x-'));
+  const { exec, srv, client } = await setup(root);
+  t.after(() => exec.shutdown()); t.after(() => client.close()); t.after(() => srv.close());
+  const tools = await client.listTools();
+  const reconcile = tools.tools.find((x) => x.name === 'codex_reconcile');
+  assert.ok(reconcile, 'codex_reconcile must be a public tool');
+  assert.ok(reconcile.inputSchema && reconcile.inputSchema.properties && reconcile.inputSchema.properties.workspaceId, 'requires workspaceId');
+  assert.ok(reconcile.inputSchema.properties.jobId, 'requires jobId');
+});

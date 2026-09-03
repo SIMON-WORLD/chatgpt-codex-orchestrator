@@ -525,3 +525,112 @@ test('accessMode inherited on continue (no silent escalation)', async (t) => {
   const c2 = await exec.continue({ jobId: r2.jobId, instruction: 'more' });
   assert.equal(c2.accessMode, 'read_only');
 });
+
+
+// ---- M7 hardening R2 -----------------------------------------------------
+
+test('read_only start does not acquire writer ownership', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'read_only' });
+  assert.equal(exec.owner.owner, 'none');
+  assert.equal(r.mutationOwner, 'none');
+  const job = exec.load(r.jobId);
+  assert.equal(job.isWriter, false);
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  assert.equal(exec.owner.owner, 'none'); // still no writer lock after terminal
+});
+
+test('read_only continue does not acquire writer ownership', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'read_only' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const c = await exec.continue({ jobId: r.jobId, instruction: 'b' });
+  assert.equal(exec.owner.owner, 'none');
+  assert.equal(c.mutationOwner, 'none');
+});
+
+test('read_only process death leaves no writer lock', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, die: 1500 });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'read_only' });
+  assert.equal(exec.owner.owner, 'none');
+  await waitFor(() => exec.client.isRunning === false, 3000);
+  assert.equal(exec.owner.owner, 'none'); // no lingering writer lock after read-only death
+});
+
+test('stale Turn A terminal notification does not affect Turn B', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const oldTurnId = r.turnId;
+  const threadId = r.threadId;
+  // Advance the job to a NEW active unit (Turn B) that the writer currently holds.
+  const turnB = 'turn-b-stale-test';
+  exec.jobMap.update(r.jobId, { mutationUnitId: 'mu-b', turnId: turnB, state: 'running', ownershipReleased: false });
+  exec.owner.acquire('codex', 'mu-b');
+  assert.equal(exec.owner.owner, 'codex');
+  // A LATE terminal notification for the OLD Turn A arrives.
+  exec._handleNotification({ method: 'turn/completed', params: { threadId, turn: { id: oldTurnId, status: 'completed' } } });
+  const after = exec.load(r.jobId);
+  assert.equal(after.turnId, turnB); // not overwritten by Turn A
+  assert.equal(after.state, 'running'); // Turn B state preserved
+  assert.equal(exec.owner.owner, 'codex'); // Turn B writer NOT released
+  assert.equal(exec.owner.unitId, 'mu-b');
+});
+
+test('reconcile terminal releases writer', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  if (exec.owner.owner === 'none') exec.owner.acquire('codex', exec.load(r.jobId).mutationUnitId);
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'terminal');
+  assert.equal(rec.ownershipReleased, true);
+  assert.equal(exec.owner.owner, 'none');
+});
+
+test('reconcile inProgress retains writer', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  assert.equal(exec.owner.owner, 'codex');
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'in_progress');
+  assert.equal(rec.ownershipReleased, false);
+  assert.equal(exec.owner.owner, 'codex'); // retained
+});
+
+test('ambiguous reconciliation fails closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  assert.equal(exec.owner.owner, 'codex');
+  // Point the job at a turn that does NOT exist in the authoritative thread.
+  exec.jobMap.update(r.jobId, { turnId: 'turn-does-not-exist' });
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'unresolved');
+  assert.equal(rec.recoveryRequired, true);
+  assert.equal(exec.owner.owner, 'codex'); // fail-closed: retained
+});
+
+test('codex_get on unreachable client -> recoveryRequired + nextAction=codex_reconcile', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, die: 1500 });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => !exec.client.isRunning, 3000);
+  const st = await exec.get({ jobId: r.jobId });
+  assert.equal(st.recoveryRequired, true);
+  assert.equal(st.nextAction, 'codex_reconcile');
+});

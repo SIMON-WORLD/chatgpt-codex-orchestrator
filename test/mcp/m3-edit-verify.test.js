@@ -86,7 +86,7 @@ test('codex_owned workspace blocks Direct Local edit apply (fail before mutation
   const registry = new WorkspaceRegistry({ allowedRoots: [root] });
   const shared = new MutationOwner();
   const ops = new OperationState({ dataRoot: root });
-  const env = { ...process.env, FAKE_APP_SERVER_APPROVAL: '0', FAKE_APP_SERVER_STATE_DIR: root };
+  const env = { ...process.env, FAKE_APP_SERVER_APPROVAL: '0', FAKE_APP_SERVER_STATE_DIR: root, FAKE_APP_SERVER_SLOW_TURN: '1' };
   const exec = new AppServerExecutor({ dataRoot: root, client: new AppServerClient({ codexBin: process.execPath, spawnArgs: [fixture], env }), mutationOwner: shared });
   const srv = await startMcpServer({ workspaceRegistry: registry, appServerExecutor: exec, mutationOwner: shared, operationState: ops, host: '127.0.0.1', port: 0, allowedRoots: [root] });
   t.after(() => exec.shutdown());
