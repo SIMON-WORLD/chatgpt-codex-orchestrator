@@ -15,7 +15,7 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是面向
 - **Released version:** `v0.1.0-alpha.3`
 - **Released/default operational path:** Alpha.3 IAB Direct Brain Loop（feature-frozen）
 - **v0.2:** candidate，尚未 release，尚未进行 operational default flip
-- **Current accepted main anchor after M7 permission hardening:** PR #13 merge commit `b2a8ee7185f7d4b628c66e48d67557bcf271753f`（实时 `main` 仍以 GitHub 为准）
+- **Current runtime behavior baseline:** 已包含 PR #11 mutation-lifecycle hardening 与 PR #13 runtime-permission hardening；实时 accepted `main` 以 GitHub 为准。
 
 ## 已接受基线
 
@@ -60,7 +60,7 @@ M7 验证三种真实 execution pattern：
 
 真实仓库：`SIMON-WORLD/agent-workspace-playbook`
 
-结果：**产品任务未完成，但 autonomous Brain loop 的关键能力已验证，并暴露真实 mutation lifecycle P0。**
+结果：**产品任务未完成，但 failure-discovery dogfood 有效**。
 
 - autonomous route selection: **PASS**
 - zero manual workspace/job/task/step/RESULT relay: **PASS**
@@ -72,19 +72,18 @@ M7 验证三种真实 execution pattern：
 
 ### M7 mutation-lifecycle hardening — ACCEPTED
 
-第一次 M7-B dogfood 暴露的 P0 已经过 R1–R6 修复，并由 ChatGPT Brain 逐轮独立 GitHub review 后验收。
+第一次 M7-B dogfood 暴露的 lifecycle/recovery P0 已通过 R1–R6 修复。
 
-最终接受路径：
+关键 accepted evidence：
 
 - `read_only` Codex 不取得 writer ownership；
-- `workspace_write` accessMode 显式映射到 App Server sandbox；
-- stale turn notification 与 mutation-unit identity 关联，且 identity 可持久化并跨 executor restart 恢复；
-- `codex_get` 对 recovery-required 状态返回结构化 guidance；
-- 新增公开 MCP capability `codex_reconcile(workspaceId, jobId)`；
-- `reconcile()` / `resume()` 共用 authoritative `thread/resume + thread/read` identity-safe recovery；
-- terminal 只释放 exact writer unit；in-progress 保留 exact writer；ambiguous / foreign owner fail closed；
-- observability 区分 job mutation unit 与 active owner unit；
-- cross-route / process-death / read-only coexistence / stale-turn regressions 已加入。
+- `workspace_write` 使用显式 mutation ownership；
+- durable turn ↔ mutation-unit identity；
+- stale turn notification 不释放其他 mutation unit；
+- public `codex_reconcile(workspaceId, jobId)`；
+- `thread/resume + thread/read` authoritative reconciliation；
+- terminal 只释放 exact writer unit，in-progress 保留 writer，ambiguous/foreign-owner fail closed；
+- process-death / cross-route / read-only coexistence regressions 已覆盖。
 
 **Accepted PR:** #11 — `fix: harden v0.2 mutation lifecycle recovery`
 
@@ -92,37 +91,29 @@ M7 验证三种真实 execution pattern：
 
 **CI:** Node 22 / Node 24 **PASS**。
 
-该 hardening 的 ACCEPT 只表示 lifecycle blocker 已通过代码与 CI gate；是否真正解决 M7-B 必须由后续 real-project dogfood 再验证，不能用 unit tests 替代。
-
 ### M7-B attempt #2 — runtime permission mismatch
 
 真实仓库：`SIMON-WORLD/agent-workspace-playbook`
 
 结果：**产品任务未完成 / failure-discovery dogfood PASS**。
 
-attempt #2 中，Orchestrator 外层声明 `accessMode=workspace_write` / `sandbox=workspace-write` / `mutationOwner=codex`，但真实 Codex turn 的有效 runtime permission 仍为 read-only / never，workspace mutation、shell/test execution 与 commit/push 路径无法形成。Brain 在同一 Codex thread 自主 REVISE 后再次得到相同 capability mismatch，并保持了安全 mutation ownership lifecycle；未伪造成功、未用 Direct Local 冒充 Codex-required dogfood。
-
-根因由 Brain 独立确认：isolated `CODEX_HOME` profile 静态钉死 read-only/never，而 Executor 的 per-job requested permission 与真实 App Server effective permission 没有形成一致、可验证的 contract。
+Lifecycle/recovery 未再次成为 blocker；真实 blocker 是 requested `workspace_write` 与 Codex App Server effective permission 不一致。Brain 独立确认 isolated `CODEX_HOME` profile 静态钉死 read-only/never，导致 workspace mutation、shell/tests 与 commit/push 无法形成。
 
 ### M7 real Codex runtime-permission hardening — ACCEPTED
 
-attempt #2 暴露的 permission contract blocker 已通过 R1–R3 修复并由 ChatGPT Brain 独立验收。
+attempt #2 暴露的 permission-contract blocker 已通过 R1–R3 修复并由 ChatGPT Brain 独立验收。
 
-最终接受路径：
+关键 accepted contract：
 
-- isolated Codex profile 只负责 provider/model/credential-safe isolation，不再静态锁死所有 job 为 read-only/never；
-- `accessMode` 映射 per-job permission：`read_only` → read-only + never；`workspace_write` → workspace-write + on-request；
-- `networkAccess` 是显式 job-level capability，默认 false，不随 workspace write 自动全局放开；
-- 使用安全 bootstrap thread，并通过 `thread/settings/update` → `thread/settings/updated` 的真实 `ThreadSettings` 获取 authoritative effective permission evidence；
-- requested permission 不再被冒充为 effective permission；缺少 effective evidence / timeout / mismatch 均 fail closed；
-- writer ownership 只在 effective permission verification 通过后、真实 task turn 启动前取得；
-- `continue()` 只复用与 requested contract 完全匹配的 durable verified snapshot，否则重新 verification；
-- effective snapshot 持久化进 JobMap，fresh executor recovery 不因进程内 cache 丢失而把 requested 值重新当 effective；
-- workspace-write effective contract 对 sandbox、approval、network 与 writable-root scope 做 exact/bounded verification；parent / drive-root / sibling / outside root 等 scope escalation fail closed；
-- read-only 也验证 exact approval/network contract；
-- settings waiter request failure / timeout 安全清理，不遗留 orphan promise；
-- 新增真实 App Server mutation smoke：Codex 在 disposable temp workspace 内真实创建文件并通过 shell 创建第二文件，Brain-side smoke readback 后才输出 `REAL_CODEX_WORKSPACE_WRITE=PASS`；
-- real read-only smoke 同样要求 `effectiveVerified=true` 与 effective read-only evidence。
+- isolated Codex profile 仅负责 provider/model/credential-safe isolation；
+- `read_only` → read-only + never；`workspace_write` → workspace-write + on-request；
+- `networkAccess` 为显式 job-level capability，默认 false；
+- `thread/settings/update` → `thread/settings/updated` 获取 authoritative effective `ThreadSettings`；
+- requested permission 不再冒充 effective permission；missing evidence / timeout / mismatch fail closed；
+- writer ownership 只在 effective permission verification 通过后取得；
+- continue/recovery 只复用与 requested contract 一致的 durable verified snapshot；
+- sandbox / approval / network / writable roots 做 exact/bounded verification；
+- real App Server read-only smoke 与 real workspace-write mutation smoke 均要求 `effectiveVerified=true`。
 
 **Accepted PR:** #13 — `fix: enforce real Codex runtime permission contract`
 
@@ -130,16 +121,50 @@ attempt #2 暴露的 permission contract blocker 已通过 R1–R3 修复并由 
 
 **CI:** Node 22 / Node 24 **PASS**。
 
-Brain 对 permission hardening 的 ACCEPT 只表示 runtime permission contract 的代码、regressions 与 CI gate 已通过；**M7-B 本身仍未 PASS**。是否真正解决 attempt #2 暴露的问题，必须由重新部署后的 real-project **M7-B attempt #3** 验证。
+### M7-B attempt #3 — production Codex-required dogfood
+
+真实仓库：`SIMON-WORLD/agent-workspace-playbook`
+
+结果：**PASS / ACCEPTED**。
+
+真实目标：修复 `scripts/check_repository_hygiene.py`，检测 repository root `.git` 之外的 nested `.git` directory/gitfile，同时保证 root `.git` 不误报；增加 automated tests；同步双语 README；跑 tests；commit；push dogfood branch。
+
+最终 authoritative evidence：
+
+- route: `CODEX_DELEGATE`
+- real Codex execution: **PASS**
+- `workspace_write` requested and authoritative effective verification: **PASS**
+- `networkAccess=true` for push path: **PASS**
+- manual workspace/job/task/step/RESULT relay: **0**
+- remote branch: `dogfood/v0.2-nested-git-hygiene`
+- implementation commit: `daa5d96c3d87314a56a6f7685d4e7f735483a292`
+- changed files: `scripts/check_repository_hygiene.py`, `tests/test_repository_hygiene.py`, `README.md`, `README.zh-CN.md`
+- verification PR in target repository: `SIMON-WORLD/agent-workspace-playbook#20`
+- PR-triggered GitHub Actions workflow run: `33783730803`
+- repository hygiene / commit emails / task structure / index freshness / full test step: **PASS**
+- target PR intentionally remains **open / unmerged** as dogfood evidence；无 release/version mutation
+- Brain independent GitHub evidence reacquisition: **PASS**
+- Governance final state: **ACCEPTED → DONE**
+
+因此 lifecycle hardening + runtime-permission hardening 已被真实 production Codex-required task 共同验证；**M7-B 正式 PASS**。
+
+### M7-B dogfood observations — non-blocking
+
+本轮同时暴露三项真实 UX / observability findings。它们不反向阻塞已经通过的 M7-B correctness，但在 operational default flip 前应重新评估：
+
+1. **Long-running Brain re-entry:** 约 16 分钟 Codex job 期间 ChatGPT turn/UI 曾 timeout，但同一 Codex job 后续真实 completed；durability 有效，但 Brain-side long-running progress/re-entry UX 仍不足。
+2. **Codex Desktop thread visibility:** 当前 v0.2 通过独立 `codex app-server --listen stdio://` backend 执行，App Server thread 不一定出现在 Codex Desktop sidebar；用户可见 execution trace 需要后续产品设计/上游能力调查。
+3. **Custom App conversation binding:** Refresh Custom App 后，部分既有 ChatGPT conversation 曾出现 tool discovery 与实际 invocation 不一致/失效；新会话可正常使用。暂记录为 product-integration observation，不据此启动 Orchestrator hardening。
+
+以上 observations 仅作为后续 evidence / REPLAN candidates；**当前不自动启动新的 lifecycle/permission hardening。**
 
 ## 当前下一步
 
-1. 将 production local runtime 同步到最新 accepted `main`（至少包含 PR #13 merge commit `b2a8ee7185f7d4b628c66e48d67557bcf271753f`）。
-2. Refresh ChatGPT Custom MCP App / tool schema；`codex_start` 现包含 `networkAccess` permission-contract surface，并确认 `codex_reconcile` 仍实际暴露。
-3. 原样重跑 `SIMON-WORLD/agent-workspace-playbook` nested `.git` 任务，作为 **M7-B attempt #3**；要求 real Codex、workspace-write effective verification、需要 push 时显式 network capability、manual relay = 0、Brain 独立验收。
-4. 完成至少一次 **M7-C Hybrid** real-project dogfood。
-5. 基于 M7-A / M7-B / M7-C evidence 单独决定 operational default flip。
-6. 进入 M8 RC / release。
+1. **M7-B 已完成，不再运行 attempt #4。**
+2. 选择并执行至少一次 **M7-C Hybrid real-project dogfood**；任务必须让 ChatGPT Product Capability 与 Local Capability Plane 在同一逻辑任务中都承担必要角色，而不是事后拼接 evidence。
+3. M7-C 后重新审视 M7-A / M7-B / M7-C evidence，以及上述 long-running / Desktop visibility / Custom App observations。
+4. 由 Brain 单独决定是否进行 v0.2 operational default flip；default flip 不是 milestone 自动副作用。
+5. 只有完成该 decision 后才进入 M8 RC / release。
 
 ## Authority
 
