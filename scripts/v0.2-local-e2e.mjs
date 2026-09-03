@@ -74,7 +74,7 @@ async function main() {
 
     // Advance to the Codex step.
     await call('governance_transition', { taskId: 't1', stepId: 's2', control: 'TASK', acceptance: [{ id: 'a2', required: true }], route: 'CODEX_DELEGATE' });
-    const started = await call('codex_start', { workspaceId: ws.workspaceId, prompt: useReal ? 'Reply with exactly REAL_CODEX_E2E_OK' : 'do it' });
+    const started = await call('codex_start', { workspaceId: ws.workspaceId, prompt: useReal ? 'Reply with exactly REAL_CODEX_E2E_OK' : 'do it', accessMode: useReal ? 'workspace_write' : 'workspace_write' });
     if (!started.jobId) throw new Error('codex_start did not return jobId');
     let got = null;
     for (let i = 0; i < 300; i++) {

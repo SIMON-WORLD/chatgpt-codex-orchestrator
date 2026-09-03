@@ -179,8 +179,8 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
 
   // ---- Codex Delegate ------------------------------------------------------
   if (appServerExecutor) {
-    server.registerTool('codex_start', { description: 'Start a Codex App Server thread + turn in a workspace.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, prompt: z.string(), sandbox: z.string().optional() }) },
-      async ({ workspaceId, prompt, sandbox }) => { try { const root = assertSameWorkspace(workspaceRegistry, workspaceId, null); return text(await appServerExecutor.start({ prompt, cwd: root, sandbox, workspaceRoot: root, workspaceId })); } catch (e) { return errText(e.message); } });
+    server.registerTool('codex_start', { description: 'Start a Codex App Server thread + turn in a workspace. accessMode is required (read_only | workspace_write); a mutation delegation must not silently default to read-only.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, prompt: z.string(), accessMode: z.enum(['read_only', 'workspace_write']) }) },
+      async ({ workspaceId, prompt, accessMode }) => { try { const root = assertSameWorkspace(workspaceRegistry, workspaceId, null); return text(await appServerExecutor.start({ prompt, cwd: root, accessMode, workspaceRoot: root, workspaceId })); } catch (e) { return errText(e.message); } });
     server.registerTool('codex_get', { description: 'Read structured state + bounded result + pending approvals for a Codex job.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string() }) },
       async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.get({ jobId })); } catch (e) { return errText(e.message); } });
     server.registerTool('codex_continue', { description: 'Continue the same Codex thread.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string(), instruction: z.string() }) },

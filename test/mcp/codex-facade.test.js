@@ -47,7 +47,7 @@ test('codex_delegate MCP facade: schema-specific result, truthful approvals, wor
   const wsB = JSON.parse(textOf(await client.callTool({ name: 'workspace_open', arguments: { path: repoB } })));
   assert.ok(wsA.workspaceId && wsB.workspaceId);
 
-  const started = JSON.parse(textOf(await client.callTool({ name: 'codex_start', arguments: { workspaceId: wsA.workspaceId, prompt: 'do it' } })));
+  const started = JSON.parse(textOf(await client.callTool({ name: 'codex_start', arguments: { workspaceId: wsA.workspaceId, prompt: 'do it', accessMode: 'workspace_write' } })));
   assert.ok(started.jobId && started.threadId && started.turnId);
 
   let approvalId = null;
@@ -103,7 +103,7 @@ test('codex_get reports non-binary approvals truthfully (approve/deny not advert
   t.after(() => client.close());
 
   const wsA = JSON.parse(textOf(await client.callTool({ name: 'workspace_open', arguments: { path: repoA } })));
-  const started = JSON.parse(textOf(await client.callTool({ name: 'codex_start', arguments: { workspaceId: wsA.workspaceId, prompt: 'do it' } })));
+  const started = JSON.parse(textOf(await client.callTool({ name: 'codex_start', arguments: { workspaceId: wsA.workspaceId, prompt: 'do it', accessMode: 'workspace_write' } })));
 
   let approvalId = null;
   let approvalInfo = null;
@@ -130,7 +130,7 @@ test('legacy/unbound Codex job (no workspaceRoot) fails closed through MCP', asy
   t.after(() => client.close());
   const wsA = JSON.parse(textOf(await client.callTool({ name: 'workspace_open', arguments: { path: repoA } })));
   // Create a job WITHOUT workspaceRoot (legacy path) directly on the executor.
-  const legacy = await executor.start({ prompt: 'legacy', cwd: repoA });
+  const legacy = await executor.start({ prompt: 'legacy', cwd: repoA, accessMode: 'workspace_write' });
   const legacyRes = await client.callTool({ name: 'codex_get', arguments: { workspaceId: wsA.workspaceId, jobId: legacy.jobId } });
   assert.equal(legacyRes.isError, true);
   assert.ok(textOf(legacyRes).includes('predates workspace authorization'));

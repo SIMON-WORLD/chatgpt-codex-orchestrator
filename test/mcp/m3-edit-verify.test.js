@@ -100,7 +100,7 @@ test('codex_owned workspace blocks Direct Local edit apply (fail before mutation
   const p = JSON.parse(textOf(await client.callTool({ name: 'edit', arguments: { workspaceId: ws.workspaceId, mode: 'preview', change: { path: 'a.txt', baseHash: rd.sha256, replacements: [{ oldText: 'world', newText: 'there' }] } } })));
 
   // A Codex turn is running -> codex owns the workspace.
-  const started = JSON.parse(textOf(await client.callTool({ name: 'codex_start', arguments: { workspaceId: ws.workspaceId, prompt: 'do it' } })));
+  const started = JSON.parse(textOf(await client.callTool({ name: 'codex_start', arguments: { workspaceId: ws.workspaceId, prompt: 'do it', accessMode: 'workspace_write' } })));
   assert.ok(started.jobId);
   assert.equal(shared.owner, 'codex');
 
@@ -130,7 +130,7 @@ test('chatgpt_owned workspace blocks codex_start (fail before App Server action)
 
   // Simulate a Direct Local (chatgpt) mutation unit currently holding the workspace.
   shared.acquire('chatgpt', 'direct-local-unit');
-  const started = await client.callTool({ name: 'codex_start', arguments: { workspaceId: ws.workspaceId, prompt: 'do it' } });
+  const started = await client.callTool({ name: 'codex_start', arguments: { workspaceId: ws.workspaceId, prompt: 'do it', accessMode: 'workspace_write' } });
   assert.equal(started.isError, true);
   assert.match(textOf(started), /workspace already owned by chatgpt|cannot acquire codex/);
   assert.equal(shared.owner, 'chatgpt');

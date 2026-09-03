@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideRoute, normalizeFacts, ROUTES, MUTATION_OWNERS, FACT_KEYS, RouterError } from '../../src/router/decide.js';
+import { decideRoute, normalizeFacts, ROUTES, MUTATION_OWNERS, ACCESS_MODES, FACT_KEYS, RouterError } from '../../src/router/decide.js';
 
 test('router contract exposes the four routes and owner surface', () => {
   assert.deepEqual([...ROUTES], ['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']);
   assert.deepEqual([...MUTATION_OWNERS], ['none', 'chatgpt', 'codex']);
   assert.equal(FACT_KEYS.length, 10);
+  assert.deepEqual([...ACCESS_MODES], ['read_only', 'workspace_write']);
 });
 
 test('native only -> CHATGPT_NATIVE', () => {
@@ -125,4 +126,41 @@ test('requiresLocal=true must claim a readOnly or mutationRequired path -> Route
 test('normalizeFacts applies the same consistency validation', () => {
   assert.throws(() => normalizeFacts({ requiresLocal: false, multiFile: true }), /local execution facts provided but requiresLocal is false/);
   assert.doesNotThrow(() => normalizeFacts({ requiresLocal: true, readOnly: true, mutationRequired: false }));
+});
+
+
+// ---- M7: explicit Codex access contract (codexAccessModeExpected) ----------
+
+test('CODEX_DELEGATE mutation -> codexAccessModeExpected=workspace_write', () => {
+  const d = decideRoute({ requiresLocal: true, requiresNative: false, mutationRequired: true, multiFile: true });
+  assert.equal(d.route, 'CODEX_DELEGATE');
+  assert.equal(d.codexAccessModeExpected, 'workspace_write');
+});
+
+test('HYBRID -> CODEX_DELEGATE mutation -> codexAccessModeExpected=workspace_write', () => {
+  const d = decideRoute({ requiresNative: true, requiresLocal: true, mutationRequired: true, multiFile: true, unknownRootCause: true });
+  assert.equal(d.route, 'HYBRID');
+  assert.equal(d.localRoute, 'CODEX_DELEGATE');
+  assert.equal(d.codexAccessModeExpected, 'workspace_write');
+});
+
+test('non-Codex routes -> codexAccessModeExpected=null', () => {
+  // native-only
+  let d = decideRoute({ requiresNative: true, requiresLocal: false });
+  assert.equal(d.codexAccessModeExpected, null);
+  // read-only direct local
+  d = decideRoute({ requiresLocal: true, requiresNative: false, readOnly: true, mutationRequired: false });
+  assert.equal(d.route, 'CHATGPT_DIRECT_LOCAL');
+  assert.equal(d.codexAccessModeExpected, null);
+  // HYBRID -> DIRECT_LOCAL
+  d = decideRoute({ requiresNative: true, requiresLocal: true, readOnly: true, mutationRequired: false });
+  assert.equal(d.localRoute, 'CHATGPT_DIRECT_LOCAL');
+  assert.equal(d.codexAccessModeExpected, null);
+});
+
+test('Codex route never returns read_only for a mutation delegation', () => {
+  const d = decideRoute({ requiresLocal: true, requiresNative: false, mutationRequired: true, longRunning: true });
+  assert.equal(d.route, 'CODEX_DELEGATE');
+  assert.equal(d.codexAccessModeExpected, 'workspace_write');
+  assert.notEqual(d.codexAccessModeExpected, 'read_only');
 });
