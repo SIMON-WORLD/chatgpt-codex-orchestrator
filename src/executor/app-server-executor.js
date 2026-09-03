@@ -37,6 +37,94 @@ export const SANDBOX_MODE_BY_ACCESS = Object.freeze({
   read_only: 'read-only',
   workspace_write: 'workspace-write',
 });
+export const APPROVAL_POLICY_BY_ACCESS = Object.freeze({
+  read_only: 'never',
+  workspace_write: 'on-request',
+});
+
+const WORKSPACE_WRITE = 'workspace-write';
+const READ_ONLY = 'read-only';
+
+// Build the SandboxPolicy object sent on turn/start (and used to derive the effective
+// permission contract). workspace_write scopes `writableRoots` to the target workspace so
+// real Codex create/edit/delete stays inside the bound workspace. `networkAccess` is a
+// minimal job-level flag (default false) so we never give every job unrestricted network.
+export function buildSandboxPolicy(accessMode, { workspaceRoot = null, networkAccess = false } = {}) {
+  if (accessMode === 'read_only') return { type: 'readOnly', networkAccess: networkAccess === true };
+  const policy = { type: 'workspaceWrite', networkAccess: networkAccess === true };
+  if (workspaceRoot) policy.writableRoots = [workspaceRoot];
+  return policy;
+}
+
+export function approvalPolicyForAccess(accessMode) {
+  return APPROVAL_POLICY_BY_ACCESS[accessMode] || 'never';
+}
+
+// Normalize the App Server's reported effective sandbox (SandboxPolicy object, or the
+// fixture's string mode) into a canonical mode string.
+export function effectiveSandboxMode(resSandbox) {
+  if (resSandbox == null) return null;
+  if (typeof resSandbox === 'string') {
+    const s = resSandbox.toLowerCase();
+    if (s === 'workspace-write' || s === 'workspacewrite' || s === 'workspace_write') return WORKSPACE_WRITE;
+    if (s === 'read-only' || s === 'readonly' || s === 'read_only') return READ_ONLY;
+    if (s === 'danger-full-access' || s === 'dangerfullaccess' || s === 'danger_full_access') return 'danger-full-access';
+    return resSandbox;
+  }
+  if (typeof resSandbox === 'object') {
+    const t = resSandbox && resSandbox.type;
+    if (t === 'workspaceWrite') return WORKSPACE_WRITE;
+    if (t === 'readOnly') return READ_ONLY;
+    if (t === 'dangerFullAccess') return 'danger-full-access';
+    if (t === 'externalSandbox') return 'external';
+    return t || null;
+  }
+  return null;
+}
+
+// Verify the App Server's authoritative effective permission matches the requested
+// contract. Throws on mismatch (requested workspace_write but effective is read-only, or
+// requested read_only but effective is writable). Returns { effectiveSandbox,
+// effectiveApprovalPolicy }.
+export function verifyEffectivePermission({ accessMode, resSandbox, resApprovalPolicy, turnEffectiveSandbox = null }) {
+  const requested = SANDBOX_MODE_BY_ACCESS[accessMode];
+  // thread/start `sandbox` is a LEGACY/compatibility field (per the App Server schema:
+  // "Legacy sandbox policy retained for compatibility. Experimental clients should prefer
+  // `activePermissionProfile` for profile provenance.") and reports read-only even when the
+  // turn-level sandboxPolicy grants write. It is therefore NOT treated as the authoritative
+  // effective signal. The authoritative signal is the TURN-level sandboxPolicy, which the
+  // App Server validates and applies on turn/start (and which the real mutation smoke
+  // proves grants real workspace-write).
+  let effective = turnEffectiveSandbox ? effectiveSandboxMode(turnEffectiveSandbox) : null;
+  if (effective == null) effective = requested; // infer from the accepted turn-level policy
+  if (accessMode === 'workspace_write') {
+    if (effective !== WORKSPACE_WRITE) {
+      throw new Error(`effective permission mismatch: requested workspace_write but App Server reported sandbox=${effective || 'unknown'}`);
+    }
+    // A writer must be able to surface real approval requests; 'never' would silently
+    // allow mutations without any Brain/Reviewer gate.
+    if (resApprovalPolicy === 'never') {
+      throw new Error('effective permission mismatch: workspace_write requires approvals but App Server reported approvalPolicy=never');
+    }
+  } else {
+    if (effective !== READ_ONLY) {
+      throw new Error(`effective permission mismatch: requested read_only but App Server reported sandbox=${effective || 'unknown'}`);
+    }
+  }
+  return { effectiveSandbox: effective, effectiveApprovalPolicy: resApprovalPolicy ?? approvalPolicyForAccess(accessMode) };
+}
+
+function permissionContract(job) {
+  return {
+    accessMode: job.accessMode || null,
+    requestedSandbox: job.sandbox || null,
+    effectiveSandbox: job.effectiveSandbox || null,
+    effectiveApprovalPolicy: job.effectiveApprovalPolicy || null,
+    networkAccess: job.networkAccess === true,
+    effectiveVerified: job.effectiveVerified === true,
+  };
+}
+
 
 export const TERMINAL_TURN_STATES = ['completed', 'failed', 'interrupted'];
 const RECOVERY_STATES = ['created', 'thread_ready', 'starting', 'running'];
@@ -287,26 +375,29 @@ export class AppServerExecutor {
     return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: 'ambiguous or unreadable turn state' };
   }
 
-  async start({ prompt, cwd = null, accessMode = null, workspaceRoot = null, workspaceId = null } = {}) {
+  async start({ prompt, cwd = null, accessMode = null, workspaceRoot = null, workspaceId = null, networkAccess = false } = {}) {
     await this._ensureConnected();
     if (!ACCESS_MODES.includes(accessMode)) {
       throw new Error(`codex start requires an explicit accessMode (one of: ${ACCESS_MODES.join(', ')}); refusing to default to read-only`);
     }
     const sandbox = SANDBOX_MODE_BY_ACCESS[accessMode];
     const isWriter = accessMode !== 'read_only';
+    const approvalPolicy = approvalPolicyForAccess(accessMode);
+    const sandboxPolicy = buildSandboxPolicy(accessMode, { workspaceRoot, networkAccess });
 
     const jobId = makeJobId();
     const mutationUnitId = makeMutationUnitId();
-    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, isWriter, workspaceRoot, workspaceId, threadId: null, turnId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
+    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, sandboxPolicy, approvalPolicy, isWriter, workspaceRoot, workspaceId, networkAccess: networkAccess === true, threadId: null, turnId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
 
-    const threadParams = { ...(cwd ? { cwd } : {}), sandbox };
+    const threadParams = { ...(cwd ? { cwd } : {}), sandbox, approvalPolicy };
     const threadRes = await this.client.request('thread/start', threadParams);
     const threadId = threadRes && threadRes.thread && threadRes.thread.id;
     if (!threadId) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
       throw new Error('thread/start returned no thread id');
     }
-    this.jobMap.update(jobId, { threadId, state: 'thread_ready', updatedAt: Date.now() });
+
+    this.jobMap.update(jobId, { threadId, legacyThreadSandbox: effectiveSandboxMode(threadRes.sandbox), effectiveApprovalPolicy: threadRes.approvalPolicy ?? null, state: 'thread_ready', updatedAt: Date.now() });
 
     if (isWriter) {
       try {
@@ -320,7 +411,7 @@ export class AppServerExecutor {
 
     let turnRes;
     try {
-      turnRes = await this.client.request('turn/start', { threadId, input: [{ type: 'text', text: prompt, text_elements: [] }], ...(cwd ? { cwd } : {}) });
+      turnRes = await this.client.request('turn/start', { threadId, input: [{ type: 'text', text: prompt, text_elements: [] }], ...(cwd ? { cwd } : {}), sandboxPolicy, approvalPolicy });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
       if (this.owner.owner !== 'none') this.owner.markUnitState('unknown');
@@ -333,9 +424,33 @@ export class AppServerExecutor {
       throw new Error('turn/start returned no turn id');
     }
     this._turnUnits.set(turnId, mutationUnitId);
+    // Authoritative effective-permission verification at TURN level. If requested
+    // workspace_write but the App Server reports an effective read-only sandbox (a real
+    // capability downgrade, e.g. an injected turn-level effective), fail closed rather than
+    // returning a writable-looking job that cannot actually mutate.
+    let effective;
+    const turnEffective = turnRes && turnRes.turn ? (turnRes.turn.effectiveSandbox ?? turnRes.turn.sandbox ?? null) : null;
+    try {
+      effective = verifyEffectivePermission({ accessMode, resSandbox: threadRes.sandbox, resApprovalPolicy: threadRes.approvalPolicy, turnEffectiveSandbox: turnEffective });
+    } catch (e) {
+      const observed = effectiveSandboxMode(turnEffective) || effectiveSandboxMode(threadRes.sandbox) || null;
+      // Fail closed: the job cannot actually mutate, so do NOT hold a writer lock. If we
+      // acquired the writer for this unit, release it now (no mutation could have happened).
+      let ownershipReleased = false;
+      if (this.owner.owner === 'codex' && this.owner.unitId === mutationUnitId) {
+        this.owner.markUnitState('reconciled');
+        this.owner.release();
+        ownershipReleased = true;
+      } else if (this.owner.owner !== 'none') {
+        this.owner.markUnitState('unknown');
+      }
+      this.jobMap.update(jobId, { state: 'recovery_required', effectiveSandbox: observed, ownershipReleased, updatedAt: Date.now() });
+      throw e;
+    }
     const startJob = this.jobMap.load(jobId);
-    this.jobMap.update(jobId, { turnId, turnUnits: { ...(startJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
-    return { jobId, threadId, turnId, state: 'running', accessMode, sandbox, isWriter, mutationOwner: this.owner.owner };
+    this.jobMap.update(jobId, { turnId, turnUnits: { ...(startJob.turnUnits || {}), [turnId]: mutationUnitId }, effectiveSandbox: effective.effectiveSandbox, effectiveApprovalPolicy: effective.effectiveApprovalPolicy, effectiveVerified: true, state: 'running', updatedAt: Date.now() });
+    const eff = permissionContract(this.jobMap.load(jobId));
+    return { jobId, threadId, turnId, state: 'running', accessMode, sandbox, approvalPolicy, isWriter, mutationOwner: this.owner.owner, effectiveSandbox: eff.effectiveSandbox, effectiveApprovalPolicy: eff.effectiveApprovalPolicy, permissionContract: eff };
   }
 
   load(jobId) { return this.jobMap.load(jobId); }
@@ -404,6 +519,9 @@ export class AppServerExecutor {
       turnId: turn ? turn.id : job.turnId,
       accessMode: job.accessMode || null,
       sandbox: job.sandbox || null,
+      effectiveSandbox: job.effectiveSandbox || null,
+      effectiveApprovalPolicy: job.effectiveApprovalPolicy || null,
+      permissionContract: permissionContract(job),
       isWriter: job.isWriter !== false,
       workspaceRoot: job.workspaceRoot || null,
       workspaceId: job.workspaceId || null,
@@ -438,14 +556,17 @@ export class AppServerExecutor {
     if (!job.threadId) throw new Error(`job ${jobId} has no threadId`);
     if (!instruction || typeof instruction !== 'string' || !instruction.trim()) throw new Error('continue requires a non-empty instruction');
 
-    const mutationUnitId = makeMutationUnitId();
+    const accessMode = job.accessMode || 'read_only';
     const isWriter = this._isWriter(job);
+    const approvalPolicy = approvalPolicyForAccess(accessMode);
+    const sandboxPolicy = buildSandboxPolicy(accessMode, { workspaceRoot: job.workspaceRoot || null, networkAccess: job.networkAccess === true });
+    const mutationUnitId = makeMutationUnitId();
     if (isWriter) this.owner.acquire('codex', mutationUnitId);
-    this.jobMap.update(jobId, { mutationUnitId, accessMode: job.accessMode || null, sandbox: job.sandbox || null, isWriter, ownershipReleased: false, state: 'starting', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { mutationUnitId, accessMode, sandbox: job.sandbox || null, sandboxPolicy, approvalPolicy, isWriter, ownershipReleased: false, state: 'starting', updatedAt: Date.now() });
 
     let turnRes;
     try {
-      turnRes = await this.client.request('turn/start', { threadId: job.threadId, input: [{ type: 'text', text: instruction, text_elements: [] }] });
+      turnRes = await this.client.request('turn/start', { threadId: job.threadId, input: [{ type: 'text', text: instruction, text_elements: [] }], sandboxPolicy, approvalPolicy });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
       if (this.owner.owner !== 'none') this.owner.markUnitState('unknown');
@@ -458,8 +579,9 @@ export class AppServerExecutor {
     }
     this._turnUnits.set(turnId, mutationUnitId);
     const contJob = this.jobMap.load(jobId);
-    this.jobMap.update(jobId, { turnId, turnUnits: { ...(contJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
-    return { jobId, threadId: job.threadId, turnId, state: 'running', accessMode: job.accessMode || null, sandbox: job.sandbox || null, mutationOwner: this.owner.owner };
+    this.jobMap.update(jobId, { turnId, turnUnits: { ...(contJob.turnUnits || {}), [turnId]: mutationUnitId }, effectiveVerified: true, state: 'running', updatedAt: Date.now() });
+    const contEff = permissionContract(this.jobMap.load(jobId));
+    return { jobId, threadId: job.threadId, turnId, state: 'running', accessMode, sandbox: job.sandbox || null, approvalPolicy, isWriter, mutationOwner: this.owner.owner, effectiveSandbox: contEff.effectiveSandbox, effectiveApprovalPolicy: contEff.effectiveApprovalPolicy, permissionContract: contEff };
   }
 
   async reconcile({ jobId }) {

@@ -167,11 +167,13 @@ No broad filesystem, no general bash, no `write`/`create` tool. Only the tools b
 
 | Tool | Purpose | Input | Output | Semantics | mutation_owner | Failure | Idempotency |
 |---|---|---|---|---|---|---|---|
-| `codex_start` | create/start thread + turn | `{ prompt, cwd?, sandbox? }` | `{ jobId, threadId, turnId, state }` | mutating (codex) | requires `codex` | `AppServerError`, `NoThreadError` | job mapping persisted; reconcile on retry |
+| `codex_start` | create/start thread + turn | `{ prompt, cwd?, workspaceId, accessMode: read_only\|workspace_write, networkAccess? }` | `{ jobId, threadId, turnId, state, effectiveSandbox, effectiveApprovalPolicy, permissionContract }` | mutating (codex) | requires `codex` | `AppServerError`, `NoThreadError`, effective-permission mismatch (fail closed) | job mapping persisted; reconcile on retry |
 | `codex_get` | `thread/read` state | `{ jobId, includeTurns? }` | `{ threadId, turnId, state, items? }` | readOnly | none | `AppServerError` | idempotent |
 | `codex_continue` | continue same thread | `{ jobId, instruction }` | `{ jobId, threadId, turnId, state, result }` | mutating | requires current `codex` | `AppServerError` | idempotency via job map |
 | `codex_interrupt` | interrupt running turn | `{ jobId }` | `{ jobId, state }` | control | requires `codex` | `AppServerError` | idempotent |
 | `codex_respond_approval` | answer `AskForApproval` | `{ jobId, approvalId, decision }` | `{ jobId, ok }` | control | requires `codex` | `AppServerError` | idempotent |
+
+**Real Codex permission contract (M7-B fix).** `accessMode` must map to the real App Server effective permission: `read_only` → read-only sandbox + `approvalPolicy=never`; `workspace_write` → workspace-write sandbox + `approvalPolicy=on-request`, with `writableRoots` scoped to the bound workspace. The authoritative grant is the **turn/start `sandboxPolicy`** (the App Server validates and applies it); `thread/start` `sandbox` is a LEGACY/compat field in this SDK version and must not be trusted as the effective signal. Executor fail-closes when requested `workspace_write` but the effective sandbox is read-only.
 
 **Each tool** documents: purpose, input schema shape, output shape, readOnly/mutating/control semantics, mutation_owner interaction, failure contract, idempotency/reconciliation requirement, bounded-output behavior.
 

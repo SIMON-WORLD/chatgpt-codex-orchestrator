@@ -94,6 +94,27 @@ M7 验证三种真实 execution pattern：
 
 该 hardening 的 ACCEPT 只表示 lifecycle blocker 已通过代码与 CI gate；是否真正解决 M7-B 必须由下一次 real-project dogfood 再验证，不能用 unit tests 替代。
 
+### M7-B attempt #2 — real Codex runtime permission contract (in progress, NOT accepted)
+
+真实 dogfood attempt #2 暴露一个 **production contract 不一致**：外层声明 `accessMode=workspace_write` / `sandbox=workspace-write` / `mutationOwner=codex`，但真实 Codex turn 内部仍为 `sandbox_mode=read-only`、`approval_policy=never`，workspace mutation 与 shell/test 执行均被 policy block。
+
+根因（Brain 独立确认 + 本机 schema 核实）：
+
+- `src/transport/codex-profile.js` 的隔离 CODEX_HOME profile 硬编码 `approval_policy = "never"`、`sandbox_mode = "read-only"`；
+- `AppServerExecutor.start()` 在 thread/start 传了 `sandbox`，但 turn/start 未传 `sandboxPolicy` / `approvalPolicy`，导致 turn 继承 profile 的 read-only/never 默认值；
+- `thread/start` 响应中的 `sandbox` 是 **legacy 字段**（schema 标注："Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance."）——在本机真实 App Server 上，即便请求 `sandbox=workspace-write` 也返回 `readOnly`，因此不能作为有效权限的判据。
+
+本轮（runtime-permission-contract）完成：
+
+- 隔离 profile 不再把任务静态锁死为 `sandbox_mode=read-only` / `approval_policy=never`（只负责 provider/model/credential-safe isolation）；
+- `accessMode` 映射为真实 effective permission：`read_only` → read-only + never；`workspace_write` → workspace-write + on-request；
+- 每条 Codex job 通过 **turn/start `sandboxPolicy`** 显式下发（权威机制），并给定 `writableRoots` 收窄到目标 workspace；`start` 与 `continue` 保持同一 permission contract；
+- 新增最小 job-level `networkAccess` 标志（默认 false），仅用于 git push 等需要网络的情形，不无条件放开；
+- `codex_get` / `codex_start` 返回 `permissionContract`（requested/effective/effectiveVerified）；对 requested workspace_write 但有效权限为 read-only 的情况 fail closed，不再让 Brain 等 8 分钟才发现；
+- 新增 REAL workspace-write mutation smoke：真实 Codex 在临时 workspace 创建 probe 文件 + 通过 shell 写第二个文件，`REAL_CODEX_WORKSPACE_WRITE=PASS`；+ python 能力探测（本机结果为 policy_blocked）。
+
+**重要：本轮尚未宣称 M7-B 通过。** 该 hardening 只保证 permission contract 与真实 App Server 一致；是否真正解决 M7-B 必须由下一次 real-project dogfood attempt 再验证。
+
 ## 当前下一步
 
 1. 将 production local runtime 同步到最新 accepted `main`。

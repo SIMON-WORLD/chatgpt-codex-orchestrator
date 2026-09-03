@@ -32,8 +32,6 @@ export function buildIsolatedConfig(provider, model) {
   const lines = [
     'model_provider = "' + pid + '"',
     'model = "' + (model || provider.model) + '"',
-    'approval_policy = "never"',
-    'sandbox_mode = "read-only"',
     '[model_providers.' + pid + ']',
     'name = "ccswitch"',
     'base_url = "' + provider.baseUrl + '"',

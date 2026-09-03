@@ -5,6 +5,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { AppServerExecutor, extractAssistantText } from '../../src/executor/app-server-executor.js';
+import { buildIsolatedConfig } from '../../src/transport/codex-profile.js';
 import { AppServerClient } from '../../src/executor/app-server-client.js';
 import { JobMap } from '../../src/executor/job-map.js';
 import { ApprovalError } from '../../src/executor/approval.js';
@@ -23,9 +24,10 @@ async function waitFor(fn, timeout = 3000) {
   return false;
 }
 
-function makeExecutor({ approval = '0', die = null, dataRoot = null, failTurnStart = false, slowTurn = false, turnFail = false, noConfirmInterrupt = false } = {}) {
+function makeExecutor({ approval = '0', die = null, dataRoot = null, failTurnStart = false, slowTurn = false, turnFail = false, noConfirmInterrupt = false, forceEffectiveSandbox = null } = {}) {
   const root = dataRoot || fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
   const env = { ...process.env, FAKE_APP_SERVER_APPROVAL: approval, FAKE_APP_SERVER_STATE_DIR: root };
+  if (forceEffectiveSandbox) { env.FAKE_APP_SERVER_FORCE_EFFECTIVE_SANDBOX = forceEffectiveSandbox; env.FAKE_APP_SERVER_FORCE_TURN_EFFECTIVE_SANDBOX = forceEffectiveSandbox; }
   if (die !== null) env.FAKE_APP_SERVER_DIE_MS = String(die);
   if (failTurnStart) env.FAKE_APP_SERVER_FAIL_TURN_START = '1';
   if (slowTurn) env.FAKE_APP_SERVER_SLOW_TURN = '1';
@@ -1033,4 +1035,138 @@ test('R6 resume foreign-owner protection: does not release/overwrite foreign cod
   await assert.rejects(() => exec.resume({ jobId: r.jobId }), /no candidate|ownership conflict|ambiguous|multiple candidate|chatgpt/);
   assert.equal(exec.owner.owner, 'chatgpt'); // NOT overwritten
   assert.equal(exec.owner.unitId, 'direct-unit');
+});
+
+// ---- M7 runtime permission contract (real Codex effective sandbox) ------------
+
+test('isolated profile no longer pins all tasks to read-only/never', () => {
+  const cfg = buildIsolatedConfig({ providerId: 'p', baseUrl: 'http://x', model: 'm' }, 'm');
+  assert.ok(!cfg.includes('approval_policy = "never"'), 'profile must not hardcode approval_policy=never');
+  assert.ok(!cfg.includes('sandbox_mode = "read-only"'), 'profile must not hardcode sandbox_mode=read-only');
+  // provider / credential-safe isolation remains.
+  assert.ok(cfg.includes('model_provider = "v02-ccswitch"'));
+  assert.ok(cfg.includes('env_key = "V02_CODEX_PROVIDER_TOKEN"'));
+  assert.ok(cfg.includes('requires_openai_auth = false'));
+});
+
+function readFakeTurns(root) {
+  try {
+    const p = path.join(root, 'fake-app-server-state.json');
+    if (!fs.existsSync(p)) return [];
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return Array.isArray(data.turns) ? data.turns : [];
+  } catch { return []; }
+}
+
+test('workspace_write start -> exact workspace-write request/effective contract', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws');
+  fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1', networkAccess: true });
+  assert.equal(r.accessMode, 'workspace_write');
+  assert.equal(r.sandbox, 'workspace-write');
+  assert.equal(r.approvalPolicy, 'on-request');
+  assert.equal(r.effectiveSandbox, 'workspace-write');
+  assert.equal(r.effectiveApprovalPolicy, 'on-request');
+  assert.equal(r.permissionContract.effectiveSandbox, 'workspace-write');
+  assert.equal(r.permissionContract.networkAccess, true);
+  const job = exec.load(r.jobId);
+  assert.equal(job.effectiveSandbox, 'workspace-write');
+  assert.equal(job.effectiveApprovalPolicy, 'on-request');
+  assert.equal(job.networkAccess, true);
+  assert.equal(job.sandboxPolicy.type, 'workspaceWrite');
+  assert.equal(job.sandboxPolicy.networkAccess, true);
+  assert.deepEqual(job.sandboxPolicy.writableRoots, [ws]);
+  // The App Server turn/start actually received the workspace-write sandbox policy.
+  const turns = readFakeTurns(root);
+  const done = turns.find((x) => x.sandboxPolicy && x.sandboxPolicy.type === 'workspaceWrite');
+  assert.ok(done, 'turn/start must receive a workspaceWrite sandboxPolicy');
+  assert.deepEqual(done.sandboxPolicy.writableRoots, [ws]);
+});
+
+test('read_only start -> exact read-only request/effective contract (no writer)', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws');
+  fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'x', accessMode: 'read_only', workspaceRoot: ws, workspaceId: 'w1' });
+  assert.equal(r.accessMode, 'read_only');
+  assert.equal(r.sandbox, 'read-only');
+  assert.equal(r.approvalPolicy, 'never');
+  assert.equal(r.effectiveSandbox, 'read-only');
+  assert.equal(r.permissionContract.effectiveSandbox, 'read-only');
+  assert.equal(exec.owner.owner, 'none', 'read_only must not acquire writer ownership');
+  const job = exec.load(r.jobId);
+  assert.equal(job.sandboxPolicy.type, 'readOnly');
+  assert.equal(job.networkAccess, false);
+  // turn/start must receive a readOnly sandbox policy.
+  const turns = readFakeTurns(root);
+  const done = turns.find((x) => x.sandboxPolicy && x.sandboxPolicy.type === 'readOnly');
+  assert.ok(done, 'turn/start must receive a readOnly sandboxPolicy');
+});
+
+test('continue preserves the same permission contract (workspace_write)', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws');
+  fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r0 = await exec.start({ prompt: 'a', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1', networkAccess: true });
+  await waitFor(() => exec.load(r0.jobId).state === 'completed');
+  const c = await exec.continue({ jobId: r0.jobId, instruction: 'more' });
+  assert.equal(c.accessMode, 'workspace_write');
+  assert.equal(c.approvalPolicy, 'on-request');
+  assert.equal(c.effectiveSandbox, 'workspace-write');
+  assert.equal(exec.owner.owner, 'codex');
+  const job = exec.load(r0.jobId);
+  assert.equal(job.accessMode, 'workspace_write');
+  assert.equal(job.networkAccess, true);
+  assert.equal(job.sandboxPolicy.type, 'workspaceWrite');
+  await waitFor(() => exec.load(r0.jobId).state === 'completed');
+});
+
+test('continue preserves read_only contract and never escalates', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws');
+  fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r0 = await exec.start({ prompt: 'a', accessMode: 'read_only', workspaceRoot: ws, workspaceId: 'w1' });
+  const c = await exec.continue({ jobId: r0.jobId, instruction: 'more' });
+  assert.equal(c.accessMode, 'read_only');
+  assert.equal(c.sandbox, 'read-only');
+  assert.equal(c.approvalPolicy, 'never');
+  assert.equal(exec.owner.owner, 'none', 'read_only continue must not escalate to writer');
+  const job = exec.load(r0.jobId);
+  assert.equal(job.sandboxPolicy.type, 'readOnly');
+});
+
+test('requested workspace_write but effective read-only -> fail closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws');
+  fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root, forceEffectiveSandbox: 'read-only' });
+  t.after(() => exec.shutdown());
+  await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w1' }), /effective permission mismatch/);
+  // No writer acquired, job marked recovery_required with the observed effective sandbox.
+  assert.equal(exec.owner.owner, 'none');
+  const jobs = Object.values(exec.jobMap.list()).filter((j) => j.state === 'recovery_required');
+  assert.ok(jobs.length >= 1, 'job must be left in recovery_required on effective mismatch');
+  assert.equal(jobs[0].effectiveSandbox, 'read-only');
+});
+
+test('networkAccess flag maps into the sandboxPolicy networkAccess (default false)', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const ws = path.join(root, 'ws');
+  fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws });
+  assert.equal(r.permissionContract.networkAccess, false);
+  const job = exec.load(r.jobId);
+  assert.equal(job.sandboxPolicy.networkAccess, false);
+  assert.equal(job.networkAccess, false);
 });
