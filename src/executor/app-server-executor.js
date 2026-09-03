@@ -1,4 +1,4 @@
-// chatgpt-codex-orchestrator: AppServerExecutor (v0.2 M1, M7 hardening R2).
+// chatgpt-codex-orchestrator: AppServerExecutor (v0.2 M1, M7 hardening R3).
 // Productionized wrapper over AppServerClient + JobMap + MutationOwner + approval.
 // Exposes a thin, stable MCP-facing facade: start / get / continue / interrupt /
 // respondApproval / reconcile / resume / shutdown. It does NOT expose raw App Server
@@ -9,36 +9,33 @@
 //     mutationUnitId BEFORE any mutating turn/start. Only ONE writer may be active
 //     per workspace.
 //   - A `read_only` Codex unit NEVER acquires MutationOwner writer ownership — on
-//     start/continue/notification/recovery it leaves the owner as `none` (it does
-//     not hold a writer lock, so it cannot block Direct Local or a writer unit).
+//     start/continue/notification/recovery it leaves the owner as `none`.
 //   - MutationOwner protects ONLY the currently-executing writer, NOT a Brain
 //     acceptance/review lock. Execution ownership is released only when an
 //     authoritative App Server turn status (completed / failed / interrupted) is
 //     confirmed via thread/read. Missing / process-exit / ambiguous state stays
 //     fail-closed (owner retained, recoveryRequired).
-//   - A late notification for an OLD turn must never overwrite the job's active
-//     turnId/state or release the CURRENT unit's ownership.
 //
-// Recovery: after a process/executor death, the persisted job carries its
-// mutationUnitId so a FRESH AppServerExecutor can reconstruct ownership. reconcile()
-// and resume() use thread/resume + thread/read and NEVER blindly create a duplicate
-// thread/turn, and there is NO generic force-unlock.
+// R3:
+//   - A turn -> mutation-unit identity map (this._turnUnits) associates each turn with
+//     the unit it belongs to, so a late notification for an OLD turn can never
+//     override the active turn or release a NEWER unit's writer (fixes the
+//     continue-transition stale-turn race).
+//   - reconcile() verifies writer ownership identity: it may only reconcile a unit if
+//     it is the current owner's unit (or owner is none); a foreign/newer unit or a
+//     chatgpt owner fails closed with recoveryRequired=true. It never force-unlocks.
 
 import { AppServerClient } from './app-server-client.js';
 import { JobMap, makeJobId, makeMutationUnitId } from './job-map.js';
 import { MutationOwner, MutationOwnerError } from '../state/mutation-owner.js';
 import { normalizeApproval, mapDecision, APPROVAL_DECISIONS, ApprovalError, SUPPORTED_BINARY_METHODS } from './approval.js';
 
-// Orchestrator-level Codex access contract. danger-full-access is NOT exposed as a
-// normal MCP option; only read_only / workspace_write are permitted.
 export const ACCESS_MODES = Object.freeze(['read_only', 'workspace_write']);
-// Map orchestrator accessMode -> authoritative Codex App Server SandboxMode enum.
 export const SANDBOX_MODE_BY_ACCESS = Object.freeze({
   read_only: 'read-only',
   workspace_write: 'workspace-write',
 });
 
-// Authoritative App Server turn terminal statuses (TurnStatus enum).
 export const TERMINAL_TURN_STATES = ['completed', 'failed', 'interrupted'];
 const RECOVERY_STATES = ['created', 'thread_ready', 'starting', 'running'];
 
@@ -91,6 +88,8 @@ export class AppServerExecutor {
     this.owner = mutationOwner || new MutationOwner();
     this._approvals = new Map();
     this._notifiers = new Set();
+    // turnId -> mutationUnitId, so a late notification can be attributed to its unit.
+    this._turnUnits = new Map();
     this._setup();
   }
 
@@ -103,19 +102,15 @@ export class AppServerExecutor {
   onEvent(handler) { this._notifiers.add(handler); return () => this._notifiers.delete(handler); }
   _emit(event) { for (const h of this._notifiers) { try { h(event); } catch {} } }
 
-  // True only when the unit is allowed to hold MutationOwner WRITER ownership. A
-  // read_only Codex job is a reader and must never acquire writer ownership.
   _isWriter(job) { return !job || job.accessMode !== 'read_only'; }
 
   _handleClientExit(evt) {
-    if (this.client._closing) return; // clean shutdown, not an unexpected death
+    if (this.client._closing) return;
     for (const job of this.jobMap.list()) {
       if (RECOVERY_STATES.includes(job.state)) {
         this.jobMap.update(job.jobId, { state: 'recovery_required', updatedAt: Date.now() });
       }
     }
-    // Only a held writer becomes 'unknown'; a read_only unit never holds a writer, so
-    // the owner stays none (no lingering writer lock after a read-only process death).
     if (this.owner.owner !== 'none') this.owner.markUnitState('unknown');
     this._emit({ type: 'process-exit', ...evt });
   }
@@ -129,10 +124,17 @@ export class AppServerExecutor {
       const job = this.jobMap.findByThread(threadId);
       if (!job) { this._emit(note); return; }
       const notifiedTurnId = turn.id || null;
-      // Stale-notification guard: if the job already advanced to a DIFFERENT active
-      // turn, a late notification for an older turn must NOT overwrite the job's
-      // turnId/state nor release the current unit's ownership.
-      if (job.turnId && notifiedTurnId && notifiedTurnId !== job.turnId) {
+      // Associate the notified turn with the job's current mutation unit when not yet
+      // known (a turn/started notification may arrive before the start/continue response).
+      if (notifiedTurnId && !this._turnUnits.has(notifiedTurnId)) {
+        this._turnUnits.set(notifiedTurnId, job.mutationUnitId || null);
+      }
+      const notifiedUnitId = this._turnUnits.get(notifiedTurnId);
+      const currentOwnerUnit = this.owner.owner !== 'none' ? this.owner.unitId : null;
+      // Turn-unit identity guard: if this notification's turn belongs to a unit that is
+      // NOT the owner's current unit, it is stale/foreign -> never override state nor
+      // release the current (possibly newer) unit's ownership.
+      if (notifiedUnitId && currentOwnerUnit && notifiedUnitId !== currentOwnerUnit) {
         this._emit(note);
         return;
       }
@@ -169,13 +171,12 @@ export class AppServerExecutor {
       const rel = this.owner.release();
       ownershipReleased = rel.released;
     } else if (this.owner.owner === 'none') {
-      ownershipReleased = true; // already released (or a read_only unit never held a writer)
+      ownershipReleased = true;
     }
     if (jobMapUpdate) this.jobMap.update(job.jobId, { state: status, ownershipReleased, updatedAt: Date.now() });
     return { ownershipReleased, status, unitState: ownershipReleased ? 'released' : this.owner.unitState };
   }
 
-  // Authoritative thread/read: return the turn for this job, or null if unreadable/ambiguous.
   async _authoritativeTurn(job) {
     if (!job || !job.threadId || !job.turnId) return null;
     let read;
@@ -189,8 +190,6 @@ export class AppServerExecutor {
     return turn && turn.status ? turn : null;
   }
 
-  // Reconcile the owner for a resolved turn status. A read_only unit never acquires
-  // a writer. On a terminal status the writer is reconciled + released.
   _reconcileOwner({ unitId, turnStatus, isWriter = true }) {
     const uid = unitId || makeMutationUnitId();
     if (isWriter) {
@@ -238,8 +237,6 @@ export class AppServerExecutor {
     }
     this.jobMap.update(jobId, { threadId, state: 'thread_ready', updatedAt: Date.now() });
 
-    // Only a WRITER acquires codex ownership bound to the persisted mutationUnitId
-    // BEFORE turn/start. A read_only unit never acquires (owner stays none).
     if (isWriter) {
       try {
         this.owner.acquire('codex', mutationUnitId);
@@ -264,7 +261,7 @@ export class AppServerExecutor {
       if (this.owner.owner !== 'none') this.owner.markUnitState('unknown');
       throw new Error('turn/start returned no turn id');
     }
-
+    this._turnUnits.set(turnId, mutationUnitId);
     this.jobMap.update(jobId, { turnId, state: 'running', updatedAt: Date.now() });
     return { jobId, threadId, turnId, state: 'running', accessMode, sandbox, isWriter, mutationOwner: this.owner.owner };
   }
@@ -305,8 +302,6 @@ export class AppServerExecutor {
       if (rel.ownershipReleased) recoveryRequired = false;
     }
 
-    // Consistent mutationUnitState: never 'released' unless ownership was actually
-    // released. A read_only / never-held unit reports 'none' (no writer held).
     let mutationUnitState;
     if (ownershipReleased) mutationUnitState = 'released';
     else if (this.owner.owner === 'none') mutationUnitState = 'none';
@@ -354,11 +349,9 @@ export class AppServerExecutor {
     if (!job.threadId) throw new Error(`job ${jobId} has no threadId`);
     if (!instruction || typeof instruction !== 'string' || !instruction.trim()) throw new Error('continue requires a non-empty instruction');
 
-    // Continue the SAME thread; sandbox/accessMode are inherited (never escalated).
-    // A read_only job creates a new mutation unit but does NOT acquire a writer.
     const mutationUnitId = makeMutationUnitId();
     const isWriter = this._isWriter(job);
-    if (isWriter) this.owner.acquire('codex', mutationUnitId); // fails if the previous unit is active
+    if (isWriter) this.owner.acquire('codex', mutationUnitId);
     this.jobMap.update(jobId, { mutationUnitId, accessMode: job.accessMode || null, sandbox: job.sandbox || null, isWriter, ownershipReleased: false, state: 'starting', updatedAt: Date.now() });
 
     let turnRes;
@@ -374,7 +367,7 @@ export class AppServerExecutor {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
       throw new Error('turn/start returned no turn id');
     }
-
+    this._turnUnits.set(turnId, mutationUnitId);
     this.jobMap.update(jobId, { turnId, state: 'running', updatedAt: Date.now() });
     return { jobId, threadId: job.threadId, turnId, state: 'running', accessMode: job.accessMode || null, sandbox: job.sandbox || null, mutationOwner: this.owner.owner };
   }
@@ -382,6 +375,8 @@ export class AppServerExecutor {
   // Public authoritative reconciliation (MCP codex_reconcile). Reconnects via
   // thread/resume + thread/read. NEVER creates a new turn or a generic force-unlock.
   // terminal -> release; inProgress -> retain writer; ambiguous -> fail closed.
+  // Writer ownership identity is enforced: a reconcile may only affect the unit that is
+  // the current owner's unit; a foreign/newer unit or a chatgpt owner fails closed.
   async reconcile({ jobId }) {
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
@@ -390,6 +385,7 @@ export class AppServerExecutor {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
       return { jobId, reconciled: false, resolution: 'unresolved', recoveryRequired: true, reason: 'no thread/turn identity to reconcile' };
     }
+    const unitId = job.mutationUnitId || null;
 
     let resumed;
     try {
@@ -403,7 +399,6 @@ export class AppServerExecutor {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
       return { jobId, reconciled: false, resolution: 'unresolved', recoveryRequired: true, reason: 'thread/resume returned no thread id' };
     }
-    // Authoritative thread/read for the real turn state.
     let read;
     try {
       read = await this.client.request('thread/read', { threadId: job.threadId, includeTurns: true });
@@ -416,25 +411,38 @@ export class AppServerExecutor {
     const turn = turns.find((t) => t && t.id === job.turnId) || null;
 
     if (turn && TERMINAL_TURN_STATES.includes(turn.status)) {
-      const rel = this._releaseUnitOnTerminal(job, turn.status);
-      return { jobId, reconciled: true, resolution: 'terminal', state: turn.status, ownershipReleased: rel.ownershipReleased, recoveryRequired: false, mutationUnitId: job.mutationUnitId || null };
-    }
-    if (turn && turn.status === 'inProgress') {
-      // Retain writer (a writer keeps its lock; a read_only unit holds none).
-      if (this._isWriter(job)) {
-        if (this.owner.owner === 'none') this.owner.acquire('codex', job.mutationUnitId || makeMutationUnitId());
-        else if (this.owner.owner === 'codex') this.owner.markUnitState('running');
+      // Terminal reconcile must NOT release a foreign/newer active mutation unit.
+      if (this.owner.owner === 'codex' && this.owner.unitId !== unitId) {
+        this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
+        return { jobId, reconciled: false, resolution: 'unresolved', recoveryRequired: true, reason: `ownership conflict: active codex unit ${this.owner.unitId} differs from job unit ${unitId}` };
       }
-      this.jobMap.update(jobId, { state: 'running', updatedAt: Date.now() });
-      return { jobId, reconciled: true, resolution: 'in_progress', state: 'running', ownershipReleased: false, recoveryRequired: false, mutationUnitId: job.mutationUnitId || null };
+      if (this.owner.owner === 'chatgpt') {
+        this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
+        return { jobId, reconciled: false, resolution: 'unresolved', recoveryRequired: true, reason: 'ownership conflict: workspace owned by chatgpt' };
+      }
+      const rel = this._releaseUnitOnTerminal(job, turn.status);
+      return { jobId, reconciled: true, resolution: 'terminal', state: turn.status, ownershipReleased: rel.ownershipReleased, recoveryRequired: false, mutationUnitId: unitId };
     }
 
-    // Ambiguous / unreadable / no matching turn -> fail closed.
+    if (turn && turn.status === 'inProgress') {
+      // A read_only unit holds no writer; reconcile leaves it as none.
+      if (this.owner.owner === 'none' && this._isWriter(job)) {
+        this.owner.acquire('codex', unitId || makeMutationUnitId());
+      } else if (this.owner.owner === 'codex' && (this.owner.unitId === unitId || unitId == null)) {
+        this.owner.markUnitState('running');
+      } else {
+        // codex with a DIFFERENT unit, or chatgpt owner -> fail closed.
+        this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
+        return { jobId, reconciled: false, resolution: 'unresolved', recoveryRequired: true, reason: `ownership conflict: active owner ${this.owner.owner} (${this.owner.unitId || 'no-unit'}) differs from job unit ${unitId || 'unknown'}` };
+      }
+      this.jobMap.update(jobId, { state: 'running', updatedAt: Date.now() });
+      return { jobId, reconciled: true, resolution: 'in_progress', state: 'running', ownershipReleased: false, recoveryRequired: false, mutationUnitId: unitId };
+    }
+
     this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
     return { jobId, reconciled: false, resolution: 'unresolved', recoveryRequired: true, reason: 'ambiguous or unreadable turn state' };
   }
 
-  // Official App Server recovery: initialize -> thread/resume -> thread/read.
   async resume({ jobId }) {
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
@@ -493,7 +501,6 @@ export class AppServerExecutor {
     throw new Error(`cannot reconcile job ${jobId}: ambiguous turn state; refusing to guess`);
   }
 
-  // Bounded authoritative interrupt reconciliation.
   async _boundedReconcile(jobId, attempts = 3, delayMs = 150) {
     const job = this.jobMap.load(jobId);
     if (!job) return { jobId, reconciliation: 'unresolved', ownershipReleased: false, recoveryRequired: true };

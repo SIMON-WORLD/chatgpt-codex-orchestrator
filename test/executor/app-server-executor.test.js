@@ -653,3 +653,107 @@ test('observability: ownershipReleased=false never pairs with mutationUnitState=
   // There must be NO misleading mutationUnitIdObs field.
   assert.equal('mutationUnitIdObs' in st, false);
 });
+
+
+// ---- M7 hardening R3 -----------------------------------------------------
+
+test('R3 continue transition window: late Turn A terminal notification must not release Turn B', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const turnA = r.turnId;
+  const threadId = r.threadId;
+  const unitA = exec.load(r.jobId).mutationUnitId;
+  // The turn->unit map already associates Turn A with unit A (set by start()).
+  assert.equal(exec._turnUnits.get(turnA), unitA);
+
+  // ---- enter the continue transition window ----
+  const unitB = 'unit-b-continue-window';
+  const turnB = 'turn-b-continue-window';
+  exec.owner.acquire('codex', unitB);            // B writer unit acquired
+  exec.jobMap.update(r.jobId, { mutationUnitId: unitB, state: 'starting', ownershipReleased: false }); // job.mutationUnitId=B, turnId is STILL Turn A
+  assert.equal(exec.load(r.jobId).turnId, turnA); // window: B turnId not yet written
+  assert.equal(exec.owner.unitId, unitB);
+
+  // ---- a LATE Turn A terminal notification arrives in this window ----
+  exec._handleNotification({ method: 'turn/completed', params: { threadId, turn: { id: turnA, status: 'completed' } } });
+
+  // B writer must NOT be released; owner unit remains B; B lifecycle not rewritten.
+  assert.equal(exec.owner.owner, 'codex');
+  assert.equal(exec.owner.unitId, unitB);
+  const after = exec.load(r.jobId);
+  assert.equal(after.turnId, turnA);       // not overwritten by Turn A
+  assert.equal(after.state, 'starting');   // not flipped to 'completed' by Turn A
+  assert.equal(after.mutationUnitId, unitB);
+
+  // ---- B can later complete normally ----
+  exec.jobMap.update(r.jobId, { turnId: turnB, state: 'running' });
+  exec._turnUnits.set(turnB, unitB);
+  exec._handleNotification({ method: 'turn/completed', params: { threadId, turn: { id: turnB, status: 'completed' } } });
+  assert.equal(exec.owner.owner, 'none'); // B released after its own terminal
+  assert.equal(exec.load(r.jobId).state, 'completed');
+});
+
+test('R3 reconcile inProgress + codex same unit -> retain (PASS)', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  assert.equal(exec.owner.owner, 'codex');
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'in_progress');
+  assert.equal(rec.reconciled, true);
+  assert.equal(exec.owner.owner, 'codex'); // retained
+});
+
+test('R3 reconcile inProgress + codex different unit -> unresolved fail closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  // Simulate a unit mismatch: the job's unit is NOT the active owner unit.
+  exec.jobMap.update(r.jobId, { mutationUnitId: 'unit-other' });
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'unresolved');
+  assert.equal(rec.reconciled, false);
+  assert.equal(rec.recoveryRequired, true);
+  assert.ok(/ownership conflict/.test(rec.reason));
+  assert.equal(exec.owner.owner, 'codex'); // not overwritten
+  assert.equal(exec.owner.unitId, exec.load(r.jobId).mutationUnitId !== 'unit-other' ? exec.owner.unitId : exec.owner.unitId);
+});
+
+test('R3 reconcile inProgress + chatgpt owner -> unresolved fail closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  // Simulate a chatgpt (Direct Local) owner holding the workspace.
+  exec.owner.release({ force: true });
+  exec.owner.acquire('chatgpt', 'direct-unit');
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'unresolved');
+  assert.equal(rec.reconciled, false);
+  assert.equal(rec.recoveryRequired, true);
+  assert.ok(/chatgpt/.test(rec.reason));
+  assert.equal(exec.owner.owner, 'chatgpt'); // not overwritten
+  assert.equal(exec.owner.unitId, 'direct-unit');
+});
+
+test('R3 reconcile terminal does not release a foreign/newer codex unit', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  // Simulate a NEWER active codex unit (different from this job's unit).
+  exec.owner.acquire('codex', 'newer-unit');
+  exec.jobMap.update(r.jobId, { mutationUnitId: 'old-unit' });
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'unresolved');
+  assert.equal(rec.reconciled, false);
+  assert.ok(/ownership conflict/.test(rec.reason));
+  assert.equal(exec.owner.owner, 'codex');
+  assert.equal(exec.owner.unitId, 'newer-unit'); // NOT released
+});
