@@ -715,13 +715,15 @@ test('R3 reconcile inProgress + codex different unit -> unresolved fail closed',
   const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
   // Simulate a unit mismatch: the job's unit is NOT the active owner unit.
   exec.jobMap.update(r.jobId, { mutationUnitId: 'unit-other' });
+  const originalOwnerUnit = exec.owner.unitId;
   const rec = await exec.reconcile({ jobId: r.jobId });
   assert.equal(rec.resolution, 'unresolved');
   assert.equal(rec.reconciled, false);
   assert.equal(rec.recoveryRequired, true);
   assert.ok(/ownership conflict/.test(rec.reason));
   assert.equal(exec.owner.owner, 'codex'); // not overwritten
-  assert.equal(exec.owner.unitId, exec.load(r.jobId).mutationUnitId !== 'unit-other' ? exec.owner.unitId : exec.owner.unitId);
+  assert.equal(exec.owner.unitId, originalOwnerUnit); // foreign unit unchanged (NOT 'unit-other')
+  assert.notEqual(exec.owner.unitId, 'unit-other');
 });
 
 test('R3 reconcile inProgress + chatgpt owner -> unresolved fail closed', async (t) => {
@@ -756,4 +758,96 @@ test('R3 reconcile terminal does not release a foreign/newer codex unit', async 
   assert.ok(/ownership conflict/.test(rec.reason));
   assert.equal(exec.owner.owner, 'codex');
   assert.equal(exec.owner.unitId, 'newer-unit'); // NOT released
+});
+
+
+// ---- M7 hardening R4: read_only is never a writer ------------------------
+
+test('R4 read_only reconcile inProgress + owner none -> PASS, owner stays none', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'read_only' });
+  assert.equal(exec.owner.owner, 'none');
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'in_progress');
+  assert.equal(rec.reconciled, true);
+  assert.equal(exec.owner.owner, 'none'); // MUST NOT acquire
+});
+
+test('R4 read_only reconcile inProgress + active codex writer -> PASS, writer unchanged', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'read_only' });
+  assert.equal(exec.owner.owner, 'none');
+  exec.owner.acquire('codex', 'writer-W');
+  assert.equal(exec.owner.owner, 'codex');
+  assert.equal(exec.owner.unitId, 'writer-W');
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'in_progress');
+  assert.equal(rec.reconciled, true);
+  assert.equal(rec.ownershipReleased, false);
+  assert.equal(exec.owner.owner, 'codex'); // writer unchanged
+  assert.equal(exec.owner.unitId, 'writer-W'); // writer unit unchanged
+});
+
+test('R4 read_only reconcile inProgress + active chatgpt writer -> PASS, writer unchanged', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'read_only' });
+  exec.owner.acquire('chatgpt', 'chatgpt-W');
+  assert.equal(exec.owner.owner, 'chatgpt');
+  assert.equal(exec.owner.unitId, 'chatgpt-W');
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'in_progress');
+  assert.equal(rec.reconciled, true);
+  assert.equal(rec.ownershipReleased, false);
+  assert.equal(exec.owner.owner, 'chatgpt'); // writer unchanged
+  assert.equal(exec.owner.unitId, 'chatgpt-W'); // writer unit unchanged
+});
+
+test('R4 read_only terminal reconcile + active foreign writer -> PASS, writer unchanged', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'read_only' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  assert.equal(exec.owner.owner, 'none');
+  // A foreign codex writer holds the workspace.
+  exec.owner.acquire('codex', 'foreign-W');
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'terminal');
+  assert.equal(rec.reconciled, true);
+  assert.equal(exec.owner.owner, 'codex'); // writer NOT released
+  assert.equal(exec.owner.unitId, 'foreign-W'); // writer unit unchanged
+  // Also verify with a chatgpt writer.
+  exec.owner.release({ force: true });
+  exec.owner.acquire('chatgpt', 'chatgpt-W2');
+  const rec2 = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec2.resolution, 'terminal');
+  assert.equal(rec2.reconciled, true);
+  assert.equal(exec.owner.owner, 'chatgpt'); // writer NOT released
+  assert.equal(exec.owner.unitId, 'chatgpt-W2'); // writer unit unchanged
+});
+
+test('R4 read_only notification while writer active -> read-only state updates, writer unchanged', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'read_only' });
+  const readOnlyTurn = r.turnId;
+  const threadId = r.threadId;
+  assert.equal(exec.owner.owner, 'none');
+  exec.owner.acquire('codex', 'writer-W');
+  assert.equal(exec.owner.owner, 'codex');
+  assert.equal(exec.owner.unitId, 'writer-W');
+  // A read_only turn/completed notification updates the read_only job lifecycle but
+  // must never touch the active writer.
+  exec._handleNotification({ method: 'turn/completed', params: { threadId, turn: { id: readOnlyTurn, status: 'completed' } } });
+  const job = exec.load(r.jobId);
+  assert.equal(job.state, 'completed'); // read_only lifecycle updated
+  assert.equal(exec.owner.owner, 'codex'); // writer unchanged
+  assert.equal(exec.owner.unitId, 'writer-W'); // writer unit unchanged
 });
