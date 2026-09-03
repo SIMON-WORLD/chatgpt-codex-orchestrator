@@ -124,23 +124,24 @@ export class AppServerExecutor {
       const job = this.jobMap.findByThread(threadId);
       if (!job) { this._emit(note); return; }
       const notifiedTurnId = turn.id || null;
-      // Associate the notified turn with the job's current mutation unit when not yet
-      // known (a turn/started notification may arrive before the start/continue response).
-      if (notifiedTurnId && !this._turnUnits.has(notifiedTurnId)) {
-        this._turnUnits.set(notifiedTurnId, job.mutationUnitId || null);
+      // Durable / reconstructable turn->unit identity: prefer the persisted job.turnUnits,
+      // then the in-memory cache, then (for a freshly-started turn) the job's current unit.
+      let notifiedUnitId = (job.turnUnits && job.turnUnits[notifiedTurnId]) || this._turnUnits.get(notifiedTurnId) || null;
+      const isNewInProgressTurn = notifiedUnitId == null && turn.status === 'inProgress' && job.mutationUnitId;
+      if (isNewInProgressTurn) {
+        notifiedUnitId = job.mutationUnitId;
+        const u = { ...(job.turnUnits || {}), [notifiedTurnId]: notifiedUnitId };
+        this.jobMap.update(job.jobId, { turnUnits: u, updatedAt: Date.now() });
+        if (notifiedTurnId) this._turnUnits.set(notifiedTurnId, notifiedUnitId);
       }
-      const notifiedUnitId = this._turnUnits.get(notifiedTurnId);
       const jobUnit = job.mutationUnitId || null;
-      // Turn-unit identity guard relative to THIS job: if the notified turn belongs to a
-      // unit that differs from the job's current unit, it is stale for this job -> ignore
-      // (never override this job's turnId/state, never release the current unit). This is
-      // correct for BOTH writable and read_only jobs: a read_only notification for its own
-      // unit updates the read_only lifecycle and is NOT misclassified as stale merely
-      // because an unrelated writer unit exists.
-      if (notifiedUnitId && jobUnit && notifiedUnitId !== jobUnit) {
-        this._emit(note);
-        return;
-      }
+      // Stale/foreign (durable-safe after a fresh executor restart): if the notified turn
+      // belongs to a unit that differs from the job's current unit, ignore (never override
+      // this job's turnId/state, never release the current unit).
+      if (notifiedUnitId && jobUnit && notifiedUnitId !== jobUnit) { this._emit(note); return; }
+      // Unknown turn (could not resolve its unit and it is not a freshly-started turn):
+      // fail-safe ignore (no lifecycle change, no release).
+      if (notifiedUnitId == null) { this._emit(note); return; }
       const state = turn.status || (method === 'turn/completed' ? 'completed' : 'running');
       this.jobMap.update(job.jobId, { state, turnId: notifiedTurnId || job.turnId, updatedAt: Date.now() });
       if (TERMINAL_TURN_STATES.includes(turn.status)) {
@@ -155,6 +156,7 @@ export class AppServerExecutor {
     }
     this._emit(note);
   }
+
 
   _handleServerRequest(req) {
     const approval = normalizeApproval(req);
@@ -234,7 +236,7 @@ export class AppServerExecutor {
 
     const jobId = makeJobId();
     const mutationUnitId = makeMutationUnitId();
-    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, isWriter, workspaceRoot, workspaceId, threadId: null, turnId: null, state: 'created', ownershipReleased: false, createdAt: Date.now(), updatedAt: Date.now() });
+    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, isWriter, workspaceRoot, workspaceId, threadId: null, turnId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
 
     const threadParams = { ...(cwd ? { cwd } : {}), sandbox };
     const threadRes = await this.client.request('thread/start', threadParams);
@@ -270,7 +272,8 @@ export class AppServerExecutor {
       throw new Error('turn/start returned no turn id');
     }
     this._turnUnits.set(turnId, mutationUnitId);
-    this.jobMap.update(jobId, { turnId, state: 'running', updatedAt: Date.now() });
+    const startJob = this.jobMap.load(jobId);
+    this.jobMap.update(jobId, { turnId, turnUnits: { ...(startJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
     return { jobId, threadId, turnId, state: 'running', accessMode, sandbox, isWriter, mutationOwner: this.owner.owner };
   }
 
@@ -376,7 +379,8 @@ export class AppServerExecutor {
       throw new Error('turn/start returned no turn id');
     }
     this._turnUnits.set(turnId, mutationUnitId);
-    this.jobMap.update(jobId, { turnId, state: 'running', updatedAt: Date.now() });
+    const contJob = this.jobMap.load(jobId);
+    this.jobMap.update(jobId, { turnId, turnUnits: { ...(contJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
     return { jobId, threadId: job.threadId, turnId, state: 'running', accessMode: job.accessMode || null, sandbox: job.sandbox || null, mutationOwner: this.owner.owner };
   }
 

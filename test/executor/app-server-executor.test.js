@@ -851,3 +851,57 @@ test('R4 read_only notification while writer active -> read-only state updates, 
   assert.equal(exec.owner.owner, 'codex'); // writer unchanged
   assert.equal(exec.owner.unitId, 'writer-W'); // writer unit unchanged
 });
+
+
+// ---- M7 hardening R5: durable turn->unit identity survives executor restart ----
+
+test('R5 fresh executor recovery: stale Turn A notification recognized as old unit A from durable state', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  // Executor A: create job A (workspace_write) and persist durable turn->unit identity.
+  const execA = makeExecutor({ dataRoot: root });
+  const rA = await execA.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => execA.load(rA.jobId).state === 'completed');
+  const turnA = rA.turnId;
+  const unitA = execA.load(rA.jobId).mutationUnitId;
+  const threadId = rA.threadId;
+  assert.equal(execA.load(rA.jobId).turnUnits[turnA], unitA); // durable identity persisted
+
+  // Persist the continue-transition state: current/pending unit B, turnId still A.
+  const unitB = 'unit-b-recovery';
+  execA.jobMap.update(rA.jobId, { mutationUnitId: unitB, state: 'starting', ownershipReleased: false });
+  await execA.shutdown();
+
+  // Executor B: a FRESH executor with the same dataRoot recovers the durable JobMap.
+  const execB = makeExecutor({ dataRoot: root });
+  t.after(() => execB.shutdown());
+  const recovered = execB.load(rA.jobId);
+  assert.equal(execB._turnUnits.size, 0);             // in-memory map empty (no manual repopulation)
+  assert.equal(recovered.turnUnits[turnA], unitA);    // durable identity available from JobMap
+  assert.equal(recovered.mutationUnitId, unitB);      // durable current/pending unit
+
+  // Reconstruct the B writer from durable state (the writer, not the turn-unit identity).
+  execB.owner.acquire('codex', unitB);
+  assert.equal(execB.owner.owner, 'codex');
+  assert.equal(execB.owner.unitId, unitB);
+
+  // Inject a LATE Turn A terminal notification.
+  execB._handleNotification({ method: 'turn/completed', params: { threadId, turn: { id: turnA, status: 'completed' } } });
+
+  // Turn A must be recognized as old unit A: B writer untouched, B lifecycle unchanged.
+  assert.equal(execB.owner.owner, 'codex');        // B writer NOT released
+  assert.equal(execB.owner.unitId, unitB);         // B writer unit unchanged
+  const after = execB.load(rA.jobId);
+  assert.equal(after.state, 'starting');           // not rewritten to 'completed' by A
+  assert.equal(after.turnId, turnA);               // unchanged
+  assert.equal(after.mutationUnitId, unitB);       // unchanged
+  assert.equal(after.turnUnits[turnA], unitA);     // durable identity intact
+
+  // B can later start + complete normally (its association persisted durably on start).
+  const turnB = 'turn-b-recovery';
+  execB.jobMap.update(rA.jobId, { turnId: turnB, state: 'running' });
+  execB._handleNotification({ method: 'turn/started', params: { threadId, turn: { id: turnB, status: 'inProgress' } } });
+  assert.equal(execB.load(rA.jobId).turnUnits[turnB], unitB); // durable association for B
+  execB._handleNotification({ method: 'turn/completed', params: { threadId, turn: { id: turnB, status: 'completed' } } });
+  assert.equal(execB.owner.owner, 'none'); // B writer released after its own terminal
+  assert.equal(execB.load(rA.jobId).state, 'completed');
+});
