@@ -5,7 +5,7 @@
 //   node scripts/codex-run-cli.mjs --repo <dir> --session-file <file> --prompt-file <file>
 //     [--sandbox <mode>] [--ignore-rules] [--bypass]
 import fs from 'node:fs';
-import { CodexExecutor } from '../src/codex-executor.js';
+import { CodexExecutor } from '../src/legacy/codex-executor.js';
 
 function arg(name) {
   const i = process.argv.indexOf(name);

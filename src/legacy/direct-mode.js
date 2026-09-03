@@ -24,7 +24,7 @@
 
 import { InAppBrowserTransport, openBrainSession, openBrainSessionExisting, createTabFacade, BrainSession, captureCurrentConversation, ConversationIdentityMismatchError } from './iab-transport.js';
 import { extractConversationId } from './atomic-turn.js';
-import { createDirectGovernance } from './direct-governance.js';
+import { createDirectGovernance } from '../direct-governance.js';
 
 // Thin BrainProvider contract (reserved for future providers; only ChatGPT is
 // canonical in this Batch):

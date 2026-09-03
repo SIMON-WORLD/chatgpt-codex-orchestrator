@@ -19,9 +19,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadBrainCommandConfig, resolveRepoDir, fastPreflight } from '../src/bootstrap.js';
-import { TaskService } from '../src/task-service.js';
-import { CodexWorkerClient } from '../src/worker-client.js';
-import { InAppBrowserTransport, openBrainSession, openBrainSessionExisting } from '../src/iab-transport.js';
+import { TaskService } from '../src/legacy/task-service.js';
+import { CodexWorkerClient } from '../src/legacy/worker-client.js';
+import { InAppBrowserTransport, openBrainSession, openBrainSessionExisting } from '../src/legacy/iab-transport.js';
 import { runtimePaths, canonicalReadyFile } from '../src/runtime-paths.js';
 import { getCwd, getCodexHome, isTrustedRepl, getEnv } from '../src/runtime-env.js';
 

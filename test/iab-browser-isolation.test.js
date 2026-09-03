@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { InAppBrowserTransport, IABUnavailableError } from '../src/iab-transport.js';
-import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES } from '../src/direct-mode.js';
+import { InAppBrowserTransport, IABUnavailableError } from '../src/legacy/iab-transport.js';
+import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES } from '../src/legacy/direct-mode.js';
 import { __setMockBrowserState, __getBrowserCallLog } from './fixtures/mock-browser-runtime.mjs';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/mock-browser-runtime.mjs', import.meta.url));

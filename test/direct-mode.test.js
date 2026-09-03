@@ -11,7 +11,7 @@ import {
   evaluatePublicationGate,
   evaluateDoneGate,
   isPublishForbiddenState,
-} from '../src/direct-mode.js';
+} from '../src/legacy/direct-mode.js';
 import { buildCompactResult, normalizeResult, parseBrainOutput } from '../src/protocol.js';
 
 const skillPath = fileURLToPath(new URL('../skills/brain-command/SKILL.md', import.meta.url));

@@ -6,6 +6,8 @@ For the current project description, usage, supported features, limitations, and
 
 > Scope note: this record keeps historically meaningful engineering material that is still useful to maintainers. It deliberately avoids re-stating the ordinary homepage material (elevator pitch, generic quick-start, and current Supported / Roadmap sections), which now live in `README.md`.
 
+> Path note: module references in this archival record (e.g. `src/iab-transport.js`) describe where a module historically lived. As of M6 the IAB / Alpha.4 implementation is structurally isolated and lives under `src/legacy/`; live runtime paths are `src/legacy/<module>.js` and the v0.2 canonical modules under `src/{mcp,router,governance,local,executor,state,transport}`.
+
 ---
 
 ## M1 — Reliable Brain Transport

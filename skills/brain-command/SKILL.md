@@ -1,6 +1,6 @@
 ---
 name: brain-command
-description: "Canonical launcher for the ChatGPT-command orchestrator. Default = Direct Brain Loop: the current Codex agent talks to ChatGPT via the built-in browser, executes the Brain TASKs itself, and runs the PUBLISH -> publication transaction -> external readback -> terminal DONE lifecycle. Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as the local executor, e.g. '用 ChatGPT 指挥模式完成...', '让 ChatGPT 指挥 Codex...', or 'Use ChatGPT as the brain and Codex as executor...'. Default Brain = ChatGPT, default Executor = the current Codex agent. The detached worker/nested-Codex runtime is kept as legacy/experimental."
+description: "Canonical launcher for the ChatGPT-command orchestrator. Default = Direct Brain Loop: the current Codex agent talks to ChatGPT via the built-in browser, executes the Brain TASKs itself, and runs the PUBLISH -> publication transaction -> external readback -> terminal DONE lifecycle. Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as the local executor, e.g. '用 ChatGPT 指挥模式完成...', '让 ChatGPT 指挥 Codex...', or 'Use ChatGPT as the brain and Codex as executor...'. Default Brain = ChatGPT, default Executor = the current Codex agent. The detached worker/nested-Codex runtime is kept as legacy/experimental. Released Alpha.3 operational default = legacy IAB Direct Brain Loop (feature-frozen); v0.2 canonical architecture (ChatGPT Custom MCP App -> Secure Tunnel -> local MCP -> Router/Governance -> Direct Local or Codex App Server) is NOT yet the CLI/Skill default (M7 decides the flip)."
 ---
 
 # brain-command (Direct Brain Loop)
@@ -32,6 +32,17 @@ Trigger on natural-language requests such as:
 - any request to run a coding task where ChatGPT plans/reviews and Codex executes.
 
 Do **not** trigger for ordinary local-only coding.
+
+## Architecture status (M6)
+
+These states are distinct and must not be conflated:
+
+1. **Released Alpha.3 operational default** — the legacy IAB **Direct Brain Loop** (current Codex agent + built-in IAB + ChatGPT). This is what `$brain-command` runs today; it is **feature-frozen** and NOT deleted.
+2. **v0.2 canonical architecture** — `ChatGPT (Custom MCP App)` → `OpenAI Secure Tunnel` → `local MCP` → `Router/Governance` → `Direct Local` or `Codex App Server`. This is the new canonical path; it is **NOT yet the CLI/Skill default**.
+3. **M6** — the IAB / Alpha.4 implementation has been **structurally isolated** under `src/legacy/` and is feature-frozen.
+4. **M7** — the **real-project dogfood + operational default flip** decision has **not** happened yet. Until then v0.2 must not be claimed as the default entry for all CLI/Skill invocations.
+
+`src/index.js` is a **compatibility barrel**; it is **not** the canonical v0.2 runtime import root. Canonical v0.2 production entries are `scripts/v0.2-start.mjs`, `src/transport/brain-local.js`, and the direct v0.2 modules under `src/{mcp,router,governance,local,executor,state,transport}`.
 
 ## Default execution contract
 
@@ -87,10 +98,10 @@ PLAN
 - On the first Brain takeover, send a small read-only bootstrap packet (`buildBootstrapEvidence`): `repoDir`, `currentBranch`, `HEAD`, `git status --short` summary, `origin/main` divergence. Keep it compact; do not require a separate standalone baseline TASK unless the project really needs deeper inspection.
 - Emit metrics from the ACTIVE run state (the final report reads `directRunCoordinator.metrics()` / `directRunLedger.state.metrics`), including (`createDirectMetrics`): duration, timeToFirstBrainControl, brainTurns, taskCount, reviseCount, replanCount, askUserCount, publishCount, replyTimeoutCount, browserRecoveryCount, conversationSwitchCount, reusedProofCount, staleProofCount, verificationRuns, publishRetryCount, protocolRepairCount, staleControlRejectedCount, duplicateResultCount, resultRetransmitCount, deliveryAckTimeoutCount, manualInterventionCount. No telemetry backend / no prompt or raw-log persistence.
 
-## Run (canonical default path)
+## Run (released Alpha.3 default — legacy IAB)
 
-For a normal `$brain-command <goal>`, drive ONE canonical Alpha.4 Direct controller
-(`createDirectRun` from `src/direct-run-controller.js`, mode `direct-alpha4`). The
+For a normal `$brain-command <goal>` (released Alpha.3/Alpha.4 default), drive ONE Alpha.4 Direct controller on the legacy IAB path
+(`createDirectRun` from `src/legacy/direct-run-controller.js`, mode `direct-alpha4`). The
 controller owns the protocol mechanics (provider, ledger, coordinator, governance,
 canonical envelope parsing, nonce, RESULT hashing, resume/recovery). The agent
 provides only config/repo resolution, task execution + real evidence, and the
@@ -108,7 +119,7 @@ not inspect the orchestrator implementation source during normal startup.**
 3. **Create the canonical Direct controller** inside the trusted Codex in-app-browser (iab) context (iab **only**; never Edge/Chrome/external browser, no fallback):
 
    ```js
-   const { createDirectRun, DIRECT_ALPHA4_MODE } = await import('<orchestratorRoot>/src/direct-run-controller.js');
+   const { createDirectRun, DIRECT_ALPHA4_MODE } = await import('<orchestratorRoot>/src/legacy/direct-run-controller.js');
    const run = createDirectRun({ runId, dataRoot: cfg.dataRoot, repoDir });
    run.setOrchestratorHead(HEAD);
    ```
@@ -136,7 +147,7 @@ not inspect the orchestrator implementation source during normal startup.**
 
 ## Direct Mode guarantees
 
-`src/direct-mode.js` (`DIRECT_MODE_REQUIRES`) documents that the default path does **not** require:
+`src/legacy/direct-mode.js` (`DIRECT_MODE_REQUIRES`) documents that the default path does **not** require:
 - worker bootstrap
 - a ready file
 - a nested Codex executor
@@ -178,7 +189,7 @@ is detected.
 
 ### Takeover message
 
-After binding an existing conversation, send `DEFAULT_TAKEOVER_MESSAGE` from `src/direct-mode.js`
+After binding an existing conversation, send `DEFAULT_TAKEOVER_MESSAGE` from `src/legacy/direct-mode.js`
 (do **not** dump the full history — the conversation already owns it). Then enter the normal
 Direct Brain Loop. Persist `conversationId` / `conversationUrl` / `conversationTitle` in the
 minimal task state so a later resume reuses the same conversation directly.
@@ -188,7 +199,7 @@ minimal task state so a later resume reuses the same conversation directly.
 The detached runtime is **legacy / experimental**, not the default:
 - `scripts/brain-command-launcher.mjs` + `scripts/brain-command-worker.mjs` + `scripts/codex-worker-host.mjs`
 - `scripts/runtime-host.mjs` (`LoopController`)
-- `src/task-service.js` / `src/task-manager.js` / `src/worker-client.js`
+- `src/legacy/task-service.js` / `src/legacy/task-manager.js` / `src/legacy/worker-client.js`
 - durable recovery machinery
 
 These are retained for compatibility/experimental use and are not part of the canonical startup path.

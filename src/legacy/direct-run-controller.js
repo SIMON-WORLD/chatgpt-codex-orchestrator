@@ -23,19 +23,19 @@ import {
   applyBrainAcceptanceTransition,
   computePayloadHash,
   evaluateMilestoneAcceptance,
-} from './protocol-integrity.js';
+} from '../protocol-integrity.js';
 import {
   createDirectGovernance,
   createProofLedger,
   createDirectMetrics,
   buildBootstrapEvidence,
-} from './direct-governance.js';
+} from '../direct-governance.js';
 import {
   createChatGPTBrowserProvider,
   evaluatePublicationGate,
   evaluateDoneGate,
 } from './direct-mode.js';
-import { isTerminalControl } from './protocol.js';
+import { isTerminalControl } from '../protocol.js';
 
 export const DIRECT_ALPHA4_MODE = 'direct-alpha4';
 

@@ -10,7 +10,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TaskService } from '../src/task-service.js';
+import { TaskService } from '../src/legacy/task-service.js';
 import { buildRuntime } from '../scripts/brain-command-launcher.mjs';
 import { runtimePaths } from '../src/runtime-paths.js';
 

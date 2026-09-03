@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TaskManager } from '../src/task-manager.js';
+import { TaskManager } from '../src/legacy/task-manager.js';
 
 function dir() { const d = path.join(os.tmpdir(), 'ev-' + Date.now()); fs.mkdirSync(d, { recursive: true }); return d; }
 class FakeBrain { constructor(replies){ this.replies=[...replies]; this.conversationId='conv-1'; this.conversationUrl='https://chatgpt.com/c/conv-1'; this.ownedTabId='tab-1'; }

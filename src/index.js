@@ -1,9 +1,17 @@
+// chatgpt-codex-orchestrator: COMPATIBILITY BARREL.
+// This module re-exports BOTH the legacy Alpha.3 / Alpha.4 IAB path and the v0.2
+// canonical path (ChatGPT Custom MCP App -> OpenAI Secure Tunnel -> local MCP ->
+// Router/Governance -> Direct Local or Codex App Server) for backward compatibility.
+// It is NOT the canonical v0.2 runtime import root. Canonical v0.2 production
+// entries are scripts/v0.2-start.mjs, src/transport/brain-local.js, and the direct
+// v0.2 modules under src/{mcp,router,governance,local,executor,state,transport}.
+
 export {
   BrainSession,
   InAppBrowserTransport,
   createTabFacade,
   openBrainSession, openBrainSessionExisting, openCurrentConversation, captureCurrentConversation, reopenConversationFromBinding, ConversationIdentityMismatchError, IABUnavailableError,
-} from './iab-transport.js';
+} from './legacy/iab-transport.js';
 export {
   AtomicTurnController,
   ComposerTimeoutError,
@@ -13,12 +21,12 @@ export {
   TabLostError,
   DEFAULT_TURN_OPTIONS,
   extractConversationId,
-} from './atomic-turn.js';
-export { CodexExecutor, loadCodexConfig, defaultSpawn } from './codex-executor.js';
-export { LoopController } from './loop-controller.js';
+} from './legacy/atomic-turn.js';
+export { CodexExecutor, loadCodexConfig, defaultSpawn } from './legacy/codex-executor.js';
+export { LoopController } from './legacy/loop-controller.js';
 export { parseControl, extractDirective } from './directives.js';
-export { TaskManager } from './task-manager.js';
-export { TaskService } from './task-service.js';
+export { TaskManager } from './legacy/task-manager.js';
+export { TaskService } from './legacy/task-service.js';
 export { TaskLock, TaskLockedError } from './task-lock.js';
 export * as safety from './safety.js';
 export { doctorStatic, doctorLiveIo, doctorGit, doctorIpc, doctorProviderConfig, doctorCompat, formatDoctor, DEFAULT_CODEX_JS } from './doctor.js';
@@ -39,10 +47,10 @@ export * as protocolIntegrity from './protocol-integrity.js';
 export { evaluateDirectAcceptanceGate, createProofLedger, planVerification, verifyTierPrecondition, buildBootstrapEvidence, createDirectMetrics, attemptLateReplyRecovery } from './direct-governance.js';
 export { createPublicationTransaction, publicationReadyForDone, buildExternalEvidence, parseRemoteRef } from './publication-transaction.js';
 
-export { CodexWorkerClient } from './worker-client.js';
-export { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, BRAIN_PROVIDERS, DEFAULT_TAKEOVER_MESSAGE, ConversationNotFoundError, ConversationAmbiguityError, newDirectTaskState, evaluatePublicationGate, evaluateDoneGate, isPublishForbiddenState } from './direct-mode.js';
+export { CodexWorkerClient } from './legacy/worker-client.js';
+export { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, BRAIN_PROVIDERS, DEFAULT_TAKEOVER_MESSAGE, ConversationNotFoundError, ConversationAmbiguityError, newDirectTaskState, evaluatePublicationGate, evaluateDoneGate, isPublishForbiddenState } from './legacy/direct-mode.js';
 
-export { createDirectRun, DIRECT_ALPHA4_MODE, assertDirectAlpha4Mode } from './direct-run-controller.js';
+export { createDirectRun, DIRECT_ALPHA4_MODE, assertDirectAlpha4Mode } from './legacy/direct-run-controller.js';
 
 // --- v0.2 M1: Codex App Server executor (additive, non-default) ---------------
 export { AppServerClient, DEFAULT_APP_SERVER_LISTEN, DEFAULT_CODEX_BIN } from './executor/app-server-client.js';

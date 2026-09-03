@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TaskManager } from '../src/task-manager.js';
+import { TaskManager } from '../src/legacy/task-manager.js';
 
 function dir() { const d = path.join(os.tmpdir(), 'rep-' + Date.now()); fs.mkdirSync(d, { recursive: true }); return d; }
 class B { constructor(replies){ this.replies=[...replies]; this.conversationId='c'; this.ownedTabId='t'; this.sent=0; } async send(text){ this.sent++; const r=this.replies.shift() ?? 'DONE'; return { reply: typeof r==='string'? r : JSON.stringify(r), conversationId:'c' }; } }

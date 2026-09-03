@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createTabFacade } from '../src/iab-transport.js';
-import { ComposerUnavailableError } from '../src/atomic-turn.js';
-import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, DEFAULT_TAKEOVER_MESSAGE } from '../src/direct-mode.js';
+import { createTabFacade } from '../src/legacy/iab-transport.js';
+import { ComposerUnavailableError } from '../src/legacy/atomic-turn.js';
+import { createChatGPTBrowserProvider, DEFAULT_DIRECT_CONFIG, DIRECT_MODE_REQUIRES, DEFAULT_TAKEOVER_MESSAGE } from '../src/legacy/direct-mode.js';
 import { configureGitIdentity, checkPublishIdentity, PUBLISH_POLICY_DEFAULTS, isPostDoneModificationAllowed } from '../src/publish-policy.js';
-import { InAppBrowserTransport } from '../src/iab-transport.js';
+import { InAppBrowserTransport } from '../src/legacy/iab-transport.js';
 import { __setMockBrowserState, __getBrowserCallLog } from './fixtures/mock-browser-runtime.mjs';
 
 const skillPath = fileURLToPath(new URL('../skills/brain-command/SKILL.md', import.meta.url));

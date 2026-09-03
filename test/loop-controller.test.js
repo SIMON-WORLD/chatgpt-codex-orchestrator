@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { LoopController } from '../src/loop-controller.js';
+import { LoopController } from '../src/legacy/loop-controller.js';
 
 class FakeBrain {
   constructor(replies) { this.replies = replies; this.conversationId = 'conv-9'; this.ownedTabId = 'tab-9'; this.sent = []; }

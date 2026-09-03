@@ -7,7 +7,7 @@ import {
   ConversationMismatchError,
   TabLostError,
   extractConversationId,
-} from '../src/atomic-turn.js';
+} from '../src/legacy/atomic-turn.js';
 
 const CONV = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const URL = 'https://chatgpt.com/c/' + CONV;

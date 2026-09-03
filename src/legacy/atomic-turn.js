@@ -43,15 +43,9 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 
 // Common ChatGPT "thinking" placeholders that should not be treated as a reply.
-export function isPlaceholder(text) {
-  const t = String(text || '').trim();
-  if (!t) return true;
-  return /^(正在思考|thinking|thinking\.{3}|\.{3}|…|\.\.\.|生成中|typing)/i.test(t);
-}
-export function extractConversationId(url) {
-  const m = /\/c\/([0-9a-zA-Z-]+)/.exec(String(url || ''));
-  return m ? m[1] : null;
-}
+import { isPlaceholder, extractConversationId } from '../text-utils.js';
+
+export { isPlaceholder, extractConversationId };
 
 export class AtomicTurnController {
   constructor(page, options = {}) {

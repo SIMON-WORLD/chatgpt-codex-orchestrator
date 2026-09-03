@@ -1,12 +1,12 @@
-// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT on the canonical Direct Brain Loop\n// path. The default \\-command\ uses the current Codex agent + built-in browser\n// (see src/direct-mode.js). Retained for compatibility/experimental use only.\n// chatgpt-codex-orchestrator: unified task entry / lifecycle (Batch B1).
+// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT on the canonical Direct Brain Loop\n// path. The default \\-command\ uses the current Codex agent + built-in browser\n// (see src/legacy/direct-mode.js). Retained for compatibility/experimental use only.\n// chatgpt-codex-orchestrator: unified task entry / lifecycle (Batch B1).
 // The caller only calls startTask / resumeTask / getTaskStatus / cancelTask.
 // Worker + Brain + state + loop are managed internally via an injected `runtime`.
 // A task lock prevents two runtimes from driving the same task simultaneously.
 import path from 'node:path';
 import { TaskManager } from './task-manager.js';
-import { newTaskState } from './task-state.js';
-import { TaskLock } from './task-lock.js';
-import { makeTaskId } from './task-state.js';
+import { newTaskState } from '../task-state.js';
+import { TaskLock } from '../task-lock.js';
+import { makeTaskId } from '../task-state.js';
 
 export class TaskService {
   constructor({ stateDir, runtime }) {

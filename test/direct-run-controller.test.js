@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createDirectRun, DIRECT_ALPHA4_MODE, assertDirectAlpha4Mode } from '../src/direct-run-controller.js';
+import { createDirectRun, DIRECT_ALPHA4_MODE, assertDirectAlpha4Mode } from '../src/legacy/direct-run-controller.js';
 
-const controllerPath = fileURLToPath(new URL('../src/direct-run-controller.js', import.meta.url));
+const controllerPath = fileURLToPath(new URL('../src/legacy/direct-run-controller.js', import.meta.url));
 const skillPath = fileURLToPath(new URL('../skills/brain-command/SKILL.md', import.meta.url));
 
 // Deterministic scripted Brain: consumes an ordered list of reply strings on each

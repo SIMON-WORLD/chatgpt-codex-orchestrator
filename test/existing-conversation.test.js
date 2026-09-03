@@ -8,8 +8,8 @@ import {
   ConversationNotFoundError,
   ConversationAmbiguityError,
   DEFAULT_TAKEOVER_MESSAGE,
-} from '../src/direct-mode.js';
-import { ConversationIdentityMismatchError } from '../src/iab-transport.js';
+} from '../src/legacy/direct-mode.js';
+import { ConversationIdentityMismatchError } from '../src/legacy/iab-transport.js';
 
 // --- Mock browser transport (no real browser, no worker, no nested Codex) ---
 function makeMockTab({ id, gotoOverrides = {} }) {

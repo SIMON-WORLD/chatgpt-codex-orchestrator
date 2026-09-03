@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { TaskService } from '../src/task-service.js';
+import { TaskService } from '../src/legacy/task-service.js';
 import { TaskLockedError } from '../src/task-lock.js';
 
 function dir() { const d = path.join(os.tmpdir(), 'svc-' + Date.now()); fs.mkdirSync(d, { recursive: true }); return d; }

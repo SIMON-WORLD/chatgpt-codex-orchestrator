@@ -6,6 +6,40 @@ An agentic orchestration scheme that keeps **ChatGPT as the Brain (planner/revie
 
 ---
 
+## v0.2 candidate architecture (NOT the default) — M5/M6 status
+
+> Separate from the current released `v0.1.0-alpha.3`. **v0.2 is not yet the CLI/Skill default**; the default remains the Alpha.3 IAB Direct Brain Loop (feature-frozen).
+
+**Canonical v0.2 runtime path:**
+
+```
+ChatGPT (Custom MCP App)
+→ OpenAI Secure Tunnel
+→ local MCP
+→ Router / Governance
+→ Direct Local   or  Codex App Server
+```
+
+```mermaid
+flowchart LR
+    CG[ChatGPT Brain / Custom MCP App] --> T[OpenAI Secure Tunnel]
+    T --> MCP[local MCP]
+    MCP --> RG[Router / Governance]
+    RG --> DL[Direct Local]
+    RG --> CA[Codex App Server]
+```
+
+| v0.2 milestone | Status |
+|---|---|
+| M1–M4 App Server / local MCP / Router + Governance | landed |
+| M5 Secure Tunnel + real ChatGPT / Codex App Server E2E | **completed** |
+| M6 legacy IAB structural isolation (`src/legacy/`) | **completed** |
+| M7 real-project dogfood + operational default flip | **pending / not started** |
+
+- **IAB / Alpha.4 path is feature-frozen**: isolated under `src/legacy/`, **not deleted**.
+- v0.2 runtime Node requirement matches `package.json`: **`Node.js >= 22`**.
+- `src/index.js` is a **compatibility barrel**, not the v0.2 canonical runtime import root; canonical entries are `scripts/v0.2-start.mjs`, `src/transport/brain-local.js`, and `src/{mcp,router,governance,local,executor,state,transport}`.
+
 ## Why this project
 
 Driving a coding task with ChatGPT as the planner and Codex as the executor is easy on the first turn, but hard to keep going. Conversations drift, executor context resets, process failures lose progress, and there is no clean contract between *what ChatGPT asked for* and *what Codex actually did*.
@@ -72,7 +106,9 @@ Track: total duration, time to first Brain control, Brain TASK count, REVISE cou
 
 Future ideas (not Alpha.3 requirements): native ChatGPT Desktop Brain transport if a supported interface becomes available; Claude / DeepSeek BrainProvider; long-running feature-branch checkpoint policy. Do not implement them now.
 
-## Architecture
+## Architecture (Alpha.3 IAB default path)
+
+> The diagram above describes the Alpha.3 Direct Brain Loop default path; see the "v0.2 candidate architecture" section above for the v0.2 canonical path.
 
 ```mermaid
 flowchart TD
@@ -91,7 +127,7 @@ flowchart TD
 
 ### Prerequisites
 
-- Node.js `>= 18`
+- Node.js `>= 22`
 - ESM project (`"type": "module"`)
 - A Codex in-app browser (`iab`) runtime for a **real** ChatGPT-Brain run — see [SKILL.md](SKILL.md)
 

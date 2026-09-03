@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { captureCurrentConversation, reopenConversationFromBinding, ConversationIdentityMismatchError } from '../src/iab-transport.js';
+import { captureCurrentConversation, reopenConversationFromBinding, ConversationIdentityMismatchError } from '../src/legacy/iab-transport.js';
 
 function fakeTab(id, url) {
   let u = url;

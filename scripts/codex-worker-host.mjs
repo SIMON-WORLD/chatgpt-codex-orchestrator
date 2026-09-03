@@ -1,4 +1,4 @@
-// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT on the canonical Direct Brain Loop\n// path. The default \\-command\ uses the current Codex agent + built-in browser\n// (see src/direct-mode.js). Retained for compatibility/experimental use only.\n// chatgpt-codex-orchestrator: long-lived Codex worker host (data owner).
+// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT on the canonical Direct Brain Loop\n// path. The default \\-command\ uses the current Codex agent + built-in browser\n// (see src/legacy/direct-mode.js). Retained for compatibility/experimental use only.\n// chatgpt-codex-orchestrator: long-lived Codex worker host (data owner).
 // Runs in an ORDINARY Node process (started by the environment), so it can write the
 // user-level data root. It owns ALL persistent runtime data: tasks, logs, projects,
 // locks, runtime. The node REPL / IAB side talks to it over localhost IPC and never
@@ -14,7 +14,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createSecret, redactObject } from '../src/safety.js';
 import { runtimePaths } from '../src/runtime-paths.js';
-import { CodexExecutor } from '../src/codex-executor.js';
+import { CodexExecutor } from '../src/legacy/codex-executor.js';
 
 function handleData(RUNTIME, op, req) {
   try {
