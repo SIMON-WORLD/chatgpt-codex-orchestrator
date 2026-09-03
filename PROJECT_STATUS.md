@@ -28,10 +28,11 @@ ChatGPT 负责调查、架构、决策、路由和最终验收。Codex 是面向
 | M4 | **ACCEPTED** | Deterministic Router + Governance |
 | M5 | **ACCEPTED** | Secure Tunnel + production runtime + real ChatGPT/Codex E2E |
 | M6 | **ACCEPTED** | Legacy IAB isolation under `src/legacy/` |
+| N3 | **ACCEPTED** | Capability-First operating model / control-plane re-baseline |
 
 ## N3 — Capability-First Re-baseline
 
-**状态：ACTIVE**
+**状态：ACCEPTED / CLOSED**
 
 N3 将此前的 Capability Routing 设计提升为项目当前 operating model：
 
@@ -47,6 +48,8 @@ N3 将此前的 Capability Routing 设计提升为项目当前 operating model�
 
 当前规范性 routing policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。
 
+N3 通过 PR #8 由 ChatGPT Native GitHub capability 完成 branch / file mutation / PR / diff review / CI verification，并由 Brain 独立验收后 merge；该 landing 本身同时构成 M7-A Native-only dogfood #1。
+
 ## M7 — Real-Project Capability Routing Dogfood
 
 **状态：ACTIVE / HARDENING**
@@ -58,6 +61,22 @@ M7 不再只验证“ChatGPT 能否自动调用 Codex”，而是验证真实任
 - **M7-C Hybrid** — ChatGPT 调查/定案 → 必要的本地 Executor 执行 → ChatGPT 重新获取 GitHub/Web/local evidence 独立验收。
 
 只有上述 dogfood 形成充分证据后，才决定 operational default flip。
+
+### M7-A attempt #1 — N3 control-plane docs
+
+结果：**PASS**。
+
+- route / executor family: `CHATGPT_NATIVE`
+- GitHub evidence acquisition: **PASS**
+- GitHub branch/file mutation: **PASS**
+- PR creation + diff review: **PASS**
+- GitHub Actions Node 22 / 24 CI: **PASS**
+- Codex calls: **0**
+- Local MCP calls: **0**
+- manual workspace/job/task/step/RESULT relay: **0**
+- final Brain acceptance + merge: **PASS**
+
+该任务还暴露并验证了 runtime capability discovery：`create_branch` tool 曾已暴露但因目标 owner 未安装/授权 ChatGPT Codex Connector 返回 `403 Resource not accessible by integration`；provider authorization 修复后，同一 capability 的 branch create + file create/read/delete probe 真实通过。
 
 ### M7-B attempt #1 — nested `.git` hygiene
 
@@ -90,12 +109,11 @@ Dogfood 暴露的 P0 生命周期缺口已触发 hardening，而不是被隐藏�
 
 ## 当前下一步
 
-1. 完成 N3 Capability-First control-plane 文档并独立验收。
-2. 基于 N3 policy 完成 M7 mutation-lifecycle hardening R2。
-3. 以最新 `main` 重启 production runtime，并按 public MCP schema 变化刷新 Custom App（若需要）。
-4. 运行 M7-A / M7-B / M7-C 真实 dogfood。
-5. 基于 dogfood evidence 决定 operational default flip。
-6. 进入 M8 RC / release。
+1. 基于 N3 policy 完成 M7 mutation-lifecycle hardening R2。
+2. 以最新 `main` 重启 production runtime，并按 public MCP schema 变化刷新 Custom App（若需要）。
+3. 重跑 M7-B nested `.git` Codex-required dogfood，并完成 M7-C Hybrid dogfood。
+4. 基于 M7-A / M7-B / M7-C evidence 决定 operational default flip。
+5. 进入 M8 RC / release。
 
 ## Authority
 
