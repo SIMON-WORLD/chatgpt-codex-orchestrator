@@ -242,7 +242,7 @@ test('ambiguous recovery fails closed rather than guessing', async (t) => {
   t.after(() => exec.shutdown());
   await assert.rejects(() => exec.start({ prompt: 'x', accessMode: 'workspace_write' }));
   const job = exec.jobMap.list().find((j) => j.state === 'recovery_required');
-  await assert.rejects(() => exec.resume({ jobId: job.jobId }), /refusing to guess|ambiguous/);
+  await assert.rejects(() => exec.resume({ jobId: job.jobId }), /refusing to guess|ambiguous|no candidate|multiple candidate/);
   const after = exec.load(job.jobId);
   assert.equal(after.turnId, null);
 });
@@ -610,16 +610,17 @@ test('reconcile inProgress retains writer', async (t) => {
   assert.equal(exec.owner.owner, 'codex'); // retained
 });
 
-test('ambiguous reconciliation fails closed', async (t) => {
+test('ambiguous reconciliation fails closed (no candidate for current unit)', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
   const exec = makeExecutor({ dataRoot: root, slowTurn: true });
   t.after(() => exec.shutdown());
   const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
   assert.equal(exec.owner.owner, 'codex');
-  // Point the job at a turn that does NOT exist in the authoritative thread.
-  exec.jobMap.update(r.jobId, { turnId: 'turn-does-not-exist' });
+  // current unit has NO identifiable turn (pending-continue with no turn created) -> 0 candidates.
+  exec.jobMap.update(r.jobId, { mutationUnitId: 'unitB-no-turn' });
   const rec = await exec.reconcile({ jobId: r.jobId });
   assert.equal(rec.resolution, 'unresolved');
+  assert.equal(rec.reconciled, false);
   assert.equal(rec.recoveryRequired, true);
   assert.equal(exec.owner.owner, 'codex'); // fail-closed: retained
 });
@@ -720,7 +721,7 @@ test('R3 reconcile inProgress + codex different unit -> unresolved fail closed',
   assert.equal(rec.resolution, 'unresolved');
   assert.equal(rec.reconciled, false);
   assert.equal(rec.recoveryRequired, true);
-  assert.ok(/ownership conflict/.test(rec.reason));
+  assert.ok(/ownership conflict|no candidate|multiple candidate|ambiguous/.test(rec.reason));
   assert.equal(exec.owner.owner, 'codex'); // not overwritten
   assert.equal(exec.owner.unitId, originalOwnerUnit); // foreign unit unchanged (NOT 'unit-other')
   assert.notEqual(exec.owner.unitId, 'unit-other');
@@ -755,7 +756,7 @@ test('R3 reconcile terminal does not release a foreign/newer codex unit', async 
   const rec = await exec.reconcile({ jobId: r.jobId });
   assert.equal(rec.resolution, 'unresolved');
   assert.equal(rec.reconciled, false);
-  assert.ok(/ownership conflict/.test(rec.reason));
+  assert.ok(/ownership conflict|no candidate|multiple candidate|ambiguous/.test(rec.reason));
   assert.equal(exec.owner.owner, 'codex');
   assert.equal(exec.owner.unitId, 'newer-unit'); // NOT released
 });
@@ -904,4 +905,132 @@ test('R5 fresh executor recovery: stale Turn A notification recognized as old un
   execB._handleNotification({ method: 'turn/completed', params: { threadId, turn: { id: turnB, status: 'completed' } } });
   assert.equal(execB.owner.owner, 'none'); // B writer released after its own terminal
   assert.equal(execB.load(rA.jobId).state, 'completed');
+});
+
+
+// ---- M7 hardening R6: pending-continue / process-death recovery ------------
+
+test('R6 get safety: transition mismatch -> recoveryRequired + codex_reconcile, B writer retained', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const turnA = r.turnId;
+  const unitA = exec.load(r.jobId).turnUnits[turnA];
+  // Crash-window durable state: current unit B, turnId still A (belongs to unit A).
+  exec.jobMap.update(r.jobId, { mutationUnitId: 'unitB', turnId: turnA, state: 'starting', ownershipReleased: false });
+  exec.owner.acquire('codex', 'unitB');
+  assert.equal(exec.owner.owner, 'codex');
+  assert.equal(exec.owner.unitId, 'unitB');
+  const st = await exec.get({ jobId: r.jobId });
+  assert.equal(st.recoveryRequired, true);
+  assert.equal(st.nextAction, 'codex_reconcile');
+  assert.equal(exec.owner.owner, 'codex');       // B writer NOT released
+  assert.equal(exec.owner.unitId, 'unitB');
+  assert.equal(st.state, 'starting');             // not rewritten by Turn A terminal
+  assert.equal(st.mutationUnitState, 'running');  // writer retained (not 'released')
+});
+
+test('R6 reconcile discovers unseen B inProgress and binds it durably', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  const turnA = r.turnId;
+  const unitA = exec.load(r.jobId).turnUnits[turnA];
+  // Force-release A's writer so continue can create Turn B (simulating a remote continue).
+  exec.owner.release({ force: true });
+  const cont = await exec.continue({ jobId: r.jobId, instruction: 'b' });
+  const turnB = cont.turnId;
+  const unitB = exec.load(r.jobId).mutationUnitId;
+  // Revert to the crash-window durable state: turnId=A (old unit), current unit B, no turnB binding.
+  exec.jobMap.update(r.jobId, { turnId: turnA, mutationUnitId: unitB, turnUnits: { [turnA]: unitA }, state: 'running', ownershipReleased: false });
+  exec.owner.release({ force: true });
+  exec.owner.acquire('codex', unitB); // reconstruct exact B writer
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'in_progress');
+  assert.equal(rec.reconciled, true);
+  assert.equal(rec.recoveryRequired, false);
+  assert.equal(exec.load(r.jobId).turnId, turnB);          // job.turnId updated to B
+  assert.equal(exec.load(r.jobId).turnUnits[turnB], unitB); // durable binding
+  assert.equal(exec.owner.owner, 'codex');
+  assert.equal(exec.owner.unitId, unitB); // exact B writer retained
+});
+
+test('R6 reconcile discovers unseen B terminal and releases only exact B writer', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const turnA = r.turnId;
+  const unitA = exec.load(r.jobId).turnUnits[turnA];
+  const cont = await exec.continue({ jobId: r.jobId, instruction: 'b' });
+  const turnB = cont.turnId;
+  const unitB = exec.load(r.jobId).mutationUnitId;
+  await waitFor(() => exec.load(r.jobId).state === 'completed'); // turnB terminal
+  // Crash-window durable state.
+  exec.jobMap.update(r.jobId, { turnId: turnA, mutationUnitId: unitB, turnUnits: { [turnA]: unitA }, state: 'starting' });
+  exec.owner.release({ force: true });
+  exec.owner.acquire('codex', unitB);
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'terminal');
+  assert.equal(rec.reconciled, true);
+  assert.equal(exec.load(r.jobId).turnUnits[turnB], unitB);
+  assert.equal(exec.owner.owner, 'none'); // only exact unitB released
+});
+
+test('R6 ambiguous recovery: 0 candidates -> unresolved fail closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  const turnA = r.turnId;
+  const unitA = exec.load(r.jobId).turnUnits[turnA];
+  exec.jobMap.update(r.jobId, { mutationUnitId: 'unit-no-turn', turnUnits: { [turnA]: unitA } });
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'unresolved');
+  assert.equal(rec.reconciled, false);
+  assert.equal(rec.recoveryRequired, true);
+  assert.equal(exec.owner.owner, 'codex'); // retained / fail-closed
+});
+
+test('R6 ambiguous recovery: >1 candidates -> unresolved fail closed', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const cont = await exec.continue({ jobId: r.jobId, instruction: 'b' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  // Two turns exist in the thread but NONE durably mapped to the current unit -> >1 candidates.
+  const unitB = exec.load(r.jobId).mutationUnitId;
+  exec.jobMap.update(r.jobId, { mutationUnitId: unitB, turnUnits: {} });
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'unresolved');
+  assert.equal(rec.reconciled, false);
+  assert.equal(rec.recoveryRequired, true);
+});
+
+test('R6 resume foreign-owner protection: does not release/overwrite foreign codex/chatgpt unit', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const turnA = r.turnId;
+  const unitA = exec.load(r.jobId).turnUnits[turnA];
+  exec.jobMap.update(r.jobId, { mutationUnitId: 'unitB', turnId: turnA, turnUnits: { [turnA]: unitA } });
+  // Foreign codex unit C holds the workspace.
+  exec.owner.acquire('codex', 'unitC');
+  await assert.rejects(() => exec.resume({ jobId: r.jobId }), /no candidate|ownership conflict|ambiguous|multiple candidate/);
+  assert.equal(exec.owner.owner, 'codex');  // unit C NOT released
+  assert.equal(exec.owner.unitId, 'unitC');
+  // Foreign chatgpt unit holds the workspace -> writer resume fail closed.
+  exec.owner.release({ force: true });
+  exec.owner.acquire('chatgpt', 'direct-unit');
+  await assert.rejects(() => exec.resume({ jobId: r.jobId }), /no candidate|ownership conflict|ambiguous|multiple candidate|chatgpt/);
+  assert.equal(exec.owner.owner, 'chatgpt'); // NOT overwritten
+  assert.equal(exec.owner.unitId, 'direct-unit');
 });
