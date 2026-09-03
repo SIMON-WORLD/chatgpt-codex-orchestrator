@@ -14,14 +14,14 @@
 | M5 — Secure Tunnel + Real ChatGPT E2E | **CLOSED** | ChatGPT Web/Desktop → local runtime → Direct/Codex 实链路 |
 | M6 — Legacy IAB Isolation | **CLOSED** | IAB / Alpha.4 implementation 隔离到 `src/legacy/` |
 | N3 — Capability-First Re-baseline | **CLOSED** | capability-first 已成为当前 operating model |
-| M7 — Real-Project Capability Routing Dogfood | **ACTIVE** | Native-only / Codex-required / Hybrid 真实 dogfood + hardening |
-| M8 — RC / Release | **PENDING** | v0.2 candidate 的最终独立验收、default policy 与 release decision |
+| M7 — Real-Project Capability Routing Dogfood | **ACTIVE** | Native-only / Codex-required / Hybrid 真实 dogfood |
+| M8 — RC / Release | **PENDING** | v0.2 candidate 最终独立验收、default policy 与 release decision |
 
 ## N3 — 已接受基线
 
-N3 不大规模重写 runtime；它冻结并发布当前控制原则：
+N3 冻结当前控制原则：
 
-- ChatGPT 为 v0.2 唯一 authoritative Brain；
+- ChatGPT 为 v0.2 authoritative Brain；
 - Evidence first；
 - Runtime Capability Discovery precedes routing；
 - Route / Capability / Provider 分离；
@@ -33,11 +33,7 @@ N3 不大规模重写 runtime；它冻结并发布当前控制原则：
 
 规范性 policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。
 
-N3 已通过 ChatGPT Native GitHub capability 完成文档 branch / mutation / PR / diff review / CI / merge，且无需 Codex、Local MCP 或人工 ID/RESULT 中转；该 landing 同时作为 M7-A Native-only dogfood #1，结果为 **PASS**。
-
 ## M7 — 当前验收路径
-
-M7 需要通过真实任务验证三种 execution pattern：
 
 ### M7-A — Native-only
 
@@ -65,7 +61,11 @@ ChatGPT 当前 runtime 已有 capability 足够完成任务时，应直接执行
 - mutation lifecycle / recovery / handoff 安全闭合
 - Brain 独立 review 真实 diff / tests / CI evidence
 
-第一次 nested `.git` attempt 暴露 mutation lifecycle P0，当前进入 hardening R2，尚未通过。
+**Attempt #1:** nested `.git` hygiene — **FAIL as product task / PASS as failure-discovery dogfood**；真实暴露 Codex write contract 与 mutation reconciliation P0。
+
+**Hardening:** R1–R6 — **ACCEPTED** via PR #11。Lifecycle contract 现包含 explicit accessMode、read-only non-writer semantics、durable turn↔unit identity、public `codex_reconcile`、identity-safe process-death recovery、foreign-owner fail-closed 与 cross-route regressions。
+
+**Next:** 部署 accepted `main`、Refresh Custom MCP schema 后运行 **M7-B attempt #2**。只有 real-project attempt #2 通过，才能认为 hardening 在生产链路上被验证。
 
 ### M7-C — Hybrid
 
@@ -75,9 +75,11 @@ ChatGPT Product Capability 与 Local Capability Plane 同时参与同一逻辑�
 
 `HYBRID` 是 composition route，不是 mutation owner。
 
+M7-C 至少需要一次真实项目任务，且不能只是把 M7-A / M7-B 的结果在文档里拼接起来。
+
 ## Default policy decision
 
-v0.2 operational default flip 不是自动发生的 milestone side effect。只有在 M7 的真实 dogfood evidence 足以说明 capability-first 路径稳定、可恢复且不需要用户做人肉 API 后，才由 Brain 单独做 default-policy decision。
+v0.2 operational default flip 不是自动发生的 milestone side effect。只有 M7-A / M7-B / M7-C 的真实 dogfood evidence 足以说明 capability-first 路径稳定、可恢复且不需要用户做人肉 API 后，才由 Brain 单独做 default-policy decision。
 
 ## M8 — RC / Release
 
