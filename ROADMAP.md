@@ -13,13 +13,13 @@
 | M4 — Router + Governance | **CLOSED** | deterministic route selection + lifecycle governance |
 | M5 — Secure Tunnel + Real ChatGPT E2E | **CLOSED** | ChatGPT Web/Desktop → local runtime → Direct/Codex 实链路 |
 | M6 — Legacy IAB Isolation | **CLOSED** | IAB / Alpha.4 implementation 隔离到 `src/legacy/` |
-| N3 — Capability-First Re-baseline | **ACTIVE** | 将 capability-first 提升为当前 operating model |
+| N3 — Capability-First Re-baseline | **CLOSED** | capability-first 已成为当前 operating model |
 | M7 — Real-Project Capability Routing Dogfood | **ACTIVE** | Native-only / Codex-required / Hybrid 真实 dogfood + hardening |
 | M8 — RC / Release | **PENDING** | v0.2 candidate 的最终独立验收、default policy 与 release decision |
 
-## N3 — 当前目标
+## N3 — 已接受基线
 
-N3 不大规模重写 runtime。它冻结并发布当前控制原则：
+N3 不大规模重写 runtime；它冻结并发布当前控制原则：
 
 - ChatGPT 为 v0.2 唯一 authoritative Brain；
 - Evidence first；
@@ -32,6 +32,8 @@ N3 不大规模重写 runtime。它冻结并发布当前控制原则：
 - 同一 mutable resource 保持 single authoritative writer。
 
 规范性 policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。
+
+N3 已通过 ChatGPT Native GitHub capability 完成文档 branch / mutation / PR / diff review / CI / merge，且无需 Codex、Local MCP 或人工 ID/RESULT 中转；该 landing 同时作为 M7-A Native-only dogfood #1，结果为 **PASS**。
 
 ## M7 — 当前验收路径
 
@@ -48,6 +50,8 @@ ChatGPT 当前 runtime 已有 capability 足够完成任务时，应直接执行
 - `manual relay = 0`
 - Brain 重新获取真实 resource evidence 后验收
 
+**Attempt #1:** N3 control-plane docs — **PASS**。
+
 ### M7-B — Codex-required
 
 多文件 coding、unknown-root-cause debugging、refactor、shell-heavy / iterative tests 等持续本地 execution，应委托 Codex。
@@ -60,6 +64,8 @@ ChatGPT 当前 runtime 已有 capability 足够完成任务时，应直接执行
 - Brain 可自主 `REVISE`
 - mutation lifecycle / recovery / handoff 安全闭合
 - Brain 独立 review 真实 diff / tests / CI evidence
+
+第一次 nested `.git` attempt 暴露 mutation lifecycle P0，当前进入 hardening R2，尚未通过。
 
 ### M7-C — Hybrid
 
