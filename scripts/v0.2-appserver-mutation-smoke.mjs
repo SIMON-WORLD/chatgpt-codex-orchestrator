@@ -95,7 +95,7 @@ async function main() {
       'Do not stop until all steps are done. Do not report success unless the files were actually created.',
     ].join('\n');
     const mut = await executor.start({ prompt: mutPrompt, cwd: ws, accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'mutation-smoke', networkAccess: true });
-    process.stdout.write('mutation_jobId=' + mut.jobId + ' requestedSandbox=' + mut.sandbox + ' effectiveSandbox=' + mut.effectiveSandbox + ' effectiveApprovalPolicy=' + mut.effectiveApprovalPolicy + '\n');
+    process.stdout.write('mutation_jobId=' + mut.jobId + ' requestedSandbox=' + mut.sandbox + ' effectiveVerified=' + mut.effectiveVerified + ' effectiveSandbox=' + mut.effectiveSandbox + ' effectiveApprovalPolicy=' + mut.effectiveApprovalPolicy + ' networkAccess=' + (mut.permissionContract && mut.permissionContract.networkAccess) + ' effectiveWritableRootMatch=' + (mut.permissionContract && mut.permissionContract.effectiveWritableRootMatch) + '\n');
     const res = await waitResult(executor, mut.jobId, { marker: 'REAL_CODEX_WORKSPACE_WRITE_DONE', timeoutMs: 300000, intervalMs: 1500 });
 
     const probeExists = fs.existsSync(probeFile);
@@ -104,11 +104,13 @@ async function main() {
     const shellOk = shellExists && fs.readFileSync(shellProbeFile, 'utf8').trim() === 'SHELL_PROBE_OK';
     const doneMarker = !!(res.got && res.got.includes('REAL_CODEX_WORKSPACE_WRITE_DONE'));
 
-    const pass = probeOk && shellOk && doneMarker;
+    const contractOk = mut.effectiveVerified === true && mut.effectiveSandbox === 'workspace-write';
+    const pass = contractOk && probeOk && shellOk && doneMarker;
+    process.stdout.write('permission_evidence effectiveVerified=' + mut.effectiveVerified + ' effectiveSandbox=' + mut.effectiveSandbox + ' effectiveApprovalPolicy=' + mut.effectiveApprovalPolicy + ' effectiveWritableRootMatch=' + (mut.permissionContract && mut.permissionContract.effectiveWritableRootMatch) + ' effectiveNetworkAccess=' + (mut.permissionContract && mut.permissionContract.effectiveNetworkAccess) + '\n');
     process.stdout.write('REAL_CODEX_WORKSPACE_WRITE=' + (pass ? 'PASS' : 'FAIL') + '\n');
     process.stdout.write('evidence probe_file_exists=' + probeExists + ' probe_content_ok=' + probeOk + ' shell_file_exists=' + shellExists + ' shell_content_ok=' + shellOk + ' done_marker=' + doneMarker + '\n');
     process.stdout.write('mutation_state=' + res.state + '\n');
-    if (!pass) { process.stdout.write('reason=' + (res.timeout ? 'timeout waiting for mutation turn' : (res.state === 'failed' ? 'mutation turn failed' : 'mutation evidence missing')) + '\n'); await executor.shutdown(); process.exitCode = 1; return; }
+    if (!pass) { process.stdout.write('reason=' + (!contractOk ? 'permission contract not verified as workspace_write' : (res.timeout ? 'timeout waiting for mutation turn' : (res.state === 'failed' ? 'mutation turn failed' : 'mutation evidence missing'))) + '\n'); await executor.shutdown(); process.exitCode = 1; return; }
 
     // ---- Phase 2: best-effort python capability probe (read_only) ----
     const pyPrompt = [

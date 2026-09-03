@@ -30,7 +30,8 @@
     "start:v0.2": "node scripts/v0.2-start.mjs",
     "v0.2:status": "node scripts/v0.2-start.mjs --status",
     "v0.2:e2e": "node scripts/v0.2-local-e2e.mjs",
-    "v0.2:appserver-smoke": "node scripts/v0.2-appserver-smoke.mjs"
+    "v0.2:appserver-smoke": "node scripts/v0.2-appserver-smoke.mjs",
+    "v0.2:appserver-mutation-smoke": "node scripts/v0.2-appserver-mutation-smoke.mjs"
   },
   "engines": {
     "node": ">=22"

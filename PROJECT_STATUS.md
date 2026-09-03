@@ -113,6 +113,8 @@ M7 验证三种真实 execution pattern：
 - `codex_get` / `codex_start` 返回 `permissionContract`（requested/effective/effectiveVerified）；对 requested workspace_write 但有效权限为 read-only 的情况 fail closed，不再让 Brain 等 8 分钟才发现；
 - 新增 REAL workspace-write mutation smoke：真实 Codex 在临时 workspace 创建 probe 文件 + 通过 shell 写第二个文件，`REAL_CODEX_WORKSPACE_WRITE=PASS`；+ python 能力探测（本机结果为 policy_blocked）。
 
+
+**R2 修订（真实 effective evidence）。** 上述 R1 的 effectiveVerified 不能等同于 requested 推断：本机 Codex 0.146.0 的 Turn schema 并不包含 effectiveSandbox，且 thread/settings/update 只有在 settings 发生变化时才发出 thread/settings/updated。R2 改为：安全 bootstrap（先建一个 read-only + on-request、不执行 turn 的安全 thread）→ thread/settings/update 设置本 job 的 sandboxPolicy/approvalPolicy → 读取 thread/settings/updated 通知里的真实 ThreadSettings（sandboxPolicy/approvalPolicy/activePermissionProfile/cwd）→ 校验通过后才获取 MutationOwner 并启动真实 task turn。requested == effective 的推断已被删除；effectiveVerified 只在获得真实 effective ThreadSettings 且与 requested contract 一致时置 true。start 与 continue 均走同一 permission contract；已验证 snapshot 持久化进 JobMap（effectiveSandbox/effectiveApprovalPolicy/effectiveVerified/verifiedForRequestedContract/verifiedAt），fresh executor recovery 不丢失。
 **重要：本轮尚未宣称 M7-B 通过。** 该 hardening 只保证 permission contract 与真实 App Server 一致；是否真正解决 M7-B 必须由下一次 real-project dogfood attempt 再验证。
 
 ## 当前下一步

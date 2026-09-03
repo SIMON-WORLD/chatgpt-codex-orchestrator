@@ -42,6 +42,8 @@ async function main() {
     const executor = new AppServerExecutor({ dataRoot, client, cwd: dataRoot });
     try {
       const started = await executor.start({ prompt: 'Reply with exactly the marker REAL_CODEX_SMOKE_OK and nothing else.', cwd: dataRoot, accessMode: 'read_only', workspaceRoot: dataRoot, workspaceId: 'smoke' });
+      process.stdout.write('effectiveVerified=' + started.effectiveVerified + ' effectiveSandbox=' + started.effectiveSandbox + ' effectiveApprovalPolicy=' + started.effectiveApprovalPolicy + '\n');
+      if (started.effectiveVerified !== true || started.effectiveSandbox !== 'read-only') { await executor.shutdown(); process.stdout.write('REAL_APP_SERVER_SMOKE=FAIL\nreason=effective permission not verified as read-only\n'); process.exitCode = 1; return; }
       let got = null, state = null;
       for (let i = 0; i < 240; i++) {
         const g = await executor.get({ jobId: started.jobId }); got = g.result; state = g.state;

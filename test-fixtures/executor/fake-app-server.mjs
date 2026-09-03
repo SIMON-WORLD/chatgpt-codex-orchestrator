@@ -142,6 +142,42 @@ function handle(msg) {
       });
     }
 
+    case 'thread/settings/update': {
+      const threadId = params && params.threadId;
+      const thread = threads.get(threadId);
+      if (!thread) return respondError(id, { code: -32601, message: `thread not found: ${threadId}` });
+      if (params && params.sandboxPolicy) thread.sandboxPolicy = params.sandboxPolicy;
+      if (params && params.approvalPolicy) thread.approvalPolicy = params.approvalPolicy;
+      if (params && params.cwd) thread.cwd = params.cwd;
+      saveState();
+      let sp = thread.sandboxPolicy || (thread.sandbox === 'workspace-write' ? { type: 'workspaceWrite', networkAccess: false, writableRoots: [] } : { type: 'readOnly', networkAccess: false });
+      if (process.env.FAKE_APP_SERVER_FORCE_EFFECTIVE_SANDBOX) {
+        const forced = process.env.FAKE_APP_SERVER_FORCE_EFFECTIVE_SANDBOX;
+        sp = { ...(sp || {}) };
+        if (forced === 'workspace-write' || forced === 'workspaceWrite') sp.type = 'workspaceWrite';
+        else if (forced === 'read-only' || forced === 'readOnly') sp.type = 'readOnly';
+      }
+      if (process.env.FAKE_APP_SERVER_FORCE_WRITABLE_ROOTS) {
+        try { sp = { ...(sp || {}), writableRoots: JSON.parse(process.env.FAKE_APP_SERVER_FORCE_WRITABLE_ROOTS) }; } catch {}
+      }
+      if (process.env.FAKE_APP_SERVER_FORCE_NETWORK_ACCESS) sp = { ...(sp || {}), networkAccess: process.env.FAKE_APP_SERVER_FORCE_NETWORK_ACCESS === 'true' };
+      let ap = thread.approvalPolicy || null;
+      if (process.env.FAKE_APP_SERVER_FORCE_APPROVAL_POLICY) ap = process.env.FAKE_APP_SERVER_FORCE_APPROVAL_POLICY;
+      if (!ap) ap = (sp && sp.type === 'readOnly') ? 'never' : 'on-request';
+      const settings = {
+        cwd: thread.cwd || process.cwd(),
+        approvalPolicy: ap,
+        approvalsReviewer: 'user',
+        sandboxPolicy: sp,
+        activePermissionProfile: null,
+        model: 'fake', modelProvider: 'openai', serviceTier: null, effort: null, summary: null,
+        collaborationMode: { mode: 'default', settings: { model: 'fake', reasoning_effort: null, developer_instructions: null } },
+        multiAgentMode: 'explicitRequestOnly', personality: 'pragmatic',
+      };
+      if (process.env.FAKE_APP_SERVER_NO_SETTINGS_UPDATE !== '1') notify('thread/settings/updated', { threadId, threadSettings: settings });
+      return respond(id, {});
+    }
+
     case 'thread/resume': {
       const threadId = params && params.threadId;
       const thread = threads.get(threadId);
