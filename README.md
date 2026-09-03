@@ -1,60 +1,91 @@
 # chatgpt-codex-orchestrator
 
-一种 Agent 编排方案，让 **ChatGPT 作为 Brain（规划/评审）**、**当前 Codex agent 作为本地执行方**，在一条 Direct Brain Loop 上协同完成编码任务。
+一个以 **ChatGPT 为当前 authoritative Brain** 的 Capability Orchestrator：让 ChatGPT 获取一手证据、做出决策、发现当前 runtime 实际可用能力、选择最合适的执行路径，并在执行后重新取得 authoritative evidence 完成验收。**Codex 是持续本地 coding execution 的重要 Executor，但不是默认下游。**
 
 **状态：** Alpha — `v0.1.0-alpha.3` · **简体中文** · [English](README.en.md)
 
 ---
 
-## v0.2 候选架构（非默认）— M5/M6 状态
+## v0.2 候选架构（非默认）— N3 / M7 状态
 
 > 与当前 released `v0.1.0-alpha.3` 分离。**v0.2 还不是 CLI/Skill 的默认入口**；默认仍是 Alpha.3 的 IAB Direct Brain Loop（feature-frozen）。
 
-**Canonical v0.2 运行路径：**
+v0.2 的 operating model 是：
 
-```
-ChatGPT (Custom MCP App)
-→ OpenAI Secure Tunnel
-→ local MCP
-→ Router / Governance
-→ Direct Local  或  Codex App Server
+```text
+Evidence first
+→ Decision
+→ Runtime Capability Discovery
+→ Capability Routing
+→ Execute
+→ Independent Evidence Reacquisition
+→ ACCEPT / REVISE / DONE
 ```
 
 ```mermaid
-flowchart LR
-    CG[ChatGPT Brain / Custom MCP App] --> T[OpenAI Secure Tunnel]
+flowchart TD
+    U[User Goal] --> B[ChatGPT authoritative Brain]
+    B --> E[Evidence / Decision]
+    E --> D[Runtime Capability Discovery]
+    D --> R[Capability Routing]
+
+    R --> PN[ChatGPT Product Capability]
+    PN --> N[Built-in Native]
+    PN --> A[Connected Apps]
+
+    R --> LP[Local Capability Plane]
+    LP --> T[OpenAI Secure Tunnel]
     T --> MCP[local MCP]
-    MCP --> RG[Router / Governance]
-    RG --> DL[Direct Local]
-    RG --> CA[Codex App Server]
+    MCP --> DL[Direct Local]
+    MCP --> CA[Codex App Server]
+
+    N --> V[Independent Evidence Reacquisition]
+    A --> V
+    DL --> V
+    CA --> V
+    V --> B
 ```
 
-| v0.2 里程碑 | 状态 |
+- **ChatGPT Product Capability**：Web/Search、Files、Python/Data Analysis、Images、Artifacts、Tasks，以及 GitHub、Gmail、Calendar、Notion、Figma 等当前 runtime 已连接 App。
+- **Local Capability Plane**：Custom MCP App + Secure Tunnel + Local MCP，用于补齐 Local Machine / Local Workspace capability；它不是所有任务的必经 transport。
+- **Codex**：多文件 coding、debug、refactor、shell-heavy / iterative tests 等 sustained local execution 的 Executor。
+- **Future agents**：未来可按真实需要接入 Claude、DeepSeek 或其他 Agent 作为 specialist / advisor / executor；v0.2 不实现 multi-authority Brain。
+
+| v0.2 阶段 | 状态 |
 |---|---|
-| M1–M4 App Server / local MCP / Router + Governance | 已落地 |
+| M1–M4 App Server / local MCP / Router + Governance | **已完成** |
 | M5 Secure Tunnel + real ChatGPT / Codex App Server E2E | **已完成** |
 | M6 legacy IAB 结构隔离（`src/legacy/`） | **已完成** |
-| M7 real-project dogfood + operational default flip | **待定 / 未开始** |
+| N3 Capability-First Re-baseline | **进行中** |
+| M7 real-project Capability Routing dogfood / hardening | **进行中** |
+| M8 RC / Release | **待定** |
+
+当前项目状态见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)，已接受高层路径见 [`ROADMAP.md`](ROADMAP.md)，规范性 routing / executor policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。
 
 - **IAB / Alpha.4 路径 feature-frozen**：已隔离到 `src/legacy/`，**未删除**。
 - v0.2 运行期 Node 要求与 `package.json` 一致：**`Node.js >= 22`**。
-- `src/index.js` 是 **compatibility barrel**，不是 v0.2 canonical runtime 的 import root；canonical 入口是 `scripts/v0.2-start.mjs`、`src/transport/brain-local.js` 及 `src/{mcp,router,governance,local,executor,state,transport}`。
+- `src/index.js` 是 **compatibility barrel**，不是 v0.2 canonical runtime 的 import root；canonical local runtime 入口是 `scripts/v0.2-start.mjs`、`src/transport/brain-local.js` 及 `src/{mcp,router,governance,local,executor,state,transport}`。
 
 ## 为什么做这个项目
 
-用 ChatGPT 做规划、用 Codex 做执行来驱动一个编码任务，第一次很容易，但要持续下去却很难：对话会漂移、执行上下文会重置、进程失败会丢失进度，而且“ChatGPT 要什么”和“Codex 实际做了什么”之间缺乏清晰的契约。
+最初的问题是：ChatGPT 可以规划和评审，Codex 可以本地执行，但如果用户必须在二者之间手工复制 `TASK`、`RESULT`、workspaceId、jobId 等中间状态，用户本身就变成了“人肉 API”。项目首先解决这个闭环问题。
 
-`chatgpt-codex-orchestrator` 让这条闭环变得可控：
+v0.2 进一步确认：**Executor 不等于 Codex。** ChatGPT Web/Chat 本身已经拥有 Web、GitHub、Files、Python、connected apps 等大量能力，因此成熟的 orchestrator 不应该把所有任务都委托 Codex，而应根据当前 runtime 的真实 capability 选择最合适的执行路径。
 
-- 一个用户目标，然后由 **ChatGPT 规划**并下发 `TASK`。
-- **当前 Codex agent 本地执行**并返回带证据的紧凑 `RESULT`。
-- **ChatGPT 评审**并回复 `TASK` / `REVISE` / `ASK_USER` / `DONE`。
-- 全程复用同一条 ChatGPT conversation；找不到唯一 composer 时 fail closed，不修改历史消息。
-- 密钥会从持久化与日志化上下文中被脱敏。
+核心原则：
+
+- ChatGPT 负责调查、架构、规划、路由、验收和最终 `DONE`。
+- ChatGPT 已有且适合直接完成的 capability 不重复委托 Codex。
+- Direct Local 处理 bounded local operations；Codex 处理 sustained local coding execution。
+- Executor `RESULT` 是 evidence candidate，不等于 Brain truth。
+- Brain 在有能力时重新获取 GitHub / Web / local authoritative evidence 后再 `ACCEPT / REVISE / DONE`。
+- 用户不承担 workspaceId / jobId / taskId / stepId / RESULT 的人工消息中转。
 
 ## 它如何工作
 
-默认路径是 **Direct Brain Loop**。
+### 当前 released Alpha.3 默认路径
+
+当前正式 release `v0.1.0-alpha.3` 的默认仍是 **Direct Brain Loop**：
 
 - **ChatGPT** 是 Brain（规划者与评审者）：规划、下发任务、评审结果，并决定何时完成。
 - **当前 Codex agent** 是执行者：通过 Codex 内置浏览器（`iab`）与本项目专用的一条 ChatGPT 会话通信，执行每个 `TASK`，收集真实证据，并回传紧凑的 `RESULT`。
@@ -81,6 +112,8 @@ flowchart LR
 
 ## Dogfood 状态（事实）
 
+### Alpha.3
+
 Alpha.3 Direct Brain Loop 已用真实长期 dogfood 完成：
 
 `agent-credentials-skill v0.3.0`
@@ -92,23 +125,29 @@ Alpha.3 Direct Brain Loop 已用真实长期 dogfood 完成：
 - 完成 commit / push / tag / GitHub Release；
 - 最终 Brain `DONE`。
 
-说明：milestone 分批是在之后加入的，仍需在更多真实项目上验证。未测量前不宣称性能提升百分比。
+### v0.2 M7
+
+第一次 real-project nested `.git` dogfood 已证明：ChatGPT 可以自主 route、调用真实 Codex、管理中间 ID、在失败后进入 `REVISE`，且不需要用户人工中转；但产品任务因 Codex write contract 与 mutation reconciliation / cross-route handoff 缺口未完成，因此结果被真实记录为 failure，并进入 hardening，而不是伪造 `DONE`。
+
+M7 现在按三类真实任务继续：
+
+- **M7-A Native-only**：ChatGPT Product Capability 足够时，Codex calls = 0。
+- **M7-B Codex-required**：真实多文件 coding / tests，使用 real Codex。
+- **M7-C Hybrid**：ChatGPT 调查/定案 → 必要 local execution → ChatGPT 重新获取 GitHub/Web/local evidence 独立验收。
+
+完整状态见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。
 
 ## 冻结策略与路线图
 
-Alpha.3 是当前冻结的 dogfood 基线。
+Alpha.3 仍是当前 released/default dogfood 基线；v0.2 尚未 default flip。
 
-未来 3–5 个真实项目：
-- 除非出现真实阻塞或重复失败，不做架构变更；
-- 先收集运行指标。
+当前高层路线只记录已接受阶段，不提前发明 v0.3/v0.4 的固定实现计划。见 [`ROADMAP.md`](ROADMAP.md)。
 
-跟踪指标：总耗时、到首个 Brain 控制的时间、Brain TASK 数、`REVISE` 数、`ASK_USER` 数、手动转接数、浏览器恢复/错误数、conversation 切换数、发布重试数、`DONE` 成功/失败。
-
-未来方向（非 Alpha.3 要求）：原生 ChatGPT Desktop Brain transport（若出现受支持接口）、Claude / DeepSeek BrainProvider、长运行 feature-branch checkpoint 策略。这些现在不实现。
+未来方向（非当前承诺）可以包括 Claude / DeepSeek specialist/executor integration、generalized resource-scoped mutation lease、以及在真实 evidence 证明必要后研究 multi-Brain authority；这些不会在缺少真实需求时提前实现。
 
 ## 架构（Alpha.3 IAB 默认路径）
 
-> 上图描述 Alpha.3 的 Direct Brain Loop 默认路径；v0.2 canonical 见上文「v0.2 候选架构」。
+> 下图描述 Alpha.3 的 released/default Direct Brain Loop；v0.2 capability-first candidate 见上文。
 
 ```mermaid
 flowchart TD
@@ -129,7 +168,7 @@ flowchart TD
 
 - Node.js `>= 22`
 - ESM 项目（`"type": "module"`）
-- 一次**真实**的 ChatGPT-Brain 运行需要 Codex 内置浏览器（`iab`）运行时——见 [SKILL.md](SKILL.md)
+- 一次**当前 released Alpha.3** 的真实 ChatGPT-Brain 运行需要 Codex 内置浏览器（`iab`）运行时——见 [SKILL.md](SKILL.md)
 
 ### 安装与测试
 
@@ -144,6 +183,7 @@ npm test
 
 - `npm run setup:brain-command` — 一次性安装 launcher Skill 到 `$HOME/.agents/skills/brain-command/SKILL.md` 并写入 `$CODEX_HOME/brain-command/config.json`。
 - `npm run status:brain-command` — 只读检查 launcher Skill 与 config。
+- `npm run start:v0.2` — 启动 v0.2 local capability runtime（candidate，不是 released/default Skill 入口）。
 
 ## 核心工作流与命令
 
@@ -151,13 +191,14 @@ npm test
 
 | 命令 | 用途 | 状态 |
 |---|---|---|
-| `status:brain-command` | 只读检查：用户级 launcher Skill 可发现 + brain-command config 存在/可解析；打印 `orchestratorRoot` / `dataRoot` / `workspaceRoot` 与默认值；不打印 secret；退出 0 健康，1 缺失/无效 | 支持 |
-| `doctor` | 预检（IAB 运行时、ChatGPT 登录、codex CLI、git、状态/日志目录、IPC、context provider） | 支持 |
-| `setup:brain-command` | 一次性安装 launcher Skill 与配置 | 支持 |
+| `status:brain-command` | 只读检查：用户级 launcher Skill 可发现 + brain-command config 存在/可解析；打印 `orchestratorRoot` / `dataRoot` / `workspaceRoot` 与默认值；不打印 secret；退出 0 健康，1 缺失/无效 | Alpha.3 支持 |
+| `doctor` | Alpha.3 预检（IAB 运行时、ChatGPT 登录、codex CLI、git、状态/日志目录、IPC、context provider） | Alpha.3 支持 |
+| `setup:brain-command` | 一次性安装 launcher Skill 与配置 | Alpha.3 支持 |
+| `start:v0.2` | v0.2 Local MCP / production-style runtime | v0.2 candidate |
 
 ### 自然语言入口
 
-```
+```text
 用 ChatGPT 指挥模式完成这个任务：<goal>
 ```
 
@@ -178,12 +219,14 @@ npm test
 
 - `adopt-current` 已实现并保留，仅在用户明确要求时使用（当前 IAB 环境所选 tab 身份在多次 REPL 调用间不稳定）。
 - Legacy detached worker / TaskService / TaskManager / durable recovery machinery 保留为实验性，不是默认路径。
+- v0.2 capability-first runtime 尚未 release/default flip。
 
 ## 限制
 
-- Direct Mode 依赖 Codex 内置浏览器（`iab`）；若 `iab` 不可用会明确失败（`IABUnavailableError`），不回退到外部浏览器（Edge/Chrome）。
-- 依赖 ChatGPT Web DOM；若 UI 变化，composer/历史选择器可能需要维护。
-- milestone 分批仍需更多真实项目验证；性能提升百分比未测量。
+- Released Alpha.3 Direct Mode 依赖 Codex 内置浏览器（`iab`）；若 `iab` 不可用会明确失败（`IABUnavailableError`），不回退到外部浏览器（Edge/Chrome）。
+- Alpha.3 依赖 ChatGPT Web DOM；selector 变化可能需要维护。
+- v0.2 M7 仍处于 real-project dogfood / hardening；尚未达到 release/default flip 条件。
+- Capability availability 依赖当前 ChatGPT runtime、连接的 provider、目标 resource authorization 和 operation permission；工具出现在 surface 中不等于对应 mutation 一定可执行。
 
 ## 安全与可靠性
 
@@ -195,16 +238,22 @@ npm test
 - 有界、脱敏的上下文（不做整个仓库的转储）。
 - 发布身份预检 + 不 force-push / 不改写已发布历史。
 - Post-DONE 边界：不改变已验收的 target repo outcome。
+- v0.2 local mutation 保持 single-writer / fail-closed reconciliation 边界；当前 M7 仍在继续 hardening。
 
 不要把这些理解为生产就绪的安全保证——见 [限制](#限制)。
 
 ## 文档
 
+- [PROJECT_STATUS.md](PROJECT_STATUS.md) —— 当前项目阶段状态基线。
+- [ROADMAP.md](ROADMAP.md) —— 已接受的高层路线。
+- [CAPABILITY_ROUTING.md](CAPABILITY_ROUTING.md) —— 当前规范性 routing / executor policy。
 - [CHANGELOG.md](CHANGELOG.md) —— 面向发布的版本历史。
 - [docs/development-history.md](docs/development-history.md) —— 详细工程/开发笔记。
 - [docs/architecture.md](docs/architecture.md) —— 当前架构参考。
+- [docs/rfc-v0.2-chatgpt-native-capability-inventory.md](docs/rfc-v0.2-chatgpt-native-capability-inventory.md) —— v0.2 native capability research inventory。
+- [docs/rfc-v0.2-capability-routing.md](docs/rfc-v0.2-capability-routing.md) —— v0.2 historical routing design RFC；当前 normative policy 见 `CAPABILITY_ROUTING.md`。
 - [CONTRIBUTING.md](CONTRIBUTING.md) —— 贡献指南。
-- [SKILL.md](SKILL.md) —— agent 面向的运行时接线与命令。
+- [SKILL.md](SKILL.md) —— agent 面向的 released/default 运行时接线与命令。
 
 ## 许可协议
 
