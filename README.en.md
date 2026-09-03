@@ -1,62 +1,93 @@
 # chatgpt-codex-orchestrator
 
-An agentic orchestration scheme that keeps **ChatGPT as the Brain (planner/reviewer)** and **the current Codex agent as the local executor** in one Direct Brain Loop.
+A Capability Orchestrator with **ChatGPT as the current authoritative Brain**: ChatGPT acquires first-party evidence, makes decisions, discovers which capabilities are actually available in the current runtime, selects the best execution path, and reacquires authoritative evidence before acceptance. **Codex is an important executor for sustained local coding work, not the default downstream for every task.**
 
 **Status:** Alpha — `v0.1.0-alpha.3` · [简体中文](README.md) · **English**
 
 ---
 
-## v0.2 candidate architecture (NOT the default) — M5/M6 status
+## v0.2 candidate architecture (NOT the default) — N3 / M7 status
 
 > Separate from the current released `v0.1.0-alpha.3`. **v0.2 is not yet the CLI/Skill default**; the default remains the Alpha.3 IAB Direct Brain Loop (feature-frozen).
 
-**Canonical v0.2 runtime path:**
+The v0.2 operating model is:
 
-```
-ChatGPT (Custom MCP App)
-→ OpenAI Secure Tunnel
-→ local MCP
-→ Router / Governance
-→ Direct Local   or  Codex App Server
+```text
+Evidence first
+→ Decision
+→ Runtime Capability Discovery
+→ Capability Routing
+→ Execute
+→ Independent Evidence Reacquisition
+→ ACCEPT / REVISE / DONE
 ```
 
 ```mermaid
-flowchart LR
-    CG[ChatGPT Brain / Custom MCP App] --> T[OpenAI Secure Tunnel]
+flowchart TD
+    U[User Goal] --> B[ChatGPT authoritative Brain]
+    B --> E[Evidence / Decision]
+    E --> D[Runtime Capability Discovery]
+    D --> R[Capability Routing]
+
+    R --> PN[ChatGPT Product Capability]
+    PN --> N[Built-in Native]
+    PN --> A[Connected Apps]
+
+    R --> LP[Local Capability Plane]
+    LP --> T[OpenAI Secure Tunnel]
     T --> MCP[local MCP]
-    MCP --> RG[Router / Governance]
-    RG --> DL[Direct Local]
-    RG --> CA[Codex App Server]
+    MCP --> DL[Direct Local]
+    MCP --> CA[Codex App Server]
+
+    N --> V[Independent Evidence Reacquisition]
+    A --> V
+    DL --> V
+    CA --> V
+    V --> B
 ```
 
-| v0.2 milestone | Status |
+- **ChatGPT Product Capability**: Web/Search, Files, Python/Data Analysis, Images, Artifacts, Tasks, plus connected apps such as GitHub, Gmail, Calendar, Notion, Figma, and future runtime-provided apps.
+- **Local Capability Plane**: Custom MCP App + Secure Tunnel + Local MCP, used to add Local Machine / Local Workspace capability. It is not a mandatory transport for every task.
+- **Codex**: the executor for multi-file coding, debugging, refactoring, shell-heavy / iterative tests, and other sustained local execution.
+- **Future agents**: Claude, DeepSeek, or other agents may later be attached as specialists, advisors, or executors when real evidence justifies it; v0.2 does not implement multi-authority Brain governance.
+
+| v0.2 stage | Status |
 |---|---|
-| M1–M4 App Server / local MCP / Router + Governance | landed |
+| M1–M4 App Server / local MCP / Router + Governance | **completed** |
 | M5 Secure Tunnel + real ChatGPT / Codex App Server E2E | **completed** |
 | M6 legacy IAB structural isolation (`src/legacy/`) | **completed** |
-| M7 real-project dogfood + operational default flip | **pending / not started** |
+| N3 Capability-First Re-baseline | **active** |
+| M7 real-project Capability Routing dogfood / hardening | **active** |
+| M8 RC / Release | **pending** |
 
-- **IAB / Alpha.4 path is feature-frozen**: isolated under `src/legacy/`, **not deleted**.
+See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the current phase baseline, [`ROADMAP.md`](ROADMAP.md) for the accepted high-level path, and [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md) for the normative routing / executor policy.
+
+- **IAB / Alpha.4 is feature-frozen**: isolated under `src/legacy/`, **not deleted**.
 - v0.2 runtime Node requirement matches `package.json`: **`Node.js >= 22`**.
-- `src/index.js` is a **compatibility barrel**, not the v0.2 canonical runtime import root; canonical entries are `scripts/v0.2-start.mjs`, `src/transport/brain-local.js`, and `src/{mcp,router,governance,local,executor,state,transport}`.
+- `src/index.js` is a **compatibility barrel**, not the v0.2 canonical runtime import root. Canonical local-runtime entries are `scripts/v0.2-start.mjs`, `src/transport/brain-local.js`, and `src/{mcp,router,governance,local,executor,state,transport}`.
 
 ## Why this project
 
-Driving a coding task with ChatGPT as the planner and Codex as the executor is easy on the first turn, but hard to keep going. Conversations drift, executor context resets, process failures lose progress, and there is no clean contract between *what ChatGPT asked for* and *what Codex actually did*.
+The original problem was simple: ChatGPT could plan and review while Codex could execute locally, but if the user had to manually relay `TASK`, `RESULT`, workspaceId, jobId, and other intermediate state between them, the user had become a human API/message bus. The project first set out to remove that relay.
 
-`chatgpt-codex-orchestrator` makes that loop controllable:
+v0.2 adds the next conclusion: **Executor does not mean Codex.** ChatGPT itself already has Web, GitHub, Files, Python, connected apps, and other capabilities. A mature orchestrator should therefore select the best capability for the current task instead of delegating everything to Codex.
 
-- One user goal, then **ChatGPT plans** and issues a `TASK`.
-- **The current Codex agent executes locally** and returns a compact `RESULT` with evidence.
-- **ChatGPT reviews** and replies `TASK` / `REVISE` / `ASK_USER` / `DONE`.
-- The same ChatGPT conversation is reused throughout; if no unique composer is found it fails closed and never touches history.
-- Secrets are redacted from persisted and logged context.
+Core principles:
+
+- ChatGPT owns investigation, architecture, planning, routing, acceptance, and final `DONE`.
+- Capabilities ChatGPT already has and is well suited to perform should not be redundantly delegated to Codex.
+- Direct Local handles bounded local operations; Codex handles sustained local coding execution.
+- Executor `RESULT` is an evidence candidate, not Brain truth.
+- When possible, the Brain reacquires GitHub / Web / local authoritative evidence before `ACCEPT / REVISE / DONE`.
+- The user does not manually relay workspaceId / jobId / taskId / stepId / RESULT between tools.
 
 ## How it works
 
-The default path is the **Direct Brain Loop**.
+### Current released Alpha.3 default
 
-- **ChatGPT** is the Brain (planner/reviewer): plans, issues tasks, reviews results, and decides when the work is done.
+The current released `v0.1.0-alpha.3` default remains the **Direct Brain Loop**:
+
+- **ChatGPT** is the Brain (planner/reviewer): it plans, issues tasks, reviews results, and decides when work is done.
 - **The current Codex agent** is the executor: it talks to one dedicated ChatGPT conversation through the Codex in-app browser (`iab`), executes each `TASK`, collects real evidence, and sends back a compact `RESULT`.
 - **The same ChatGPT conversation** is reused throughout: `PLAN` → `TASK` → `RESULT` → `REVISE` / `TASK` / `DONE`.
 
@@ -68,7 +99,7 @@ You can also adopt an existing ChatGPT history conversation as the Brain: `$brai
 
 ## Default execution contract
 
-Established once per task; the Brain does not repeat these defaults inside every TASK (unless an exception/override is needed):
+Established once per task; the Brain does not repeat these defaults inside every TASK unless an exception is required:
 
 - ChatGPT owns `PLAN` / architecture / review / `DONE`.
 - Codex stays within Brain-approved scope.
@@ -81,7 +112,9 @@ Established once per task; the Brain does not repeat these defaults inside every
 
 ## Dogfood status (facts)
 
-Alpha.3 Direct Brain Loop has completed a real long-running dogfood:
+### Alpha.3
+
+Alpha.3 Direct Brain Loop completed a real long-running dogfood:
 
 `agent-credentials-skill v0.3.0`
 - existing ChatGPT conversation adopted;
@@ -92,23 +125,29 @@ Alpha.3 Direct Brain Loop has completed a real long-running dogfood:
 - commit / push / tag / GitHub Release completed;
 - final Brain `DONE`.
 
-Note: milestone-sized batching was added afterward and still needs validation across additional real projects. No performance improvement percentages are claimed until measured.
+### v0.2 M7
+
+The first real-project nested `.git` dogfood proved that ChatGPT can autonomously route, invoke real Codex, manage intermediate IDs, and enter `REVISE` after failure without user relay. The product task did not complete because of Codex write-contract and mutation-reconciliation / cross-route-handoff gaps, so the run was truthfully recorded as a failure and moved into hardening rather than being declared `DONE`.
+
+M7 now continues across three real execution patterns:
+
+- **M7-A Native-only**: when ChatGPT Product Capability is sufficient, Codex calls = 0.
+- **M7-B Codex-required**: real multi-file coding / tests through real Codex.
+- **M7-C Hybrid**: ChatGPT investigates/decides → necessary local execution → ChatGPT reacquires GitHub/Web/local evidence for independent acceptance.
+
+See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the full current state.
 
 ## Freeze policy / roadmap
 
-Alpha.3 is the current frozen dogfood baseline.
+Alpha.3 remains the currently released/default dogfood baseline; v0.2 has not flipped the operational default.
 
-For the next 3–5 real projects:
-- no architecture changes unless there is a real blocker or repeated failure;
-- collect operational metrics first.
+The high-level roadmap records only accepted phases and does not pre-invent fixed v0.3/v0.4 implementation stages. See [`ROADMAP.md`](ROADMAP.md).
 
-Track: total duration, time to first Brain control, Brain TASK count, REVISE count, ASK_USER count, manual relay count, browser recovery/error count, conversation switches, publish retries, DONE success/failure.
-
-Future ideas (not Alpha.3 requirements): native ChatGPT Desktop Brain transport if a supported interface becomes available; Claude / DeepSeek BrainProvider; long-running feature-branch checkpoint policy. Do not implement them now.
+Possible future directions, not current commitments, include Claude / DeepSeek specialist/executor integration, generalized resource-scoped mutation leases, and multi-Brain authority research only if real evidence later proves it useful.
 
 ## Architecture (Alpha.3 IAB default path)
 
-> The diagram above describes the Alpha.3 Direct Brain Loop default path; see the "v0.2 candidate architecture" section above for the v0.2 canonical path.
+> The diagram below describes the released/default Alpha.3 Direct Brain Loop; see the v0.2 capability-first candidate architecture above for the current direction.
 
 ```mermaid
 flowchart TD
@@ -129,7 +168,7 @@ flowchart TD
 
 - Node.js `>= 22`
 - ESM project (`"type": "module"`)
-- A Codex in-app browser (`iab`) runtime for a **real** ChatGPT-Brain run — see [SKILL.md](SKILL.md)
+- A Codex in-app browser (`iab`) runtime for a **current released Alpha.3** ChatGPT-Brain run — see [SKILL.md](SKILL.md)
 
 ### Install and test
 
@@ -144,6 +183,7 @@ npm test
 
 - `npm run setup:brain-command` — one-time install of the launcher Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and `$CODEX_HOME/brain-command/config.json`.
 - `npm run status:brain-command` — read-only check of the launcher Skill and config.
+- `npm run start:v0.2` — start the v0.2 local capability runtime (candidate, not the released/default Skill entrypoint).
 
 ## Core workflow and commands
 
@@ -151,13 +191,14 @@ These are the documented entry points (see [SKILL.md](SKILL.md) for runtime wiri
 
 | Command | Purpose | Status |
 |---|---|---|
-| `status:brain-command` | Read-only check: user-level launcher Skill discoverable + brain-command config exists/parses; prints `orchestratorRoot` / `dataRoot` / `workspaceRoot` and the defaults; never prints secrets; exit 0 healthy, 1 missing-or-invalid | Supported |
-| `doctor` | Preflight checks (IAB runtime, ChatGPT login, codex CLI, git, state/log dirs, IPC, context provider) | Supported |
-| `setup:brain-command` | One-time install of launcher Skill + config | Supported |
+| `status:brain-command` | Read-only check: user-level launcher Skill discoverable + brain-command config exists/parses; prints safe config fields and never prints secrets | Alpha.3 supported |
+| `doctor` | Alpha.3 preflight checks (IAB runtime, ChatGPT login, codex CLI, git, state/log dirs, IPC, context provider) | Alpha.3 supported |
+| `setup:brain-command` | One-time install of launcher Skill + config | Alpha.3 supported |
+| `start:v0.2` | v0.2 Local MCP / production-style runtime | v0.2 candidate |
 
 ### Natural-language entry
 
-```
+```text
 用 ChatGPT 指挥模式完成这个任务：<goal>
 ```
 
@@ -168,22 +209,24 @@ These are the documented entry points (see [SKILL.md](SKILL.md) for runtime wiri
 - Existing ChatGPT conversation adoption: by title / URL / explicit `--adopt-current`, capturing the real `/c/<id>`, without creating a new conversation.
 - Composer safety: only the real composer (`#prompt-textarea` / composer-scoped) is targeted, failing closed (`ComposerUnavailableError`) and never touching history.
 - Structured `acceptance[]` / `evidence[]` and a `DONE` acceptance gate (required acceptance must have real `pass` evidence).
-- Milestone-sized Brain TASK governance (one comprehensive `PLAN`, prefers combining coherent executable/reviewable work).
+- Milestone-sized Brain TASK governance.
 - Compact `RESULT` protocol.
-- Publish identity preflight (repo-local identity set before commit when an expected identity is configured) and publish gate (no force push / no rewrite of published history).
-- Post-DONE boundary: after `DONE` the target repo must not receive non-Brain-reviewed product changes.
+- Publish identity preflight and publish gate (no force push / no rewrite of published history).
+- Post-DONE boundary: after `DONE`, the target repo must not receive non-Brain-reviewed product changes.
 - Retained as experimental: detached worker / TaskService / nested-Codex runtime / durable recovery.
 
 ## Experimental
 
-- `adopt-current` is implemented and retained, used only when the user explicitly asks (selected-tab identity is unstable across node-REPL invocations in the current IAB environment).
+- `adopt-current` is implemented and retained, used only when the user explicitly asks.
 - Legacy detached worker / TaskService / TaskManager / durable recovery machinery is retained as experimental, not the default path.
+- v0.2 capability-first runtime is not yet released or default-flipped.
 
 ## Limitations
 
-- Direct Mode depends on the Codex in-app browser (`iab`); if `iab` is unavailable it fails clearly (`IABUnavailableError`) and does not fall back to an external browser (Edge/Chrome).
-- Depends on the ChatGPT web DOM; composer/history selectors may need maintenance if the UI changes.
-- Milestone batching still needs validation across more real projects; no performance improvement percentages are measured.
+- Released Alpha.3 Direct Mode depends on the Codex in-app browser (`iab`); if unavailable it fails clearly (`IABUnavailableError`) and does not fall back to an external browser.
+- Alpha.3 depends on the ChatGPT web DOM and may need selector maintenance if the UI changes.
+- v0.2 M7 remains in real-project dogfood / hardening and has not reached release/default-flip conditions.
+- Capability availability depends on the current ChatGPT runtime, provider connection, target-resource authorization, and operation permission; a tool appearing in the surface does not prove a mutation is available.
 
 ## Safety and durability
 
@@ -195,16 +238,22 @@ The current protections are structural, not guarantees:
 - Bounded, secret-redacted context (no whole-repo dump).
 - Publish identity preflight + no force push / no rewrite of published history.
 - Post-DONE boundary: does not change the accepted target-repo outcome.
+- v0.2 local mutation keeps a single-writer / fail-closed reconciliation boundary; M7 is still hardening that lifecycle.
 
 Do not interpret these as production-ready security guarantees — see [Limitations](#limitations).
 
 ## Documentation
 
+- [PROJECT_STATUS.md](PROJECT_STATUS.md) — current project phase baseline.
+- [ROADMAP.md](ROADMAP.md) — accepted high-level path.
+- [CAPABILITY_ROUTING.md](CAPABILITY_ROUTING.md) — normative routing / executor policy.
 - [CHANGELOG.md](CHANGELOG.md) — release-oriented history.
 - [docs/development-history.md](docs/development-history.md) — detailed engineering / development notes.
-- [docs/architecture.md](docs/architecture.md) — the current architecture reference.
+- [docs/architecture.md](docs/architecture.md) — current architecture reference.
+- [docs/rfc-v0.2-chatgpt-native-capability-inventory.md](docs/rfc-v0.2-chatgpt-native-capability-inventory.md) — v0.2 native capability research inventory.
+- [docs/rfc-v0.2-capability-routing.md](docs/rfc-v0.2-capability-routing.md) — historical v0.2 routing design RFC; current normative policy is `CAPABILITY_ROUTING.md`.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — contribution guide.
-- [SKILL.md](SKILL.md) — agent-facing runtime wiring and commands.
+- [SKILL.md](SKILL.md) — agent-facing wiring and commands for the released/default path.
 
 ## License
 
