@@ -1,6 +1,6 @@
 # PROJECT_STATUS
 
-> 本文件记录 `chatgpt-codex-orchestrator` 的当前项目状态基线。实现事实以 GitHub 当前 `main` 与代码为最高权威；本文件用于 Brain 快速恢复项目阶段上下文。
+> 本文件记录 `chatgpt-codex-orchestrator` 的当前项目状态基线。实现事实以 GitHub 当前 `main` 与代码为最高权威；本文件用于 Brain 快速恢复项目阶段上下文。涉及实时 SHA / PR / CI 时应直接重新读取 GitHub，不把本文件中的历史锚点当作实时 ref。
 
 ## North Star
 
@@ -15,7 +15,7 @@ ChatGPT 负责调查、架构、决策、路由和最终验收。Codex 是面向
 - **Released version:** `v0.1.0-alpha.3`
 - **Released/default operational path:** Alpha.3 IAB Direct Brain Loop（feature-frozen）
 - **v0.2:** candidate，尚未 release，尚未进行 operational default flip
-- **Current `main`:** `dbd4e81bbcf0412c0308f817a53b1e8814bc8593`
+- **N3 branch baseline:** `main@dbd4e81bbcf0412c0308f817a53b1e8814bc8593`（N3 control-plane 工作开始时的历史锚点；实时 `main` 以 GitHub 为准）
 
 ## 已接受里程碑
 
@@ -78,7 +78,7 @@ Dogfood 暴露的 P0 生命周期缺口已触发 hardening，而不是被隐藏�
 ## 当前未合并 hardening
 
 - **Branch:** `fix/v0.2-m7-mutation-lifecycle`
-- **HEAD:** `61158495063145b80843300ad8836473eb29cb17`
+- **HEAD at N3 review:** `61158495063145b80843300ad8836473eb29cb17`
 - **Status:** `REVISE` / not accepted / not merged
 
 该分支已经加入 required `accessMode`、官方 sandbox mapping、terminal ownership release 等修复，但 Brain review 仍发现以下 blocker，后续需要 R2：
