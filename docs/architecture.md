@@ -219,3 +219,19 @@ IAB / Alpha.4 browser transport (Codex in-app browser) -> explicit legacy fallba
 - Explicit selection: the legacy launcher requires BRAIN_COMMAND_LEGACY=1 (or legacyOptIn: true) to run; the path is non-canonical / experimental.
 - IAB is NOT deleted. Removing it after a successful real-project dogfood (M7) will be a separate decision.
 - M7 will perform real-project dogfood and consider the v0.2 default flip.
+
+
+## Reporting truth (M7)
+
+Dogfood / orchestrator reports must never claim a remote branch exists when it has
+not been pushed. Report only what is actually observable:
+
+- If a feature branch was pushed to the remote, report its ref as
+  `remoteBranch=<name>` / `origin/<name>`.
+- If the branch was NOT pushed (e.g., the round made local-only changes and did not
+  push), report `remoteBranch=null` and state explicitly `not created` /
+  `not pushed`.
+
+Do not fabricate an `origin/<branch>` ref for an unpushed branch; this is a truth
+contract, not a formatting preference. A subsequent round that does push may then
+update the report to the real remote ref.

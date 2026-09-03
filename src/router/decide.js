@@ -9,9 +9,16 @@
 //   HYBRID                both native AND local required (composition, not a fallback)
 //
 // HYBRID is never a mutation owner: ownership is always delegated to the local leg.
+//
+// M7: `codexAccessModeExpected` is an explicit orchestrator-level Codex access
+// contract. When Codex is the executor and mutationRequired=true it is
+// workspace_write; when the Codex leg is read-only it is read_only. When Codex is
+// not the executor it is null (not applicable). It is never silently read-only for
+// a mutation delegation.
 
 export const ROUTES = Object.freeze(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']);
 export const MUTATION_OWNERS = Object.freeze(['none', 'chatgpt', 'codex']);
+export const ACCESS_MODES = Object.freeze(['read_only', 'workspace_write']);
 
 // The full deterministic fact surface the router consumes.
 export const FACT_KEYS = Object.freeze([
@@ -39,7 +46,6 @@ export function normalizeFacts(facts) {
 }
 
 // Structural consistency rules (RFC v0.2 capability-routing §B / Task r1 item 7).
-// Contradictory facts are a deterministic RouterError, never silently coerced.
 export function validateConsistency(f) {
   const localWorkFacts = ['readOnly', 'mutationRequired', 'exactChangeKnown', 'boundedChange', 'multiFile', 'unknownRootCause', 'iterative', 'longRunning'];
   if (!f.requiresLocal) {
@@ -61,7 +67,6 @@ function routeLocalLeg(facts) {
 
   if (facts.boundedChange && facts.exactChangeKnown) return 'CHATGPT_DIRECT_LOCAL';
 
-  // Mutation required but not bounded/exactly known -> conservative local leg.
   return 'CODEX_DELEGATE';
 }
 
@@ -70,6 +75,14 @@ function ownerForLocalLeg(leg, facts) {
   if (leg === 'CHATGPT_DIRECT_LOCAL') return mutation ? 'chatgpt' : 'none';
   if (leg === 'CODEX_DELEGATE') return mutation ? 'codex' : 'none';
   return 'none';
+}
+
+// Explicit Codex access contract. Only applies when Codex is the executor.
+function codexAccessForRoute(route, localRoute, facts) {
+  const isCodex = route === 'CODEX_DELEGATE' || (route === 'HYBRID' && localRoute === 'CODEX_DELEGATE');
+  if (!isCodex) return null;
+  const mutation = facts.mutationRequired && !facts.readOnly;
+  return mutation ? 'workspace_write' : 'read_only';
 }
 
 export function decideRoute(input) {
@@ -99,7 +112,6 @@ export function decideRoute(input) {
 
   let mutationOwnerExpected;
   if (route === 'HYBRID') {
-    // HYBRID is never a mutation owner; the local leg owns.
     mutationOwnerExpected = ownerForLocalLeg(localRoute, facts);
     reasonCodes.push('hybrid_not_mutation_owner');
   } else if (route === 'CHATGPT_NATIVE') {
@@ -108,5 +120,7 @@ export function decideRoute(input) {
     mutationOwnerExpected = ownerForLocalLeg(route, facts);
   }
 
-  return { route, localRoute, reasonCodes, mutationOwnerExpected, facts };
+  const codexAccessModeExpected = codexAccessForRoute(route, localRoute, facts);
+
+  return { route, localRoute, reasonCodes, mutationOwnerExpected, codexAccessModeExpected, facts };
 }
