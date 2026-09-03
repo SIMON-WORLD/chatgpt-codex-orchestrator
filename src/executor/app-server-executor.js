@@ -27,6 +27,7 @@
 //     candidate when uniquely identified) -> reconcile that unit's real status.
 //     Never infers current-B terminal from old-A terminal. No generic force-unlock.
 
+import path from 'node:path';
 import { AppServerClient } from './app-server-client.js';
 import { JobMap, makeJobId, makeMutationUnitId } from './job-map.js';
 import { MutationOwner, MutationOwnerError } from '../state/mutation-owner.js';
@@ -37,6 +38,122 @@ export const SANDBOX_MODE_BY_ACCESS = Object.freeze({
   read_only: 'read-only',
   workspace_write: 'workspace-write',
 });
+export const APPROVAL_POLICY_BY_ACCESS = Object.freeze({
+  read_only: 'never',
+  workspace_write: 'on-request',
+});
+
+const WORKSPACE_WRITE = 'workspace-write';
+const READ_ONLY = 'read-only';
+
+// Build the SandboxPolicy object sent on turn/start (and used to derive the effective
+// permission contract). workspace_write scopes `writableRoots` to the target workspace so
+// real Codex create/edit/delete stays inside the bound workspace. `networkAccess` is a
+// minimal job-level flag (default false) so we never give every job unrestricted network.
+export function buildSandboxPolicy(accessMode, { workspaceRoot = null, networkAccess = false } = {}) {
+  if (accessMode === 'read_only') return { type: 'readOnly', networkAccess: networkAccess === true };
+  const policy = { type: 'workspaceWrite', networkAccess: networkAccess === true };
+  if (workspaceRoot) policy.writableRoots = [workspaceRoot];
+  return policy;
+}
+
+export function approvalPolicyForAccess(accessMode) {
+  return APPROVAL_POLICY_BY_ACCESS[accessMode] || 'never';
+}
+
+// Normalize the App Server's reported effective sandbox (SandboxPolicy object, or the
+// fixture's string mode) into a canonical mode string.
+export function effectiveSandboxMode(resSandbox) {
+  if (resSandbox == null) return null;
+  if (typeof resSandbox === 'string') {
+    const s = resSandbox.toLowerCase();
+    if (s === 'workspace-write' || s === 'workspacewrite' || s === 'workspace_write') return WORKSPACE_WRITE;
+    if (s === 'read-only' || s === 'readonly' || s === 'read_only') return READ_ONLY;
+    if (s === 'danger-full-access' || s === 'dangerfullaccess' || s === 'danger_full_access') return 'danger-full-access';
+    return resSandbox;
+  }
+  if (typeof resSandbox === 'object') {
+    const t = resSandbox && resSandbox.type;
+    if (t === 'workspaceWrite') return WORKSPACE_WRITE;
+    if (t === 'readOnly') return READ_ONLY;
+    if (t === 'dangerFullAccess') return 'danger-full-access';
+    if (t === 'externalSandbox') return 'external';
+    return t || null;
+  }
+  return null;
+}
+
+// --- Path helpers for writable-root bounding -------------------------------------
+const IS_WIN = process.platform === 'win32';
+function normPath(p) { return String(p == null ? '' : p).replace(/[\\/]+$/, ''); }
+function eqPath(a, b) { if (!a || !b) return false; const x = normPath(a); const y = normPath(b); return IS_WIN ? x.toLowerCase() === y.toLowerCase() : x === y; }
+export function rootsEqual(a, b) { return eqPath(a, b); }
+// child is within parent (same path or a descendant). Platform-safe: case-insensitive on win32.
+export function isWithin(child, parent) {
+  if (!child || !parent) return false;
+  const c = normPath(child); const p = normPath(parent);
+  const cEq = IS_WIN ? c.toLowerCase() : c;
+  const pEq = IS_WIN ? p.toLowerCase() : p;
+  if (cEq === pEq) return true;
+  return cEq.startsWith(pEq + '\\') || cEq.startsWith(pEq + '/');
+}
+
+// Verify the App Server's AUTHORITATIVE effective permission (from the
+// `thread/settings/updated` notification's ThreadSettings) against the requested job
+// contract. We NEVER infer `effective = requested`; evidence must come from the real
+// effective ThreadSettings. Throws on mismatch.
+export function verifyEffectiveThreadSettings({ accessMode, sandboxPolicy, approvalPolicy, cwd = null, workspaceRoot = null, networkAccess = null, activePermissionProfile = null }) {
+  const effType = sandboxPolicy && sandboxPolicy.type;
+  const effNetwork = !!(sandboxPolicy && sandboxPolicy.networkAccess === true);
+  const reqNetwork = networkAccess === true;
+
+  if (accessMode === 'read_only') {
+    if (effType !== 'readOnly') throw new Error(`effective permission mismatch: requested read_only but effective sandboxPolicy=${effType || 'unknown'}`);
+    if (approvalPolicy !== 'never') throw new Error(`effective permission mismatch: read_only requires approvalPolicy=never but effective=${JSON.stringify(approvalPolicy)}`);
+    if (reqNetwork !== effNetwork) throw new Error(`effective permission mismatch: networkAccess requested=${reqNetwork} but effective=${sandboxPolicy && sandboxPolicy.networkAccess}`);
+    return { effectiveSandbox: READ_ONLY, effectiveApprovalPolicy: approvalPolicy, effectiveVerified: true, effectiveWritableRoots: [], effectiveNetworkAccess: effNetwork, effectiveWritableRootMatch: true };
+  }
+
+  // workspace_write: EXACT approval policy (on-request), not merely != never.
+  if (effType !== 'workspaceWrite') throw new Error(`effective permission mismatch: requested workspace_write but effective sandboxPolicy=${effType || 'unknown'}`);
+  if (approvalPolicy !== 'on-request') throw new Error(`effective permission mismatch: workspace_write requires approvalPolicy=on-request but effective=${JSON.stringify(approvalPolicy)}`);
+  if (reqNetwork !== effNetwork) throw new Error(`effective permission mismatch: networkAccess requested=${reqNetwork} but effective=${sandboxPolicy && sandboxPolicy.networkAccess}`);
+
+  const writableRoots = Array.isArray(sandboxPolicy.writableRoots) ? sandboxPolicy.writableRoots : [];
+  let writableRootMatch = null;
+  if (workspaceRoot != null) {
+    if (writableRoots.length) {
+      // EXACT + BOUNDED: at least one effective root must be exactly the workspace root, and
+      // EVERY effective root must be the workspace root or a descendant of it. A parent,
+      // drive/file-system root, or sibling root that would escape the workspace boundary is
+      // rejected (workspaceRoot being a descendant of an effective root NEVER passes).
+      const hasExact = writableRoots.some((r) => rootsEqual(r, workspaceRoot));
+      const allInside = writableRoots.every((r) => rootsEqual(r, workspaceRoot) || isWithin(r, workspaceRoot));
+      writableRootMatch = hasExact && allInside;
+    } else {
+      // Real App Server normalizes writableRoots to [] and scopes writes to cwd.
+      writableRootMatch = cwd != null && rootsEqual(cwd, workspaceRoot);
+    }
+    if (!writableRootMatch) throw new Error('effective permission mismatch: writable roots do not bound the target workspace');
+  }
+  return { effectiveSandbox: WORKSPACE_WRITE, effectiveApprovalPolicy: approvalPolicy, effectiveVerified: true, effectiveWritableRoots: writableRoots, effectiveNetworkAccess: effNetwork, effectiveWritableRootMatch: !!writableRootMatch };
+}
+
+function permissionContract(job) {
+  return {
+    accessMode: job.accessMode || null,
+    requestedSandbox: job.sandbox || null,
+    effectiveSandbox: job.effectiveSandbox || null,
+    effectiveApprovalPolicy: job.effectiveApprovalPolicy || null,
+    networkAccess: job.networkAccess === true,
+    effectiveVerified: job.effectiveVerified === true,
+    effectiveWritableRoots: Array.isArray(job.effectiveWritableRoots) ? job.effectiveWritableRoots : null,
+    effectiveNetworkAccess: job.effectiveNetworkAccess === true,
+    effectiveWritableRootMatch: job.effectiveWritableRootMatch === true,
+    verifiedForRequestedContract: job.verifiedForRequestedContract || null,
+  };
+}
+
 
 export const TERMINAL_TURN_STATES = ['completed', 'failed', 'interrupted'];
 const RECOVERY_STATES = ['created', 'thread_ready', 'starting', 'running'];
@@ -91,6 +208,7 @@ export class AppServerExecutor {
     this._approvals = new Map();
     this._notifiers = new Set();
     this._turnUnits = new Map(); // in-memory cache (durable source of truth is job.turnUnits)
+    this._settingsWaiters = new Map(); // threadId -> { resolve, reject, timer } for thread/settings/updated
     this._setup();
   }
 
@@ -118,6 +236,19 @@ export class AppServerExecutor {
 
   _handleNotification(note) {
     const method = note && note.method;
+    if (method === 'thread/settings/updated') {
+      const params = note.params || {};
+      const threadId = params.threadId;
+      const w = this._settingsWaiters.get(threadId);
+      if (w) {
+        clearTimeout(w.timer);
+        this._settingsWaiters.delete(threadId);
+        w.settled = true;
+        w.resolve({ ok: true, settings: params.threadSettings || null });
+      }
+      this._emit(note);
+      return;
+    }
     if (method === 'turn/started' || method === 'turn/completed') {
       const params = note.params || {};
       const threadId = params.threadId;
@@ -287,26 +418,125 @@ export class AppServerExecutor {
     return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: 'ambiguous or unreadable turn state' };
   }
 
-  async start({ prompt, cwd = null, accessMode = null, workspaceRoot = null, workspaceId = null } = {}) {
+  _waitForThreadSettings(threadId, timeoutMs = 10000) {
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    const timer = setTimeout(() => {
+      const w = this._settingsWaiters.get(threadId);
+      if (w) {
+        clearTimeout(w.timer);
+        this._settingsWaiters.delete(threadId);
+        if (!w.settled) { w.settled = true; w.resolve({ ok: false, reason: 'timed out waiting for effective thread settings' }); }
+      }
+    }, timeoutMs);
+    const entry = { resolve, timer, promise, settled: false };
+    this._settingsWaiters.set(threadId, entry);
+    return entry;
+  }
+
+  // Cancel a pending settings waiter (clear timer + remove map entry + settle safely, no
+  // orphan promise / no unhandled rejection after a thread/settings/update request failure).
+  _cancelSettingsWait(threadId, reason = 'settings wait cancelled') {
+    const w = this._settingsWaiters.get(threadId);
+    if (!w) return;
+    clearTimeout(w.timer);
+    this._settingsWaiters.delete(threadId);
+    if (!w.settled) { w.settled = true; w.resolve({ ok: false, reason }); }
+  }
+
+  // Authoritative permission bootstrap: apply the job contract via thread/settings/update,
+  // then wait for the thread/settings/updated notification and read its effective
+  // ThreadSettings. Used BEFORE executing any turn and BEFORE acquiring a writer.
+  async _bootstrapVerifyPermission({ jobId, threadId, accessMode, sandboxPolicy, approvalPolicy, workspaceRoot, networkAccess }) {
+    // Register the waiter BEFORE sending the update so a synchronous
+    // thread/settings/updated notification is not missed.
+    const waiter = this._waitForThreadSettings(threadId, 10000);
+    try {
+      await this.client.request('thread/settings/update', { threadId, sandboxPolicy, approvalPolicy, ...(workspaceRoot ? { cwd: workspaceRoot } : {}) });
+    } catch (e) {
+      this._cancelSettingsWait(threadId, 'thread/settings/update request failed');
+      throw new Error('permission verification: thread/settings/update failed: ' + String(e.message || e).slice(0, 160));
+    }
+    const res = await waiter.promise;
+    if (!res.ok) throw new Error('permission verification: ' + res.reason);
+    const settings = res.settings;
+    if (!settings) throw new Error('permission verification: no effective thread settings received');
+    const verified = verifyEffectiveThreadSettings({
+      accessMode,
+      sandboxPolicy: settings.sandboxPolicy,
+      approvalPolicy: settings.approvalPolicy,
+      cwd: settings.cwd,
+      workspaceRoot,
+      networkAccess,
+      activePermissionProfile: settings.activePermissionProfile,
+    });
+    return {
+      effectiveSandbox: verified.effectiveSandbox,
+      effectiveApprovalPolicy: verified.effectiveApprovalPolicy,
+      effectiveVerified: true,
+      effectiveWritableRoots: verified.effectiveWritableRoots,
+      effectiveNetworkAccess: verified.effectiveNetworkAccess,
+      effectiveWritableRootMatch: verified.effectiveWritableRootMatch,
+      verifiedForRequestedContract: JSON.stringify({ accessMode, networkAccess: networkAccess === true, sandboxPolicy }),
+      verifiedAt: Date.now(),
+      activePermissionProfile: settings.activePermissionProfile ?? null,
+    };
+  }
+
+  async start({ prompt, cwd = null, accessMode = null, workspaceRoot = null, workspaceId = null, networkAccess = false } = {}) {
     await this._ensureConnected();
     if (!ACCESS_MODES.includes(accessMode)) {
       throw new Error(`codex start requires an explicit accessMode (one of: ${ACCESS_MODES.join(', ')}); refusing to default to read-only`);
     }
     const sandbox = SANDBOX_MODE_BY_ACCESS[accessMode];
     const isWriter = accessMode !== 'read_only';
+    const approvalPolicy = approvalPolicyForAccess(accessMode);
+    const sandboxPolicy = buildSandboxPolicy(accessMode, { workspaceRoot, networkAccess });
 
     const jobId = makeJobId();
     const mutationUnitId = makeMutationUnitId();
-    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, isWriter, workspaceRoot, workspaceId, threadId: null, turnId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
+    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, sandboxPolicy, approvalPolicy, isWriter, workspaceRoot, workspaceId, networkAccess: networkAccess === true, requestPermission: { sandbox, approvalPolicy, sandboxPolicy }, effectiveVerified: false, threadId: null, turnId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
 
-    const threadParams = { ...(cwd ? { cwd } : {}), sandbox };
+    // Safe bootstrap: start a thread (no turn) with read-only sandbox + 'on-request'
+    // approval. These differ from BOTH job targets (read_only=never, workspace_write=workspace-write),
+    // so the subsequent thread/settings/update to the target always changes the settings and the
+    // App Server always emits a thread/settings/updated notification (read-only update alone would
+    // be a no-op and produce no evidence, since read-only is the server default).
+    const bootstrapSandbox = 'read-only';
+    const bootstrapApproval = 'on-request';
+    const threadParams = { ...(cwd ? { cwd } : {}), sandbox: bootstrapSandbox, approvalPolicy: bootstrapApproval };
     const threadRes = await this.client.request('thread/start', threadParams);
     const threadId = threadRes && threadRes.thread && threadRes.thread.id;
     if (!threadId) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
       throw new Error('thread/start returned no thread id');
     }
-    this.jobMap.update(jobId, { threadId, state: 'thread_ready', updatedAt: Date.now() });
+
+    this.jobMap.update(jobId, { threadId, legacyThreadSandbox: effectiveSandboxMode(threadRes.sandbox), state: 'thread_ready', updatedAt: Date.now() });
+
+    // Verify the REAL effective permission (thread/settings/updated ThreadSettings)
+    // BEFORE executing any turn and BEFORE acquiring a writer. Never infer effective
+    // from requested. If requested workspace_write but effective is read-only (or no
+    // effective settings evidence), fail closed.
+    let verified;
+    try {
+      verified = await this._bootstrapVerifyPermission({ jobId, threadId, accessMode, sandboxPolicy, approvalPolicy, workspaceRoot, networkAccess });
+    } catch (e) {
+      this.jobMap.update(jobId, { state: 'recovery_required', effectiveVerified: false, verificationError: String(e.message || e).slice(0, 200), updatedAt: Date.now() });
+      throw e;
+    }
+    this.jobMap.update(jobId, {
+      effectiveSandbox: verified.effectiveSandbox,
+      effectiveApprovalPolicy: verified.effectiveApprovalPolicy,
+      effectiveVerified: true,
+      effectiveWritableRoots: verified.effectiveWritableRoots,
+      effectiveNetworkAccess: verified.effectiveNetworkAccess,
+      effectiveWritableRootMatch: verified.effectiveWritableRootMatch,
+      verifiedForRequestedContract: verified.verifiedForRequestedContract,
+      verifiedAt: verified.verifiedAt,
+      activePermissionProfile: verified.activePermissionProfile ?? null,
+      updatedAt: Date.now(),
+    });
 
     if (isWriter) {
       try {
@@ -320,7 +550,7 @@ export class AppServerExecutor {
 
     let turnRes;
     try {
-      turnRes = await this.client.request('turn/start', { threadId, input: [{ type: 'text', text: prompt, text_elements: [] }], ...(cwd ? { cwd } : {}) });
+      turnRes = await this.client.request('turn/start', { threadId, input: [{ type: 'text', text: prompt, text_elements: [] }], ...(cwd ? { cwd } : {}), sandboxPolicy, approvalPolicy });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
       if (this.owner.owner !== 'none') this.owner.markUnitState('unknown');
@@ -335,7 +565,8 @@ export class AppServerExecutor {
     this._turnUnits.set(turnId, mutationUnitId);
     const startJob = this.jobMap.load(jobId);
     this.jobMap.update(jobId, { turnId, turnUnits: { ...(startJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
-    return { jobId, threadId, turnId, state: 'running', accessMode, sandbox, isWriter, mutationOwner: this.owner.owner };
+    const eff = permissionContract(this.jobMap.load(jobId));
+    return { jobId, threadId, turnId, state: 'running', accessMode, sandbox, approvalPolicy, isWriter, mutationOwner: this.owner.owner, effectiveSandbox: eff.effectiveSandbox, effectiveApprovalPolicy: eff.effectiveApprovalPolicy, effectiveVerified: eff.effectiveVerified, permissionContract: eff };
   }
 
   load(jobId) { return this.jobMap.load(jobId); }
@@ -404,6 +635,14 @@ export class AppServerExecutor {
       turnId: turn ? turn.id : job.turnId,
       accessMode: job.accessMode || null,
       sandbox: job.sandbox || null,
+      effectiveSandbox: job.effectiveSandbox || null,
+      effectiveApprovalPolicy: job.effectiveApprovalPolicy || null,
+      effectiveVerified: job.effectiveVerified === true,
+      effectiveWritableRoots: Array.isArray(job.effectiveWritableRoots) ? job.effectiveWritableRoots : null,
+      effectiveNetworkAccess: job.effectiveNetworkAccess === true,
+      effectiveWritableRootMatch: job.effectiveWritableRootMatch === true,
+      verifiedForRequestedContract: job.verifiedForRequestedContract || null,
+      permissionContract: permissionContract(job),
       isWriter: job.isWriter !== false,
       workspaceRoot: job.workspaceRoot || null,
       workspaceId: job.workspaceId || null,
@@ -438,14 +677,30 @@ export class AppServerExecutor {
     if (!job.threadId) throw new Error(`job ${jobId} has no threadId`);
     if (!instruction || typeof instruction !== 'string' || !instruction.trim()) throw new Error('continue requires a non-empty instruction');
 
-    const mutationUnitId = makeMutationUnitId();
+    const accessMode = job.accessMode || 'read_only';
     const isWriter = this._isWriter(job);
+    const approvalPolicy = approvalPolicyForAccess(accessMode);
+    const sandboxPolicy = buildSandboxPolicy(accessMode, { workspaceRoot: job.workspaceRoot || null, networkAccess: job.networkAccess === true });
+    const mutationUnitId = makeMutationUnitId();
+    const contractId = JSON.stringify({ accessMode, networkAccess: job.networkAccess === true, sandboxPolicy });
+    // Reuse an authoritative verified snapshot ONLY if it matches the current contract.
+    // Never unconditionally write effectiveVerified=true.
+    if (job.effectiveVerified !== true || job.verifiedForRequestedContract !== contractId) {
+      let verified;
+      try {
+        verified = await this._bootstrapVerifyPermission({ jobId, threadId: job.threadId, accessMode, sandboxPolicy, approvalPolicy, workspaceRoot: job.workspaceRoot || null, networkAccess: job.networkAccess === true });
+      } catch (e) {
+        this.jobMap.update(jobId, { state: 'recovery_required', effectiveVerified: false, verificationError: String(e.message || e).slice(0, 200), updatedAt: Date.now() });
+        throw e;
+      }
+      this.jobMap.update(jobId, { effectiveSandbox: verified.effectiveSandbox, effectiveApprovalPolicy: verified.effectiveApprovalPolicy, effectiveVerified: true, effectiveWritableRoots: verified.effectiveWritableRoots, effectiveNetworkAccess: verified.effectiveNetworkAccess, effectiveWritableRootMatch: verified.effectiveWritableRootMatch, verifiedForRequestedContract: verified.verifiedForRequestedContract, verifiedAt: verified.verifiedAt, activePermissionProfile: verified.activePermissionProfile ?? null, updatedAt: Date.now() });
+    }
     if (isWriter) this.owner.acquire('codex', mutationUnitId);
-    this.jobMap.update(jobId, { mutationUnitId, accessMode: job.accessMode || null, sandbox: job.sandbox || null, isWriter, ownershipReleased: false, state: 'starting', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { mutationUnitId, accessMode, sandbox: job.sandbox || null, sandboxPolicy, approvalPolicy, isWriter, ownershipReleased: false, state: 'starting', updatedAt: Date.now() });
 
     let turnRes;
     try {
-      turnRes = await this.client.request('turn/start', { threadId: job.threadId, input: [{ type: 'text', text: instruction, text_elements: [] }] });
+      turnRes = await this.client.request('turn/start', { threadId: job.threadId, input: [{ type: 'text', text: instruction, text_elements: [] }], sandboxPolicy, approvalPolicy });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
       if (this.owner.owner !== 'none') this.owner.markUnitState('unknown');
@@ -459,7 +714,8 @@ export class AppServerExecutor {
     this._turnUnits.set(turnId, mutationUnitId);
     const contJob = this.jobMap.load(jobId);
     this.jobMap.update(jobId, { turnId, turnUnits: { ...(contJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
-    return { jobId, threadId: job.threadId, turnId, state: 'running', accessMode: job.accessMode || null, sandbox: job.sandbox || null, mutationOwner: this.owner.owner };
+    const contEff = permissionContract(this.jobMap.load(jobId));
+    return { jobId, threadId: job.threadId, turnId, state: 'running', accessMode, sandbox: job.sandbox || null, approvalPolicy, isWriter, mutationOwner: this.owner.owner, effectiveSandbox: contEff.effectiveSandbox, effectiveApprovalPolicy: contEff.effectiveApprovalPolicy, effectiveVerified: contEff.effectiveVerified, permissionContract: contEff };
   }
 
   async reconcile({ jobId }) {

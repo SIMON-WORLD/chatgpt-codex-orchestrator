@@ -127,18 +127,56 @@ function handle(msg) {
 
     case 'thread/start': {
       const threadId = 'thread-' + (threads.size + 1);
-      const thread = fakeThread(threadId); if (process.env.FAKE_APP_SERVER_REQUIRE_SANDBOX === '1' && !(params && params.sandbox)) return respondError(id, { code: -32000, message: 'sandbox required' }); thread.sandbox = (params && params.sandbox) || null;
+      const thread = fakeThread(threadId); if (process.env.FAKE_APP_SERVER_REQUIRE_SANDBOX === '1' && !(params && params.sandbox)) return respondError(id, { code: -32000, message: 'sandbox required' }); thread.sandbox = (params && params.sandbox) || null; thread.approvalPolicy = (params && params.approvalPolicy) || 'on-request';
       threads.set(threadId, thread);
       saveState();
+      const effSandbox = process.env.FAKE_APP_SERVER_FORCE_EFFECTIVE_SANDBOX || ((thread && thread.sandbox) || 'workspace-write');
       return respond(id, {
         thread,
         model: 'fake', modelProvider: 'openai', serviceTier: null,
         cwd: (params && params.cwd) || process.cwd(),
         runtimeWorkspaceRoots: [], instructionSources: [],
-        approvalPolicy: 'on-request', approvalsReviewer: 'user',
-        sandbox: (thread && thread.sandbox) || 'workspace-write', activePermissionProfile: null,
+        approvalPolicy: thread.approvalPolicy, approvalsReviewer: 'user',
+        sandbox: effSandbox, activePermissionProfile: null,
         reasoningEffort: null, multiAgentMode: 'explicitRequestOnly',
       });
+    }
+
+    case 'thread/settings/update': {
+      if (process.env.FAKE_APP_SERVER_FAIL_SETTINGS_UPDATE === '1') return respondError(id, { code: -32000, message: 'fake settings update failure' });
+      const threadId = params && params.threadId;
+      const thread = threads.get(threadId);
+      if (!thread) return respondError(id, { code: -32601, message: `thread not found: ${threadId}` });
+      if (params && params.sandboxPolicy) thread.sandboxPolicy = params.sandboxPolicy;
+      if (params && params.approvalPolicy) thread.approvalPolicy = params.approvalPolicy;
+      if (params && params.cwd) thread.cwd = params.cwd;
+      saveState();
+      let sp = thread.sandboxPolicy || (thread.sandbox === 'workspace-write' ? { type: 'workspaceWrite', networkAccess: false, writableRoots: [] } : { type: 'readOnly', networkAccess: false });
+      if (process.env.FAKE_APP_SERVER_FORCE_EFFECTIVE_SANDBOX) {
+        const forced = process.env.FAKE_APP_SERVER_FORCE_EFFECTIVE_SANDBOX;
+        sp = { ...(sp || {}) };
+        if (forced === 'workspace-write' || forced === 'workspaceWrite') sp.type = 'workspaceWrite';
+        else if (forced === 'read-only' || forced === 'readOnly') sp.type = 'readOnly';
+      }
+      if (process.env.FAKE_APP_SERVER_FORCE_WRITABLE_ROOTS) {
+        try { sp = { ...(sp || {}), writableRoots: JSON.parse(process.env.FAKE_APP_SERVER_FORCE_WRITABLE_ROOTS) }; } catch {}
+      }
+      if (process.env.FAKE_APP_SERVER_FORCE_NETWORK_ACCESS) sp = { ...(sp || {}), networkAccess: process.env.FAKE_APP_SERVER_FORCE_NETWORK_ACCESS === 'true' };
+      let ap = thread.approvalPolicy || null;
+      if (process.env.FAKE_APP_SERVER_FORCE_APPROVAL_POLICY) ap = process.env.FAKE_APP_SERVER_FORCE_APPROVAL_POLICY;
+      if (!ap) ap = (sp && sp.type === 'readOnly') ? 'never' : 'on-request';
+      const settings = {
+        cwd: thread.cwd || process.cwd(),
+        approvalPolicy: ap,
+        approvalsReviewer: 'user',
+        sandboxPolicy: sp,
+        activePermissionProfile: null,
+        model: 'fake', modelProvider: 'openai', serviceTier: null, effort: null, summary: null,
+        collaborationMode: { mode: 'default', settings: { model: 'fake', reasoning_effort: null, developer_instructions: null } },
+        multiAgentMode: 'explicitRequestOnly', personality: 'pragmatic',
+      };
+      if (process.env.FAKE_APP_SERVER_NO_SETTINGS_UPDATE !== '1') notify('thread/settings/updated', { threadId, threadSettings: settings });
+      return respond(id, {});
     }
 
     case 'thread/resume': {
@@ -165,6 +203,9 @@ function handle(msg) {
       if (!thread) return respondError(id, { code: -32601, message: `thread not found: ${threadId}` });
       const turnId = 'turn-' + (turns.size + 1);
       const turn = fakeTurn(turnId, 'inProgress', []);
+      turn.sandboxPolicy = (params && params.sandboxPolicy) || null;
+      turn.approvalPolicy = (params && params.approvalPolicy) || null;
+      turn.effectiveSandbox = process.env.FAKE_APP_SERVER_FORCE_TURN_EFFECTIVE_SANDBOX || ((params && params.sandboxPolicy && params.sandboxPolicy.type === 'workspaceWrite') ? 'workspace-write' : ((params && params.sandboxPolicy && params.sandboxPolicy.type === 'readOnly') ? 'read-only' : null));
       turns.set(turnId, turn);
       saveState();
       notify('turn/started', { threadId, turn });
@@ -182,6 +223,9 @@ function handle(msg) {
           { id: 'item-sim', type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ASSISTANT_OUTPUT_TEXT_MARKER' }] },
           { id: 'item-am', type: 'agent_message', author: 'assistant', recipient: 'user', content: [{ type: 'input_text', text: 'TASK_DONE_MARKER' }] },
         ], { startedAt: 0, completedAt: Date.now() });
+        if (turn && turn.sandboxPolicy) done.sandboxPolicy = turn.sandboxPolicy;
+        if (turn && turn.approvalPolicy) done.approvalPolicy = turn.approvalPolicy;
+        if (turn && turn.effectiveSandbox) done.effectiveSandbox = turn.effectiveSandbox;
         turns.set(turnId, done);
         saveState();
         notify('turn/completed', { threadId, turn: done });
