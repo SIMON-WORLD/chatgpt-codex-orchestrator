@@ -634,3 +634,22 @@ test('codex_get on unreachable client -> recoveryRequired + nextAction=codex_rec
   assert.equal(st.recoveryRequired, true);
   assert.equal(st.nextAction, 'codex_reconcile');
 });
+
+
+test('observability: ownershipReleased=false never pairs with mutationUnitState=released', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  const st = await exec.get({ jobId: r.jobId });
+  // In-progress writer: not released, and state must clearly reflect the running unit.
+  assert.equal(st.ownershipReleased, false);
+  assert.notEqual(st.mutationUnitState, 'released'); // invariant
+  assert.equal(st.mutationUnitState, 'running');
+  assert.equal(st.mutationOwner, 'codex');
+  // job vs owner mutation unit clarified.
+  assert.equal(st.jobMutationUnitId, exec.load(r.jobId).mutationUnitId);
+  assert.equal(st.ownerMutationUnitId, exec.load(r.jobId).mutationUnitId);
+  // There must be NO misleading mutationUnitIdObs field.
+  assert.equal('mutationUnitIdObs' in st, false);
+});
