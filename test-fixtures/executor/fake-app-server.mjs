@@ -11,6 +11,9 @@
 //   FAKE_APP_SERVER_APPROVAL=1  -> emit one item/commandExecution/requestApproval
 //   FAKE_APP_SERVER_DIE_MS=N    -> simulate unexpected process death after N ms
 //   FAKE_APP_SERVER_FAIL_TURN_START=1 -> make turn/start fail
+//   FAKE_APP_SERVER_TURN_FAIL=1       -> completed turn reports status=failed
+//   FAKE_APP_SERVER_REQUIRE_SANDBOX=1 -> thread/start requires a sandbox param
+//   FAKE_APP_SERVER_NO_CONFIRM_INTERRUPT=1 -> interrupt does not confirm terminal
 //   FAKE_APP_SERVER_STATE_DIR=dir      -> where thread/turn state is persisted
 
 import { createInterface } from 'node:readline';
@@ -124,7 +127,7 @@ function handle(msg) {
 
     case 'thread/start': {
       const threadId = 'thread-' + (threads.size + 1);
-      const thread = fakeThread(threadId);
+      const thread = fakeThread(threadId); if (process.env.FAKE_APP_SERVER_REQUIRE_SANDBOX === '1' && !(params && params.sandbox)) return respondError(id, { code: -32000, message: 'sandbox required' }); thread.sandbox = (params && params.sandbox) || null;
       threads.set(threadId, thread);
       saveState();
       return respond(id, {
@@ -133,7 +136,7 @@ function handle(msg) {
         cwd: (params && params.cwd) || process.cwd(),
         runtimeWorkspaceRoots: [], instructionSources: [],
         approvalPolicy: 'on-request', approvalsReviewer: 'user',
-        sandbox: 'workspace-write', activePermissionProfile: null,
+        sandbox: (thread && thread.sandbox) || 'workspace-write', activePermissionProfile: null,
         reasoningEffort: null, multiAgentMode: 'explicitRequestOnly',
       });
     }
@@ -149,7 +152,7 @@ function handle(msg) {
         model: 'fake', modelProvider: 'openai', serviceTier: null,
         cwd: thread.cwd, runtimeWorkspaceRoots: [], instructionSources: [],
         approvalPolicy: 'on-request', approvalsReviewer: 'user',
-        sandbox: 'workspace-write', activePermissionProfile: null,
+        sandbox: (thread && thread.sandbox) || 'workspace-write', activePermissionProfile: null,
         reasoningEffort: null, multiAgentMode: 'explicitRequestOnly',
         initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null,
       });
@@ -166,7 +169,9 @@ function handle(msg) {
       saveState();
       notify('turn/started', { threadId, turn });
       setTimeout(() => {
-        const done = fakeTurn(turnId, 'completed', [
+        const curStatus = turns.get(turnId) && turns.get(turnId).status;
+        if (curStatus === 'interrupted' || curStatus === 'completed' || curStatus === 'failed') { saveState(); return; }
+        const done = fakeTurn(turnId, (process.env.FAKE_APP_SERVER_TURN_FAIL === '1' ? 'failed' : 'completed'), [
           { id: 'item-user', type: 'message', role: 'user', content: [{ type: 'input_text', text: 'USER_INPUT_MARKER' }] },
           { id: 'item-userout', type: 'message', role: 'user', content: [{ type: 'output_text', text: 'USER_OUTPUT_TEXT_MARKER' }] },
           { id: 'item-reason', type: 'reasoning', summary: [], content: [{ type: 'text', text: 'REASONING_MARKER' }], encrypted_content: null },
@@ -196,6 +201,7 @@ function handle(msg) {
       const { threadId, turnId } = params || {};
       const t = turns.get(turnId);
       if (!t) return respondError(id, { code: -32602, message: `turn not found: ${turnId}` });
+      if (process.env.FAKE_APP_SERVER_NO_CONFIRM_INTERRUPT === '1') { saveState(); return respond(id, {}); }
       const it = fakeTurn(turnId, 'interrupted', t.items || [], { startedAt: t.startedAt || 0, completedAt: Date.now() });
       turns.set(turnId, it);
       saveState();
