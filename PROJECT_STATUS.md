@@ -10,19 +10,22 @@
 
 ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 sustained local coding executor，不是默认下游。Executor RESULT 是 evidence candidate，不等于 Brain truth。
 
+长期连续性原则：**Brain session 可以替换，但 logical work / authority / evidence 不能依赖单一 conversation 或单一 runtime process 的内存存活。** Conversation 是 interaction/context surface，不是 project/control truth。
+
 ## 当前发布 / operational 状态
 
 - **Released version:** `v0.1.0-alpha.3`
 - **Released/default operational path:** Alpha.3 legacy IAB Direct Brain Loop（feature-frozen）
 - **v0.2:** candidate；核心 capability-first runtime 已完成 M0–M7 dogfood，但尚未 operational default flip / release
+- **Post-M7:** Brain Continuity hardening contract 已接受，implementation / real re-entry dogfood 尚未完成
 - **M8:** 尚未进入
 - **Version bump / release:** 尚未执行
 
-当前规范性 routing policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。
+当前规范性 routing policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。当前 Brain Continuity contract 见 [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md)。
 
 ## 已接受基线
 
-| Milestone | 状态 | 结果 |
+| Milestone / Gate | 状态 | 结果 |
 |---|---|---|
 | M0 | **ACCEPTED** | v0.2 architecture / RFC baseline |
 | M1 | **ACCEPTED** | Codex App Server Executor |
@@ -33,6 +36,7 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 | M6 | **ACCEPTED** | Legacy IAB isolation under `src/legacy/` |
 | N3 | **ACCEPTED** | Capability-First operating model / control-plane re-baseline |
 | M7 | **ACCEPTED / COMPLETE** | Native-only + Codex-required + Hybrid real-project dogfood |
+| Brain Continuity contract | **ACCEPTED / IMPLEMENTATION PENDING** | durable Governance + Parent re-entry + authority fencing + isolated dogfood contract |
 
 ## M7 — Real-Project Capability Routing Dogfood
 
@@ -91,39 +95,105 @@ Accepted implementation history：
 
 M7 A/B/C correctness evidence 足够，但 M7-C dogfood 同时暴露一个新的 default-flip blocker：**Local Governance state 当前不具备 durable restart persistence。**
 
-当前 `GovernanceService` 在 runtime construction 时创建 fresh in-memory state。实际 M7-C sidecar/runtime restart 后曾观察到 governance state 为空，需要 Brain 根据 authoritative conversation/history 重新建立 logical task/step。与此同时，当前规范 policy 明确要求进入 Local Capability Plane 后，Local Governance Service 负责 local execution lifecycle 的持久控制与证据记录。
+当前 `GovernanceService` 在 runtime construction 时创建 fresh in-memory state，而底层 Codex execution 已通过 M7-C 获得 durable binding/recovery。这形成不对称：executor 可以恢复，但 Brain governance authority / acceptance lifecycle 仍可能在 runtime restart 后回到 fresh state。
 
-因此在把 v0.2 设为 operational default 前，需要关闭这个 policy/implementation gap。该结论不反向修改 M7-C PASS；它是 M7 dogfood 产生的新的 post-M7 hardening evidence。
+后续长期项目讨论又提供了新的直接使用 evidence：不能假设一条 Parent ChatGPT conversation 永远不会因上下文压力、中断或 product/runtime capability surface 变化而被替换。原先只写成“Governance durability”的 blocker 因此经过 Evidence-first REPLAN，被收敛为更完整但仍最小的 **Brain Continuity** contract。
 
-### Default-flip blocker
+该 REPLAN 不反向修改 M7 PASS，也不进入 M8；它只是重新定义 operational-default 前必须关闭的 continuity gate。
 
-**Governance durability / restart recovery — BLOCKING**
+## Current default-flip blocker
 
-目标不是重新设计 Governance，而是证明：Local MCP/runtime restart 后，Brain 可以恢复同一 logical task/step 的治理状态和 acceptance/evidence authority，而不依赖用户人工中转内部 ID，也不因 fresh-state reset 产生重复执行或错误 acceptance。
+**Brain Continuity / Governance durability — BLOCKING**
 
-具体实现方案需在下一次 Evidence-first PLAN 中根据现有 runtime/dataRoot/state patterns 决定；不要预先为抽象而抽象。
+已接受 contract：[`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md)。
+
+### Contract 已冻结的核心语义
+
+1. **Brain sessions are disposable; work state is durable.** Conversation 不是 durable task identity。
+2. **Conversation context is not authority.** narrative handoff / summary 不能覆盖 structured Governance / authoritative GitHub/runtime evidence。
+3. Canonical Governance state 必须使用 existing `dataRoot` 形成 versioned durable persistence；优先复用 atomic JSON + `.bak` pattern，不引入无 evidence 支撑的 database/workflow service。
+4. Corruption / unknown schema 必须 fail closed，禁止 silent `_freshState()` reset。
+5. 新 Parent conversation 使用稳定、可重建的 project/task semantic identity 做 bounded recovery：`0 -> not_found`、`1 -> recover`、`>1 -> ambiguous/fail closed`；禁止 most-recent guessing。
+6. Parent rollover 必须有 durable authority generation / fencing；新 Parent 接管后，旧 Parent 的迟到 mutation 必须 `stale_authority`。
+7. Parent authority 与 executor delegation 分离：takeover 不自动取消、重启或复制已经授权且仍有效的 Codex execution。
+8. Brain re-entry 由 durable state 生成 bounded **Context Capsule**；不要求用户人工转发 giant transcript handoff。
+9. Capability availability 是 ephemeral observation；re-entry、long-running execution 后、provider failure、resource change、write/destructive/publish boundaries 需要 refresh/rediscovery。
+10. 同一 Governance namespace 同时只能有一个 canonical Local runtime writer；不要求 distributed lock manager，但双 runtime writer 必须被 prevent / fail closed。
+11. `proofLedger` 等 verification-reuse cache 如果不能安全重建，只能触发 conservative re-verification，不能生成新的 pass/acceptance。
+12. continuity fault-injection dogfood 必须 isolated：独立 `dataRoot`、logical identity、target branch/repo，不得污染 supervising project 的 authoritative control state。
+13. `Delegate outcomes, not keystrokes`：implementation 以 milestone-sized Codex TASK 为默认，不把本地 inspect/edit/test loop 拆成大量 Parent round-trips。
+
+### 明确 non-goals
+
+当前 **不** 建设：
+
+- multi-Child scheduler；
+- recursive Child Brain tree；
+- generalized work DAG；
+- multi-authoritative-Brain consensus；
+- distributed lock/database/workflow service；
+- Codex Desktop sidebar integration；
+- rich execution dashboard。
+
+未来如果真实长期项目出现多个独立 workstream，应把 durable work identity 设计成 workstream，而不是某条 Child conversation；是否真正实现 multi-workstream / multi-Child orchestration，必须等待后续真实 dogfood evidence。
+
+## Brain Continuity acceptance gate
+
+在把该 blocker 关闭前，至少需要：
+
+### Automated / deterministic
+
+- restart 后恢复同一 task/step/acceptance/evidence/executorStatus/machineGate/brainAcceptance；
+- terminal `DONE` 继续 terminal；RESULT-bearing step 不 duplicate execute；
+- `ASK_USER` / recovery-required local condition 不被 reset 成 fresh executable state；
+- primary corrupt + backup good 可恢复；primary + backup corrupt fail closed；
+- future/unknown schema fail closed 或明确 migration；
+- bounded recovery `not_found / unique / ambiguous`；
+- stale Parent fencing；
+- Parent takeover 不 duplicate/cancel active Codex delegation；
+- second canonical runtime writer 被拒绝/fail closed；
+- stale capability snapshot 不作为 re-entry 后当前 availability proof；
+- proof cache loss 只导致 re-verification，不导致 pass。
+
+### Real runtime / conversation re-entry
+
+使用 isolated dataRoot + isolated mutable target，真实证明：
+
+`Conversation A → PLAN/TASK → real Codex running → Parent/session interruption → Local runtime restart → Conversation B → 用户仅表达“继续这个项目” → bounded recovery → new Parent authority → same Codex execution reconcile → capability rediscovery → independent evidence reacquisition → ACCEPT/DONE`
+
+硬指标：
+
+- manual internal-ID relay = `0`；
+- manual RESULT relay = `0`；
+- duplicate execution = `0`；
+- stale Parent mutation accepted = `0`；
+- concurrent Governance writer accepted = `0`；
+- lost required acceptance/evidence = `0`；
+- dogfood production/control-state pollution = `0`。
 
 ## Non-blocking observations retained
 
-以下 observation 当前不阻塞 M7 acceptance，也不单独阻塞 default flip；继续作为 architecture / UX evidence：
+以下 observation 当前不阻塞 M7 acceptance，也不单独阻塞 Brain Continuity contract acceptance；继续作为 architecture / UX evidence：
 
 1. **Codex Desktop thread visibility:** external/independent App Server thread 的 Desktop sidebar live visibility 不可靠；已分流为独立 upstream investigation，不回退 IAB。
 2. **Passive execution observability:** long-running execution 可处于 `inProgress / waitingOnApproval / completed / recoveryRequired`，但普通用户缺少稳定 status/notification surface；属于后续 UX/observability candidate。
-3. **Custom App conversation binding:** refresh 后旧 conversation 曾出现 discovery/invocation mismatch；fresh conversation 可恢复；暂作为 product-integration observation。
+3. **Custom App conversation binding:** refresh 后旧 conversation 曾出现 discovery/invocation mismatch；fresh conversation 可恢复；这一 observation 强化 capability snapshot 必须 task/session-ephemeral。
 4. **Windows local test process termination:** raw concurrent `node --test` 曾出现 lingering child-handle/termination 行为；GitHub CI Node 22/24 已稳定 PASS，当前不作为 correctness blocker。
 
 ## 当前下一步
 
 1. **M7 已完成，不再新增 M7-A/B/C dogfood attempt。**
-2. 进入 **post-M7 default-flip hardening**：Evidence-first 调查并解决 Governance restart durability blocker。
-3. 用真实 runtime restart / re-entry dogfood 独立验证治理状态恢复，不允许 manual ID/RESULT relay。
-4. blocker 关闭后，由 Brain **重新执行 operational default flip decision**；flip 不自动发生。
-5. 只有 default-policy decision 通过后才进入 M8 RC / release。
+2. **Brain Continuity contract 已接受。** 当前进入 implementation，而不是继续无边界 architecture expansion。
+3. Parent Brain 先从 current main 独立形成完整 implementation acceptance contract；然后以 `HYBRID` 路由执行：ChatGPT Native 定案 → `CODEX_DELEGATE` milestone-sized implementation → ChatGPT Native independent GitHub/CI verification。
+4. implementation 通过 automated tests 后，再执行 isolated real Conversation A → B runtime restart/re-entry dogfood。
+5. blocker 关闭后，由 Brain **重新执行 operational default flip decision**；flip 不自动发生。
+6. 只有 default-policy decision 通过后才进入 M8 RC / release。
 
 ## Authority
 
 - **GitHub `main` / current code / PR / CI:** implementation truth / canonical authority。
 - **`CAPABILITY_ROUTING.md`:** 当前 routing / executor policy。
+- **`docs/rfc-v0.2-brain-continuity.md`:** 当前 post-M7 Brain Continuity contract。
 - **`docs/architecture.md`:** 当前技术架构事实。
-- **`docs/rfc-*`:** 历史研究与设计决策记录。
+- **`docs/rfc-*`:** 历史研究与设计决策记录；accepted contract 仍可由新 evidence 触发后续 `REPLAN`。
 - **ChatGPT Project Library:** Brain-readable slow-changing reference mirror，不得静默覆盖 GitHub 最新事实。
