@@ -179,9 +179,14 @@ test('reconciliation does not blindly create a duplicate turn', async (t) => {
 
 test('mutation_owner blocks conflicting ownership', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
-  const exec = makeExecutor({ dataRoot: root });
+  const exec = makeExecutor({ dataRoot: root, slowTurn: true });
   t.after(() => exec.shutdown());
   await startExecutor(exec);
+  // Canonical M7 lifecycle auto-releases the writer on an authoritative terminal turn,
+  // so ownership only blocks a competing writer while a mutation unit is actually in
+  // progress. slowTurn keeps the turn inProgress; wait for codex ownership to be
+  // actively running before asserting the conflict (removes the CI #123 race).
+  assert.equal(await waitFor(() => exec.owner.owner === 'codex' && exec.owner.unitState === 'running'), true);
   assert.throws(() => exec.owner.assertCanWrite('chatgpt'), /owned by codex/);
 });
 
