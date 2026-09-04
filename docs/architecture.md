@@ -1,307 +1,309 @@
 # Architecture
 
-> Scope: current architecture of **v0.1.0-alpha.3** (Direct Brain Loop baseline; legacy detached runtime retained as experimental).
-> [`README.md`](../README.md) is the project overview; [`README.zh-CN.md`](../README.zh-CN.md) is its Chinese counterpart. [`development-history.md`](development-history.md) holds the historical implementation notes that predate the public-polish pass.
-
----
-
-> **Default path (current Batch): Direct Brain Loop.** The default `$brain-command` uses the current Codex agent + the Codex built-in browser to talk to ChatGPT (one dedicated conversation), executes each `TASK` directly, sends a compact `RESULT`, and publishes on `DONE`. It does **not** start a worker, a ready file, or a nested Codex executor (see `skills/brain-command/SKILL.md` and `src/legacy/direct-mode.js`).
+> **Current architecture reference:** capability-first v0.2 candidate.
 >
-> **Existing conversation:** `$brain-command --conversation "<title>"` / `--conversation-url <url>` / `--adopt-current` adopt an existing ChatGPT history conversation (no new conversation).
+> **Released operational default:** `v0.1.0-alpha.3` legacy IAB Direct Brain Loop remains the feature-frozen released/default path until an explicit post-hardening operational-default decision changes it.
 >
-> **The rest of this document describes the LEGACY / EXPERIMENTAL detached runtime** (worker host, TaskService / TaskManager, durable recovery). It is retained for compatibility and is **not** the canonical startup path.
+> Current implementation truth is GitHub `main`; current phase/status is [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md); normative routing policy is [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md); the accepted post-M7 continuity contract is [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md). Historical IAB/worker engineering detail lives in [`development-history.md`](development-history.md).
 
-## Design Model
+## 1. Design model
 
-The project is built on a fixed responsibility split that gives every turn an explicit owner.
+`chatgpt-codex-orchestrator` is a **Capability Orchestrator with ChatGPT as the authoritative Parent Brain**.
 
-- **ChatGPT** — planner, reviewer, and control-decision maker. It reads the goal, issues an instruction, evaluates the returned evidence, and decides the next control.
-- **Codex** — local executor. It runs one instructed task, modifies files, runs commands/tests, and returns an actual result plus evidence. It does not independently re-plan the overall goal.
-- **Human** — product owner. The loop pauses at `ASK_USER` and waits for a human decision.
+The core control loop is:
 
-Why this separation matters:
+```text
+Evidence first
+→ Decision
+→ Runtime Capability Discovery
+→ Capability Routing
+→ Execute
+→ Independent Evidence Reacquisition
+→ ACCEPT / REVISE / DONE
+```
 
-- Explicit ownership of *planning* vs *execution* keeps each step reviewable.
-- Each task is a bounded, discrete unit with its own acceptance criteria.
-- Orchestration state makes the loop durable across turns and recoverable runtimes.
-- The executor (Codex) reports real evidence, so the reviewer (ChatGPT) decides on facts rather than assumptions.
+Responsibilities are deliberately separated:
 
-## System Architecture
+- **ChatGPT Parent Brain** — investigation, architecture, planning, routing, governance, independent verification, `ACCEPT / REVISE / DONE`.
+- **Capabilities / Executors** — perform bounded work. They do not inherit final project-level acceptance authority.
+- **Codex** — sustained local coding executor for multi-file, iterative, shell-heavy, debugging, refactor, test/build work; not the default downstream for all tasks.
+- **Human** — principal / product owner / risk authority. The human supplies goals, preferences, strategic correction, and approvals for genuinely high-impact decisions; the human is not an internal-ID or RESULT message bus.
+
+Two additional principles are important for the current hardening phase:
+
+- **Brain sessions are disposable; work state is durable.** A ChatGPT conversation is an interaction/context surface, not the durable identity of a project/task.
+- **Delegate outcomes, not keystrokes.** The Brain delegates milestone-sized outcomes, scope, constraints, and acceptance; an executor owns its local implementation tactics inside that boundary.
+
+## 2. Capability architecture
 
 ```mermaid
 flowchart TD
-    H[Human / product owner] --> BRAIN[ChatGPT Brain]
-    BRAIN <--> BS[BrainSession / IAB transport]
-    BS <--> CTX[Brain Context / PacketContextProvider]
-    CTX <--> PROTO[Structured Protocol / Acceptance-Evidence Gate]
-    PROTO <--> TM[TaskService / TaskManager / durable Task State]
-    TM <--> RH[Runtime Host]
-    RH <--> CX[Persistent Codex worker / thread]
-    CX --> REPO[Target repository]
+    U[User Goal] --> B[ChatGPT Parent Brain]
+    B --> E[Evidence / Decision / Capability Discovery]
+    E --> R[Capability Routing]
+
+    R --> P[ChatGPT Product Capability]
+    P --> N[Built-in Native]
+    P --> A[Connected Apps]
+
+    R --> L[Local Capability Plane]
+    L --> T[Secure Tunnel]
+    T --> M[Local MCP]
+    M --> D[Direct Local]
+    M --> C[Codex App Server]
+
+    N --> V[Independent Evidence Reacquisition]
+    A --> V
+    D --> V
+    C --> V
+    V --> B
 ```
 
-The orchestrator lives between the ChatGPT Brain and the Codex executor. It does **not** add a remote runtime or any unsupported external service in this alpha.
+### ChatGPT Product Capability
 
-## Control Protocol
+Capabilities already available to the current ChatGPT runtime, including built-in Web/Search, Files/PDF/vision, Python/Data Analysis, Images, Artifacts, Tasks, and connected Apps such as GitHub, Gmail, Calendar, Notion, Figma, etc.
 
-The Brain ↔ executor contract uses four directives, implemented in [`src/directives.js`](../src/directives.js) and normalized in [`src/protocol.js`](../src/protocol.js):
+These capabilities are **not reimplemented locally merely for architectural uniformity**.
 
-- `TASK` — a new instruction for Codex to execute.
-- `REVISE` — rework the previous task.
-- `ASK_USER` — a human decision is required; the loop pauses.
-- `DONE` — the task is complete.
+### Local Capability Plane
 
-`parseControl(text)` detects the control; `extractDirective(text, control)` pulls the instruction after the token. `normalizeBrainOutput` / `parseBrainOutput` parse structured JSON control/reply when present, with a single auto-repair and a legacy text fallback. `validateControl` rejects anything outside `CONTROLS = ['TASK','REVISE','ASK_USER','DONE']`, throwing `ProtocolError` when invalid.
+`Custom MCP App + Secure Tunnel + Local MCP` supplies capability that the ChatGPT product cannot directly provide for the user's local machine/workspace.
 
-The exported `CONTROLS`, `RESULT_STATUSES`, and result helpers live in [`src/protocol.js`](../src/protocol.js).
+It is not a mandatory hop for native-only work.
 
-## Task Lifecycle
+Current local families:
 
-The lifecycle is owned by [`TaskService`](../src/legacy/task-service.js) over a durable store backed by [`TaskManager`](../src/legacy/task-manager.js) and [`task-state`](../src/task-state.js).
+- **Direct Local** — workspace read/search/status/diff, small bounded exact edits, allowlisted/focused verification.
+- **Codex App Server** — sustained local coding execution.
 
-- `startTask({ goal, repoDir, conversation })` creates state and drives the loop (up to `maxRounds`).
-- `createTask(...)` creates a task **without** running the engine; the host then calls `advanceTask(taskId)` repeatedly.
-- `advanceTask(taskId, { brain, executor, sessionFactory })` is the **turn-sliced** drive: it loads durable state, performs **one** bounded unit (a single Brain send, a single Codex exec, or a state transition), persists, and returns a compact status. Each unit stays well under a node-REPL invocation time cap.
-- `resumeTask(taskId)` reloads state, re-acquires the lock, re-attaches the Brain and worker, and continues.
-- `getTaskStatus` / `cancelTask` are read / terminal operations.
+## 3. Four routing targets
 
-Every mutation is persisted; completed steps are never re-run.
+The top-level routes are:
 
-### State model
+- `CHATGPT_NATIVE`
+- `CHATGPT_DIRECT_LOCAL`
+- `CODEX_DELEGATE`
+- `HYBRID`
 
-On-disk as `<stateDir>/<taskId>.json` with a `.bak` fallback. Schema version is `1`
+A route is an executor family, not a provider name. GitHub, Gmail, Notion, Figma, Web, etc. do not each become a new route.
 
-- Task statuses: `running | awaiting_user | recovery_required | completed | failed | cancelled`
-- Step statuses: `received | executing | executed | result_recorded | result_sent | reviewed`
-- Acceptance statuses: `pass | fail | unknown | missing`
+### `CHATGPT_NATIVE`
 
-`loadState` refuses to silently reset: if both the primary file and its backup are corrupt it throws `TaskStateCorruptError`.
+Use current ChatGPT Product Capability when it is sufficient. Native evidence and execution are preferred when the Brain already has the right capability.
 
-## Acceptance and Evidence Gate
+### `CHATGPT_DIRECT_LOCAL`
 
-[`src/protocol.js`](../src/protocol.js) models acceptance as structured data:
+Use the Local Capability Plane for bounded local operations whose intended effect is already known and safely constrained.
 
-- `acceptance[]` — the criteria ChatGPT attaches to a `TASK`.
-- `evidence[]` — the items Codex returns, each `{ acceptanceId, status: pass|fail|unknown, kind, summary }`.
-- Evidence kinds: `command | test | file | diff | verify`.
+### `CODEX_DELEGATE`
 
-`checkAcceptanceGate(registry)` requires **every required** acceptance to have `pass` evidence before `DONE` is accepted. The engine never marks an acceptance `pass` merely because the Codex process exited `0`; evidence must come from the returned result (`evidence[]` or an `EVIDENCE:` block) or explicit test results. `normalizeEvidence` accepts `passed/failed` aliases; `parseEvidenceBlock` handles JSON arrays.
+Use Codex for sustained coding/debug/refactor/test/build loops. Codex may inspect, edit, debug, test, and correct within one delegated milestone without returning to the Parent after every local command.
 
-This is a review gate, **not** formal verification, cryptographic attestation, or an automatic correctness proof.
+### `HYBRID`
 
-## Persistence and Recovery
+Composition of capability planes within one logical task, for example:
 
-What exists:
+```text
+ChatGPT Native investigation
+→ Brain architecture decision
+→ Codex local implementation + tests + push
+→ ChatGPT Native GitHub/CI evidence reacquisition
+→ Brain ACCEPT / REVISE
+```
 
-- Durable Task State (schema v1) written atomically (temp + rename) with a retained `.bak`.
-- `resumeTask` re-attaches the same conversation, tab (or re-bound conversation), and Codex thread/session.
-- `recovery_required` marks a task whose in-flight step hit an unconfirmed side-effect; resume does **not** auto re-run it.
-- Crash-safe `TaskLock` writes an owner token + pid + heartbeat. On contention it checks liveness/staleness: an active owner is rejected (`TaskLockedError`), and a dead/stale lock is reclaimed.
-- A persistent Codex worker/thread is kept in-process by the worker host so a task re-uses the same thread.
+`HYBRID` is not an executor and is not a mutation owner.
 
-What does **not** yet exist:
+## 4. Runtime capability discovery
 
-- Cross-process automatic recovery beyond explicit `resume`/`advanceTask`.
-- A concurrent task queue.
-- A cost ledger.
+Capability availability is a **runtime fact**, not a permanent project property.
 
-Tasks are not claimed to be impossible to lose; recovery is explicit, not automatic.
+The Brain distinguishes at least:
 
-## Conversation Binding
+```text
+tool exposed?
+provider connected?
+resource authorized?
+operation permitted?
+```
 
-- `conversation: 'new'` — the supported/default path. It creates a fresh ChatGPT conversation and a persistent Codex thread.
-- `conversation: 'current'` / `adopt-current` — **experimental**. For `'current'`, `createTask` freezes the real conversation identity at creation time and marks the task as `adopted`; teardown does not close the adopted user tab by default. The identity-binding resolver (`reopenConversationFromBinding`, `openBrainSessionExisting`) and `ConversationIdentityMismatchError` are present.
-- Why `adopt-current` is experimental in alpha.1: selected-tab identity is unstable across node-REPL invocations in the current Codex Desktop / IAB environment. The implementation is retained, but it is not a stability promise.
+A successful capability observation is scoped by capability/provider/resource/operation and time. Prior availability is not timeless proof of current availability.
 
-## Context and Secret Handling
+Capability assumptions should be refreshed when appropriate, including:
 
-[`PacketContextProvider`](../src/context-provider.js) builds a bounded repository context (repo map, git status/diff, file snippets, test results/errors), skipping `.env` / secrets / `node_modules`, and records provenance. It never dumps the whole repo.
+- replacement ChatGPT conversation / Brain re-entry;
+- local runtime restart;
+- provider/tool failure;
+- resource change;
+- after long-running execution when a new external action is required;
+- write/destructive/publish/release boundaries.
 
-[`src/safety.js`](../src/safety.js) provides `redactSecrets` (removes known secret strings and secret-looking patterns such as `sk-…` and `Bearer …`) and `redactObject` (recursively masks secret-named keys). Structured `TaskLog` is JSONL and size-capped.
+The normative policy is [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md).
 
-Known limitation: the local governor currently passes its bearer token on the Codex child **argv**. It is redacted from logs/state, **not** removed from the process argv.
+## 5. Canonical v0.2 runtime components
 
-## Runtime and Process Boundaries
+### Production entry
 
-The Codex worker must run in an ordinary Node process, because the node-REPL sandbox cannot spawn a descendant `codex` (writing `~/.codex/tmp/arg0` / the in-process app-server client is denied and the restriction propagates to the descendant tree).
+- [`../scripts/v0.2-start.mjs`](../scripts/v0.2-start.mjs) — v0.2 local runtime entrypoint.
+- [`../src/transport/brain-local.js`](../src/transport/brain-local.js) — assembles the local capability plane.
 
-- BrainSession / in-app browser runs in the node REPL (`browser-client` needs the REPL RPC).
-- The worker host (`scripts/codex-worker-host.mjs`) is a long-lived normal Node process exposing a **localhost TCP JSON-line** server; each worker has a random token, and requests must carry `auth` + a bound `taskId` (`verifyAuth`).
-- `scripts/runtime-host.mjs` is a single entry that connects the worker, opens a BrainSession, runs `LoopController`, and returns evidence.
-- `redirectCodexHome()` is a best-effort helper that points `CODEX_HOME` at a fresh writable temp dir with copied config/auth, used because the REPL-sandbox descendant cannot write the read-only `~/.codex`. A dangerous sandbox bypass (`--dangerously-bypass-approvals-and-sandbox`) is detected and reported, never a default.
+### Workspace capability
 
-## Data Root
+- `src/local/workspace.js` — explicit allowed workspace registry / authorization.
+- `src/local/read.js`, `search.js`, `git.js` — bounded read/search/git status/diff.
+- `src/local/change-set.js` — bounded Direct Local change-set mutation.
+- `src/local/verify.js` — allowlisted verification.
+- `src/local/sensitive.js` — sensitive-path restrictions.
 
-[`runtime-paths`](../src/runtime-paths.js) exposes the default data root; [`data-root`](../src/data-root.js) resolves a durable writable root via, in order, an explicit path, `CHATGPT_ORCHESTRATOR_DATA_ROOT`, the user root, then workspace candidates (`probeWritable`). If none are writable it returns an error requiring a durable writable dir.
+### MCP surface
 
-Limitation: the default `%LOCALAPPDATA%` root may not be writable from the sandbox; the alpha entry must supply a writable root via the resolver or `CHATGPT_ORCHESTRATOR_DATA_ROOT`.
+- `src/mcp/server.js` — MCP HTTP server.
+- `src/mcp/tools.js` — Direct Local, Router/Governance, and Codex facade tools.
 
-## Failure Classes
+### Routing and Governance
 
-Named errors that the orchestrator surfaces:
+- `src/router/decide.js`, `src/router/capability-router.js` — deterministic routing over structured task facts. Natural-language project reasoning remains with ChatGPT.
+- `src/governance/index.js` — canonical Brain control lifecycle and acceptance/evidence gates.
 
-- `ComposerTimeoutError`, `ReplyTimeoutError`, `ConversationMismatchError`, `TabLostError` (Brain transport).
-- `ProtocolError` (invalid control after repair).
-- `TaskStateCorruptError` (primary + backup corrupt; no silent reset).
-- `TaskLockedError` (active owner holds the task lock).
+### Codex executor
 
-On an unconfirmed in-flight step, the task transitions to `recovery_required` rather than auto re-running.
+- `src/executor/app-server-client.js` — Codex App Server client.
+- `src/executor/app-server-executor.js` — structured Codex execution/reconciliation/approval lifecycle.
+- `src/executor/job-map.js` — durable Codex job ↔ thread/turn mapping plus M7-C durable orchestration bindings.
 
-## Supported vs Experimental (boundary)
+### State / safety
 
-- Supported/default: `conversation: 'new'`, the full `TASK / REVISE / ASK_USER / DONE` loop, structured acceptance/evidence gate, durable task state + turn-sliced advancement, persistent Codex thread, resume/recovery, crash-safe lock, project binding, `PacketContextProvider`, doctor diagnostics, safe defaults.
-- Experimental: `conversation: 'current'` and `adopt-current`.
+- `src/runtime-paths.js` — unified user-level `dataRoot`, outside target repos.
+- `src/state/operation-state.js` — durable bounded Direct Local operation state.
+- `src/state/mutation-owner.js` — current process-local workspace mutation ownership.
+- `src/state/handoff.js` — compact structured handoff.
+- `src/task-state.js`, `src/task-lock.js` — legacy/reusable persistence and lock patterns; `task-state.js` supplies versioned atomic JSON + backup/corruption patterns reused as design evidence for Brain Continuity.
 
-## Current Non-goals / Limitations
+### Compatibility barrel
 
-- No cross-process automatic recovery beyond explicit resume/advance.
-- No concurrent task queue.
-- No cost ledger.
-- Depends on the ChatGPT web DOM; selectors/placeholders may require maintenance.
-- No remote / Cloudflare runtime yet.
+`src/index.js` intentionally re-exports both legacy and v0.2 modules for backward compatibility. It is **not** the canonical v0.2 runtime import root.
 
-These are current boundaries, not roadmap commitments. Roadmap items (stabilizing `adopt-current` via explicit `tabId`, remote runtime, cost ledger, richer context providers, GUI-free daily entry) are **planned** and not part of the current architecture.
+## 6. Governance semantics
 
-## Alpha.2 — Delta Packets + Fast Bootstrap
+Canonical controls:
 
-### Bootstrap / Discovery
+```text
+PLAN
+TASK
+RESULT
+REVISE
+REPLAN
+ASK_USER
+PUBLISH
+DONE
+```
 
-The canonical launcher Skill is `brain-command` (see [skills/brain-command/SKILL.md](../skills/brain-command/SKILL.md)). It resolves the user-scoped config at `$CODEX_HOME/brain-command/config.json` ([`src/bootstrap.js`](../src/bootstrap.js)), resolves the repo deterministically (inside target repo > explicit path > configured workspace), and runs a fast preflight. Broad filesystem discovery is not part of normal startup. The full `fullDoctor` is used only for setup / env change / preflight failure / explicit request. One-time `npm run setup:brain-command` (scripts/setup-brain-command.mjs → `setupBrainCommand`) installs the launcher Skill to `$HOME/.agents/skills/brain-command/SKILL.md` and creates/updates `$CODEX_HOME/brain-command/config.json`, preserving machine-local paths; normal execution only reads the config and never reinstalls the Skill. `broadDiscoveryOccurred` is meaningful: the fast path reports `false` and never invokes a broad search, while an explicit setup/fallback discovery helper marks `true`. The read-only `status:brain-command` command (scripts/brain-command-status.mjs → `brainCommandStatus`) reports whether the launcher Skill is discoverable and the config parses, printing the six safe config fields without ever echoing secrets; exit 0 = healthy, 1 = missing/invalid.
+Important authority boundaries:
 
-### Durable state (schema v1, hydrated)
+- `TASK` / `REVISE` authorize execution; they do not prove correctness.
+- Executor `RESULT` supplies structured executor status/evidence candidates.
+- The machine computes acceptance/evidence gates.
+- Only the Brain may make project-level acceptance decisions.
+- `PUBLISH` authorizes publication when its gates pass.
+- `DONE` is terminal; it never implicitly authorizes publication.
 
-`task-state.js` adds the Alpha.2 fields while keeping `schemaVersion = 1`: `taskContract`, `repoContext`, `projectProfileRef`, `plan`, `currentStepId`, `verificationPolicy`, `stepSummaries`, `evidenceLedger`, `unresolvedRisks`. `hydrateTaskState(state)` fills defaults at load time; it never fabricates evidence from a legacy `acceptanceRegistry` `pass` — it only recovers real structured evidence from persisted step result data.
+Executor success alone is insufficient for acceptance.
 
-### Evidence ledger
+## 7. Evidence model
 
-`evidenceLedger` is append-only real structured evidence. New `RESULT` evidence is appended to the ledger and also applied to `acceptanceRegistry` (the compatibility/status projection used by the existing DONE gate). `acceptanceRegistry` never swaps out for the ledger in Alpha.2.
+Typical evidence priority:
 
-### Canonical PLAN step identity
+```text
+Brain direct authoritative evidence
+>
+independently reacquired resource evidence
+>
+Executor RESULT / self-report
+```
 
-When a `PLAN` exists, the plan `stepId` is the canonical orchestration step identity for `TASK`, `REVISE`, `RESULT`, `evidenceLedger.stepId`, `currentStepId`, `reviewed`, `completedSteps`, and `stepSummaries`. A `REVISE` re-opens the canonical step in place (no duplicate step objects). A planned step that cannot be resolved to its declared milestone (in a milestone-based plan) surfaces a deterministic `ProtocolError` rather than falling back to the first milestone. Legacy no-PLAN tasks keep orchestrator-generated `step-N` ids.
+Examples:
 
-### Compaction
+- Codex reports a commit/test result → Brain independently reads GitHub commit/diff/CI.
+- Direct Local edit → Brain/local verification re-reads the file/diff and runs the required check.
+- GitHub mutation returns success → Brain can re-read the resulting remote state before final acceptance.
 
-Compaction is Orchestrator-owned. When a step reaches `reviewed`, the manager writes a compact durable `stepSummary` to `stepSummaries`, retaining `completedSteps` for compatibility/idempotency. There are no context-pressure thresholds in Alpha.2 — the rule is deterministic: `reviewed -> compact`.
+Independent verification means independent reacquisition of resource truth; it does not require a different provider merely for formality.
 
-### Verification authority (operational)
+## 8. Persistence and recovery — current implementation
 
-[`src/verification.js`](../src/verification.js) implements step / milestone / final tiers and the precedence `mandatory orchestrator boundary > Brain requested level > Codex local minimum`. Repository-specific verification commands come from the Project Profile / verification policy, not from globally hard-coded defaults. Codex may escalate verification; it may not silently downgrade the required level.
+### Already durable
 
-## Related Documentation
+- **Codex JobMap:** durable job/thread/turn mapping plus `taskId / stepId / identity` binding; M7-C adds bounded `codex_recover`.
+- **Direct Local OperationState:** durable operation state for bounded edits/reconciliation.
+- **Legacy Task State:** versioned JSON, atomic temp-write + rename, `.bak` fallback, corruption fail-closed; retained as a proven persistence pattern.
 
-- [README](../README.md)
-- [README.zh-CN](../README.zh-CN.md)
-- [SKILL](../SKILL.md)
-- [CHANGELOG](../CHANGELOG.md)
-- [Development History](development-history.md)
+### Current blocking gap
 
----
+`GovernanceService` is currently instantiated from fresh in-memory state by the v0.2 runtime. Therefore executor execution may remain recoverable while Brain governance task/step/acceptance/evidence authority is lost across local runtime restart.
 
-## M6: Legacy IAB Isolation (v0.2 structure)
+This is the current post-M7 default-flip blocker. The accepted contract is [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md).
 
-As of v0.2 M6 the repository distinguishes two runtime paths explicitly:
+## 9. Brain Continuity target contract — accepted, implementation pending
 
-### Canonical v0.2
+The accepted contract requires, at minimum:
 
-ChatGPT -> Custom MCP App -> Secure Tunnel -> local MCP (v0.2 MCP server) -> Router / Governance -> Direct Local (read/search/edit/verify) or Codex App Server
+- versioned durable canonical Governance state under the existing `dataRoot`;
+- atomic persistence + known-good backup + corruption/future-schema fail-closed behavior;
+- bounded semantic project/task recovery (`not_found` / unique / `ambiguous`), never “resume most recent” guessing;
+- Parent authority generation/fencing so a replaced/stale Parent cannot issue later mutations;
+- Parent takeover that does not duplicate/cancel an already-valid delegated Codex execution;
+- one canonical local Governance writer per namespace;
+- bounded Context Capsule generation for replacement Brain sessions;
+- capability rediscovery after re-entry;
+- proof-reuse cache loss may only force conservative re-verification, never implicit PASS;
+- isolated restart/conversation-re-entry dogfood with zero manual internal-ID/RESULT relay.
 
-- Production runtime: src/transport/brain-local.js + scripts/v0.2-start.mjs (/mcp, /healthz, /readyz).
-- Canonical import closure does NOT include src/legacy/** (enforced by test/legacy/canonical-import-isolation.test.js).
-- Canonical MCP/Router/Governance/Codex-AppServer path: src/mcp/**, src/router/**, src/local/**, src/executor/app-server-*, src/state/handoff.js, src/governance/index.js.
+Until implementation and real dogfood pass, the operational default remains Alpha.3 legacy IAB.
 
-### Legacy (Alpha.4 IAB / detached runtime)
+## 10. Mutation / authority scopes
 
-IAB / Alpha.4 browser transport (Codex in-app browser) -> explicit legacy fallback (feature frozen)
+Do not collapse distinct ownership scopes:
 
-- Legacy modules isolated under src/legacy/: iab-transport, atomic-turn, direct-mode, direct-run-controller, loop-controller, codex-executor, task-manager, task-service, worker-client.
-- Reusable non-browser logic extracted (isPlaceholder / extractConversationId -> src/text-utils.js) so the canonical closure does not depend on the browser composer.
-- Explicit selection: the legacy launcher requires BRAIN_COMMAND_LEGACY=1 (or legacyOptIn: true) to run; the path is non-canonical / experimental.
-- IAB is NOT deleted. Removing it after a successful real-project dogfood (M7) will be a separate decision.
-- M7 will perform real-project dogfood and consider the v0.2 default flip.
+1. **Parent authority** — which Parent Brain generation may issue new governance mutations.
+2. **Governance runtime writer** — which local runtime may persist a Governance namespace.
+3. **Resource mutation owner** — which executor may mutate a particular workspace/resource.
 
+Current safety policy remains: one authoritative writer per mutable resource. Read-only work should not acquire write ownership.
 
-## Reporting truth (M7)
+No distributed lock manager is part of the current v0.2 contract.
 
-Dogfood / orchestrator reports must never claim a remote branch exists when it has
-not been pushed. Report only what is actually observable:
+## 11. Released Alpha.3 legacy path
 
-- If a feature branch was pushed to the remote, report its ref as
-  `remoteBranch=<name>` / `origin/<name>`.
-- If the branch was NOT pushed (e.g., the round made local-only changes and did not
-  push), report `remoteBranch=null` and state explicitly `not created` /
-  `not pushed`.
+The latest formal release is still `v0.1.0-alpha.3`.
 
-Do not fabricate an `origin/<branch>` ref for an unpushed branch; this is a truth
-contract, not a formatting preference. A subsequent round that does push may then
-update the report to the real remote ref.
+Its operational default is the feature-frozen IAB Direct Brain Loop, whose browser/worker implementation is isolated under `src/legacy/` and whose released instructions are preserved in [`../SKILL.md`](../SKILL.md) and `skills/brain-command/SKILL.md`.
 
----
+This fallback remains intentionally present until a later explicit operational-default decision. v0.2 architecture acceptance and M7 completion did **not** automatically delete or flip the released path.
 
-## M7-C: Durable Codex Execution Binding + Bounded Recovery Lookup (v0.2)
+Historical implementation detail is kept in [`development-history.md`](development-history.md).
 
-M7-C adds the minimal durable mechanism that lets a later ChatGPT Brain session recover
-the *correct* prior Codex execution from a natural-language / durable orchestration
-identity, without the user ever having to save or relay `workspaceId`, `jobId`,
-`threadId`, or `turnId`. It is additive on top of the M7 mutation-lifecycle and
-permission hardening already on `main` (R2–R6): recovery reuses the authoritative
-`reconcile()` / `resume()` path and never force-unlocks.
+## 12. Current boundaries / non-goals
 
-### Durable execution binding
+For the current Brain Continuity hardening, these are explicit non-goals:
 
-Each `JobMap` entry persists `jobId -> { threadId, turnId, state, mutationUnitId,
-turnUnits, accessMode, ... }` under the runtime data-root (`runtime/job-maps`), which
-survives a Local MCP process restart. M7-C adds a durable orchestration binding to the
-same entry:
+- multi-Child scheduler / recursive Child tree;
+- generic work DAG;
+- multiple authoritative Parent Brains / consensus;
+- distributed database/workflow service/lock manager;
+- Codex Desktop sidebar integration;
+- rich execution dashboard;
+- “resume most recent” recovery heuristics.
 
-- `taskId`   — durable governance task identity.
-- `stepId`   — durable governance step identity.
-- `identity` — natural-language task identity / label supplied by Brain.
+Future multi-workstream support, if justified by real long-running projects, should persist the **workstream** rather than treating a Child conversation as durable identity.
 
-`codex_start` (and `codex_continue`, when a new step is being continued) now accept
-optional `taskId` / `stepId` / `identity` and persist them with the job, so the binding
-is durable and survives session/turn loss. The App Server thread/turn identity remains
-authoritative and is never duplicated.
+## 13. Documentation authority
 
-### Bounded recovery lookup (`codex_recover`)
+Use the following order when determining current truth:
 
-`codex_recover` is a single bounded recovery lookup exposed on the MCP surface (no
-generic `codex_list`). It takes `workspaceId` plus at least one of `taskId` / `stepId` /
-`identity`, and returns **exactly one** bound job, or fails closed with a structured
-error:
+1. GitHub current code / PR / CI / release state — implementation truth.
+2. [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) — current project phase and active gate.
+3. [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md) — current normative routing/executor policy.
+4. This file — current technical architecture reference.
+5. [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md) — accepted continuity contract pending implementation.
+6. Historical RFCs / [`development-history.md`](development-history.md) — design/evidence history, not automatic current operating truth.
 
-- `not_found` — no job is bound to the supplied orchestration identity.
-- `ambiguous` — more than one job in the requested workspace matches; no candidate is
-  selected (no "most recent" guess).
-- `wrong_workspace` — the matching job(s) belong to a different workspace;
-  cross-workspace recovery is refused.
-- `stale` — the bound job requires reconciliation (`recovery_required` / no thread /
-  unreachable) and authoritative reconciliation via `reconcile()` / `resume()` failed
-  (e.g. no thread identity, ambiguous turn state, or a foreign mutation owner). The job
-  is left in `recovery_required`; nothing is force-released.
-
-On a successful match, `codex_recover` returns the same structured state as `codex_get`.
-If the matched job needs reconciliation, it is reconciled authoritatively via the
-existing `resume()` path (`thread/resume` + `thread/read`), which never issues a
-duplicate `thread/start` or `turn/start` and never force-unlocks an owner.
-
-### Safety semantics preserved
-
-- No generic force-unlock: recovery only ever uses the authoritative reconcile
-  (`resume()`); a failed reconcile or a foreign mutation-owner conflict fails closed.
-- No heuristic recent-job selection: ambiguity, wrong-workspace, and unreconcilable
-  bindings are deterministic errors.
-- `codex_get` / `codex_continue` / `codex_interrupt` / `codex_reconcile` /
-  `codex_respond_approval` semantics and the governance / mutation-owner boundaries are
-  unchanged.
-- The Codex RESULT is only an evidence candidate; ChatGPT Brain independently verifies
-  GitHub / CI afterward.
-
-### Tests
-
-- `test/executor/job-map.test.js` — `findByBinding` exact identity matching and binding
-  persistence.
-- `test/executor/app-server-executor.test.js` — recover exact / ambiguous /
-  wrong-workspace / stale / foreign-owner plus authoritative reconcile-after-restart.
-- `test/mcp/codex-facade.test.js` — `codex_recover` MCP facade behavior incl. restart
-  reconcile and no-regression of ownership.
+See [`README.md`](README.md) for the complete docs index and supersession notes.
