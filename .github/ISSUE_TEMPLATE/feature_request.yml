@@ -8,14 +8,15 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for suggesting. This project is **Alpha**; roadmap items are planned, not promised.
-        Please read README.md and docs/architecture.md where relevant.
+        Thanks for suggesting. This project is **Alpha** and follows an evidence-first, capability-first design.
+        Please read README.md, PROJECT_STATUS.md, CAPABILITY_ROUTING.md, and docs/architecture.md where relevant.
+        New complexity should solve a concrete observed problem rather than pre-build a hypothetical agent framework.
 
   - type: textarea
     id: problem
     attributes:
       label: Problem / use case
-      description: What concrete problem does this proposal solve?
+      description: What concrete user or orchestration problem does this proposal solve? Include real evidence or a reproducible workflow when available.
     validations:
       required: true
 
@@ -28,10 +29,18 @@ body:
       required: true
 
   - type: textarea
+    id: native_first
+    attributes:
+      label: Existing capability check
+      description: Can ChatGPT Native, a connected App, Direct Local, Codex App Server, or an existing project primitive already solve this? Explain why a new project-level capability is still needed.
+    validations:
+      required: true
+
+  - type: textarea
     id: fit
     attributes:
       label: Why it belongs in this project
-      description: How does it fit the ChatGPT-planner / Codex-executor orchestration model?
+      description: How does it fit the ChatGPT-authoritative-Brain / capability-routing / evidence / governance model?
     validations:
       required: true
 
@@ -39,18 +48,30 @@ body:
     id: impact
     attributes:
       label: Architecture impact
-      description: What does this affect?
+      description: What does this primarily affect?
       options:
-        - Control protocol
-        - Task State / recovery
-        - Conversation binding
-        - Codex execution / runtime
-        - Context providers / redaction
-        - Public API
-        - Documentation / tooling only
+        - ChatGPT Native / connected-app capability
+        - Runtime capability discovery / routing
+        - Local MCP / Secure Tunnel
+        - Direct Local
+        - Codex App Server executor
+        - Governance / acceptance / evidence
+        - Brain Continuity / durable state / re-entry
+        - Mutation ownership / permissions
+        - Observability / user experience
+        - Released Alpha.3 compatibility
+        - Public API / documentation / tooling only
         - Unsure
     validations:
       required: true
+
+  - type: textarea
+    id: complexity
+    attributes:
+      label: Complexity / non-goals
+      description: What is the smallest useful version? What should explicitly remain out of scope?
+    validations:
+      required: false
 
   - type: textarea
     id: alternatives
@@ -72,5 +93,5 @@ body:
       label: Acknowledgement
       description: Please confirm.
       options:
-        - label: I understand that a feature request is not a commitment or delivery promise.
+        - label: I understand that a feature request is not a roadmap commitment and may be rejected or deferred if current capabilities already solve the problem.
           required: true
