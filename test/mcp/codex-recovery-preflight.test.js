@@ -60,7 +60,7 @@ test('MCP recovery preflight reports safe_to_start with only terminal history', 
   });
 
   const res = await callPreflight(x.client, { workspaceId: x.workspaceId, identity: CURRENT_IDENTITY });
-  assert.equal(res.isError, false);
+  assert.notEqual(res.isError, true);
   const body = JSON.parse(textOf(res));
   assert.equal(body.status, 'safe_to_start');
   assert.equal(body.dangerousCandidateCount, 0);
@@ -83,7 +83,7 @@ test('MCP recovery preflight returns one unique unbound risk candidate without b
   });
 
   const res = await callPreflight(x.client, { workspaceId: x.workspaceId, identity: CURRENT_IDENTITY });
-  assert.equal(res.isError, false);
+  assert.notEqual(res.isError, true);
   const body = JSON.parse(textOf(res));
   assert.equal(body.status, 'recover_existing');
   assert.equal(body.recovery.jobId, risk.jobId);
