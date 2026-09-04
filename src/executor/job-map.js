@@ -3,6 +3,12 @@
 // executor acknowledges a successful start to the caller, so a lost local response
 // can be reconciled by identity rather than duplicating a turn.
 //
+// Since v0.2 M7-C each job entry also carries a durable orchestration binding
+// (taskId, stepId, identity) so a later Brain session can recover the correct prior
+// Codex execution from a natural-language / durable orchestration identity without
+// manually preserving the internal job/thread/turn ids. The binding is persisted with
+// the job and survives Local MCP process restart (see AppServerExecutor.recover).
+//
 // Storage: under the existing runtime data-root (runtime/job-maps).
 // No secrets. Atomic write (tmp + rename). No distributed locking.
 
@@ -17,6 +23,25 @@ export function makeMutationUnitId() { return crypto.randomUUID(); }
 
 function jobMapDir(dataRoot) { return path.join(runtimePaths(dataRoot).runtime, 'job-maps'); }
 
+// Baseline durable job entry. Binding fields default to null and are set when the
+// caller supplies a durable orchestration identity to start/continue.
+function defaultJobEntry(jobId) {
+  return {
+    jobId,
+    taskId: null,
+    stepId: null,
+    identity: null,
+    threadId: null,
+    turnId: null,
+    mutationUnitId: null,
+    workspaceRoot: null,
+    workspaceId: null,
+    state: 'none',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
 export class JobMap {
   constructor({ dataRoot = null } = {}) {
     this.dataRoot = dataRoot || runtimePaths().dataRoot;
@@ -28,8 +53,7 @@ export class JobMap {
 
   create() {
     const jobId = makeJobId();
-    const entry = { jobId, threadId: null, turnId: null, state: 'none', createdAt: Date.now(), updatedAt: Date.now() };
-    return this.save(jobId, entry);
+    return this.save(jobId, defaultJobEntry(jobId));
   }
 
   save(jobId, entry) {
@@ -48,13 +72,26 @@ export class JobMap {
   }
 
   update(jobId, patch) {
-    const cur = this.load(jobId) || { jobId, threadId: null, turnId: null, state: 'none', createdAt: Date.now() };
+    const cur = this.load(jobId) || defaultJobEntry(jobId);
     return this.save(jobId, { ...cur, ...patch });
   }
 
   findByThread(threadId) {
     if (!threadId) return null;
     return this.list().find((j) => j.threadId === threadId) || null;
+  }
+
+  // Bounded identity lookup (v0.2 M7-C). Returns the jobs whose durable orchestration
+  // binding matches the supplied non-null identity fields. No workspace filtering and
+  // no 'most recent' ordering here: workspace membership + fail-closed semantics live in
+  // AppServerExecutor.recover, which never guesses.
+  findByBinding({ taskId = null, stepId = null, identity = null } = {}) {
+    return this.list().filter((j) => {
+      if (taskId != null && j.taskId !== taskId) return false;
+      if (stepId != null && j.stepId !== stepId) return false;
+      if (identity != null && j.identity !== identity) return false;
+      return true;
+    });
   }
 
   list() {

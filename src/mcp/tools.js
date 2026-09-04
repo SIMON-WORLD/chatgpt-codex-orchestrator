@@ -179,18 +179,32 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
 
   // ---- Codex Delegate ------------------------------------------------------
   if (appServerExecutor) {
-    server.registerTool('codex_start', { description: 'Start a Codex App Server thread + turn in a workspace. accessMode is required (read_only | workspace_write); a mutation delegation must not silently default to read-only. networkAccess is an optional minimal job-level flag (default false) for operations like git push, and is never granted to every job.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, prompt: z.string(), accessMode: z.enum(['read_only', 'workspace_write']), networkAccess: z.boolean().optional() }) },
-      async ({ workspaceId, prompt, accessMode, networkAccess = false }) => { try { const root = assertSameWorkspace(workspaceRegistry, workspaceId, null); return text(await appServerExecutor.start({ prompt, cwd: root, accessMode, workspaceRoot: root, workspaceId, networkAccess })); } catch (e) { return errText(e.message); } });
+    server.registerTool('codex_start', { description: 'Start a Codex App Server thread + turn in a workspace. accessMode is required (read_only | workspace_write); a mutation delegation must not silently default to read-only. networkAccess is an optional minimal job-level flag (default false) for operations like git push, and is never granted to every job.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, prompt: z.string(), accessMode: z.enum(['read_only', 'workspace_write']), networkAccess: z.boolean().optional(), taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }) },
+      async ({ workspaceId, prompt, accessMode, networkAccess = false, taskId, stepId, identity }) => { try { const root = assertSameWorkspace(workspaceRegistry, workspaceId, null); return text(await appServerExecutor.start({ prompt, cwd: root, accessMode, workspaceRoot: root, workspaceId, networkAccess, taskId, stepId, identity })); } catch (e) { return errText(e.message); } });
     server.registerTool('codex_get', { description: 'Read structured state + bounded result + pending approvals for a Codex job.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string() }) },
       async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.get({ jobId })); } catch (e) { return errText(e.message); } });
-    server.registerTool('codex_continue', { description: 'Continue the same Codex thread.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string(), instruction: z.string() }) },
-      async ({ workspaceId, jobId, instruction }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.continue({ jobId, instruction })); } catch (e) { return errText(e.message); } });
+    server.registerTool('codex_continue', { description: 'Continue the same Codex thread.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string(), instruction: z.string(), taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }) },
+      async ({ workspaceId, jobId, instruction, taskId, stepId, identity }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.continue({ jobId, instruction, taskId, stepId, identity })); } catch (e) { return errText(e.message); } });
     server.registerTool('codex_interrupt', { description: 'Interrupt a running Codex turn.', annotations: { readOnlyHint: false, destructiveHint: false }, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string() }) },
       async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.interrupt({ jobId })); } catch (e) { return errText(e.message); } });
 
     server.registerTool('codex_reconcile', { description: 'Authoritatively reconcile a Codex job after process death / connection loss. Uses thread/resume + thread/read (never creates a new turn, never a generic force-unlock). Terminal -> release writer; inProgress -> retain writer; ambiguous -> fail closed.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string() }) },
       async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.reconcile({ jobId })); } catch (e) { return errText(e.message); } });    server.registerTool('codex_respond_approval', { description: 'Respond to a pending Codex approval.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string(), approvalId: z.string(), decision: z.enum(['approve', 'deny']) }) },
       async ({ workspaceId, jobId, approvalId, decision }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.respondApproval({ jobId, approvalId, decision })); } catch (e) { return errText(e.message); } });
+    server.registerTool('codex_recover', {
+      description: 'Bounded recovery lookup: resolve the single Codex job bound to a durable orchestration identity (taskId/stepId/identity) in a workspace. Fails closed on not_found / ambiguous / wrong_workspace / stale and never guesses most-recent. May authoritatively reconcile a recovery_required job.',
+      annotations: R,
+      inputSchema: z.object({ workspaceId: workspaceIdSchema, taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }),
+    }, async ({ workspaceId, taskId, stepId, identity }) => {
+      try {
+        if (!taskId && !stepId && !identity) throw new WorkspaceError('codex_recover requires at least one of taskId, stepId, or identity');
+        const root = assertSameWorkspace(workspaceRegistry, workspaceId, null);
+        return text(await appServerExecutor.recover({ workspaceId, workspaceRoot: root, taskId, stepId, identity }));
+      } catch (e) {
+        if (e && e.name === 'RecoveryError') return { content: [{ type: 'text', text: JSON.stringify(e.toJSON()) }], isError: true };
+        return errText(e.message);
+      }
+    });
   }
 
   return server;

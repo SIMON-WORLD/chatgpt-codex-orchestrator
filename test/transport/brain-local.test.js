@@ -12,12 +12,24 @@ const FAKE_TUNNEL = path.join(__dirname, '..', '..', 'test-fixtures', 'tunnel', 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 async function waitFor(fn, timeout = 4000) { const s = Date.now(); while (Date.now() - s < timeout) { if (await fn()) return true; await sleep(50); } return false; }
 
+// The v0.2 runtime reads ambient TUNNEL_* / V02_* / CODEX_BIN env via loadV02Config
+// (env precedence is ABOVE explicit overrides). A live production runtime can leave
+// these set, which would otherwise break the hermetic tunnel tests. Clear them for the
+// duration of config construction, then restore.
+const LEAKY_ENV = ['V02_PORT','V02_HOST','V02_WORKSPACE_ROOT','CODEX_BIN',
+  'TUNNEL_CLIENT_EXECUTABLE','TUNNEL_PROFILE','TUNNEL_PROFILE_DIR','TUNNEL_LOCAL_MCP_URL','TUNNEL_HEALTH_URL'];
+function withCleanEnv(fn) {
+  const saved = {};
+  for (const k of LEAKY_ENV) { saved[k] = process.env[k]; delete process.env[k]; }
+  try { return fn(); } finally { for (const k of LEAKY_ENV) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } }
+}
+
 function makeRuntime(opts = {}) {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bl-'));
   const workspace = path.join(dataRoot, 'repo');
   fs.mkdirSync(workspace, { recursive: true });
   fs.writeFileSync(path.join(workspace, 'a.txt'), 'hello', 'utf8');
-  const config = loadV02Config({ port: 0, workspaceRoot: workspace, dataRoot, ...opts });
+  const config = withCleanEnv(() => loadV02Config({ port: 0, workspaceRoot: workspace, dataRoot, ...opts }));
   return createBrainLocalRuntime(config);
 }
 

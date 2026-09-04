@@ -61,3 +61,34 @@ test('job map persists purely in data root (no secrets)', () => {
   const raw = fs.readFileSync(path.join(tmpRoot, 'runtime', 'job-maps', jobId + '.json'), 'utf8');
   assert.ok(!/sk-|api[_-]?key|bearer|password|token/i.test(raw));
 });
+
+test('findByBinding matches exact durable orchestration identity', () => {
+  const map = makeMap();
+  const a = map.create().jobId;
+  map.update(a, { taskId: 't1', stepId: 's1', identity: 'build' });
+  const b = map.create().jobId;
+  map.update(b, { taskId: 't2', stepId: 's2', identity: 'other' });
+  assert.equal(map.findByBinding({ taskId: 't1' }).length, 1);
+  assert.equal(map.findByBinding({ taskId: 't1' })[0].jobId, a);
+  assert.equal(map.findByBinding({ taskId: 't1', stepId: 's1' })[0].jobId, a);
+  assert.equal(map.findByBinding({ identity: 'build' })[0].jobId, a);
+  assert.equal(map.findByBinding({ taskId: 'nope' }).length, 0);
+  assert.equal(map.findByBinding({ taskId: 't1', stepId: 's2' }).length, 0);
+});
+
+test('findByBinding with no identity fields returns all persisted jobs (bounded by caller)', () => {
+  const map = makeMap();
+  map.create();
+  map.create();
+  assert.ok(map.findByBinding({}).length >= 2);
+});
+
+test('binding identity survives save/load round-trip', () => {
+  const map = makeMap();
+  const id = map.create().jobId;
+  map.update(id, { taskId: 'T', stepId: 'S', identity: 'label' });
+  const loaded = map.load(id);
+  assert.equal(loaded.taskId, 'T');
+  assert.equal(loaded.stepId, 'S');
+  assert.equal(loaded.identity, 'label');
+});

@@ -54,7 +54,7 @@ export { createDirectRun, DIRECT_ALPHA4_MODE, assertDirectAlpha4Mode } from './l
 
 // --- v0.2 M1: Codex App Server executor (additive, non-default) ---------------
 export { AppServerClient, DEFAULT_APP_SERVER_LISTEN, DEFAULT_CODEX_BIN } from './executor/app-server-client.js';
-export { AppServerExecutor, TERMINAL_TURN_STATES } from './executor/app-server-executor.js';
+export { AppServerExecutor, TERMINAL_TURN_STATES, RecoveryError } from './executor/app-server-executor.js';
 export { JobMap, makeJobId } from './executor/job-map.js';
 export { normalizeApproval, isApprovalMethod, mapDecision, approvalKind, SUPPORTED_BINARY_METHODS, APPROVAL_DECISIONS, ApprovalError, UnsupportedApprovalMethodError } from './executor/approval.js';
 export { MutationOwner, MutationOwnerError, MUTATION_OWNERS } from './state/mutation-owner.js';
