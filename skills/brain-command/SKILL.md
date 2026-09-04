@@ -1,11 +1,13 @@
 ---
 name: brain-command
-description: "Canonical launcher for the ChatGPT-command orchestrator. Default = Direct Brain Loop: the current Codex agent talks to ChatGPT via the built-in browser, executes the Brain TASKs itself, and runs the PUBLISH -> publication transaction -> external readback -> terminal DONE lifecycle. Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as the local executor, e.g. '用 ChatGPT 指挥模式完成...', '让 ChatGPT 指挥 Codex...', or 'Use ChatGPT as the brain and Codex as executor...'. Default Brain = ChatGPT, default Executor = the current Codex agent. The detached worker/nested-Codex runtime is kept as legacy/experimental. Released Alpha.3 operational default = legacy IAB Direct Brain Loop (feature-frozen); v0.2 canonical architecture (ChatGPT Custom MCP App -> Secure Tunnel -> local MCP -> Router/Governance -> Direct Local or Codex App Server) is NOT yet the CLI/Skill default (M7 decides the flip)."
+description: "Canonical launcher for the currently released ChatGPT-command orchestrator. Default = Direct Brain Loop: the current Codex agent talks to ChatGPT via the built-in browser, executes the Brain TASKs itself, and runs the PUBLISH -> publication transaction -> external readback -> terminal DONE lifecycle. Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as the local executor. Default Brain = ChatGPT, default Executor = the current Codex agent. The detached worker/nested-Codex runtime is kept as legacy/experimental. Released Alpha.3 operational default = legacy IAB Direct Brain Loop (feature-frozen); v0.2 capability-first architecture completed M7 real-project dogfood but is NOT yet the CLI/Skill default because the post-M7 Brain Continuity/default-policy gate remains open."
 ---
 
 # brain-command (Direct Brain Loop)
 
-The default production path is the **Direct Brain Loop**.
+The default **released** production path is the **Direct Brain Loop**.
+
+> **Status boundary:** this Skill is the operational contract for the released Alpha.3 fallback. Current v0.2 project status and architecture live in `PROJECT_STATUS.md`, `CAPABILITY_ROUTING.md`, `docs/architecture.md`, and `docs/rfc-v0.2-brain-continuity.md`. The legacy mechanics below must not be read as the canonical v0.2 architecture.
 
 ```
 User
@@ -33,14 +35,15 @@ Trigger on natural-language requests such as:
 
 Do **not** trigger for ordinary local-only coding.
 
-## Architecture status (M6)
+## Architecture status (post-M7)
 
 These states are distinct and must not be conflated:
 
 1. **Released Alpha.3 operational default** — the legacy IAB **Direct Brain Loop** (current Codex agent + built-in IAB + ChatGPT). This is what `$brain-command` runs today; it is **feature-frozen** and NOT deleted.
-2. **v0.2 canonical architecture** — `ChatGPT (Custom MCP App)` → `OpenAI Secure Tunnel` → `local MCP` → `Router/Governance` → `Direct Local` or `Codex App Server`. This is the new canonical path; it is **NOT yet the CLI/Skill default**.
-3. **M6** — the IAB / Alpha.4 implementation has been **structurally isolated** under `src/legacy/` and is feature-frozen.
-4. **M7** — the **real-project dogfood + operational default flip** decision has **not** happened yet. Until then v0.2 must not be claimed as the default entry for all CLI/Skill invocations.
+2. **v0.2 canonical architecture** — `ChatGPT (Custom MCP App)` → `OpenAI Secure Tunnel` → `local MCP` → `Router/Governance` → `Direct Local` or `Codex App Server`. This is the active capability-first development path; it is **NOT yet the CLI/Skill default**.
+3. **M6** — the IAB / Alpha.4 implementation was **structurally isolated** under `src/legacy/` and is feature-frozen.
+4. **M7** — Native-only, Codex-required, and Hybrid real-project dogfood are **COMPLETE / ACCEPTED**.
+5. **Post-M7 default-policy review** — operational default flip is **DEFERRED** while Brain Continuity / Governance durability implementation and real re-entry dogfood remain pending. Until that gate closes and the Brain explicitly flips policy, v0.2 must not be claimed as the default entry for all CLI/Skill invocations.
 
 `src/index.js` is a **compatibility barrel**; it is **not** the canonical v0.2 runtime import root. Canonical v0.2 production entries are `scripts/v0.2-start.mjs`, `src/transport/brain-local.js`, and the direct v0.2 modules under `src/{mcp,router,governance,local,executor,state,transport}`.
 
@@ -57,7 +60,6 @@ Established once per task; the Brain does not repeat these defaults inside every
 - No force push or published-history rewrite.
 - Publish only after `PUBLISH` + publication gate; `DONE` is terminal.
 
-
 ## Acceptance, proof ledger & verification
 
 - `acceptance[]` on a structured `TASK` / `REVISE` is a machine contract. Every `RESULT` evidence item must carry an `acceptanceId`.
@@ -68,13 +70,13 @@ Established once per task; the Brain does not repeat these defaults inside every
 ## Protocol integrity & authority
 
 - **Executor / Machine / Brain authority is explicit.** `executorStatus` (success | failure | blocked | unknown) is reported by the Executor; the machine computes `machineGate` (pass | fail | pending); only a subsequent valid Brain control changes `brainAcceptance` (pending | accepted | revise | rejected). `markStepReviewed` / `markMachineEvidenceComplete` marks machine evidence completion, NOT Brain acceptance. A milestone is globally accepted only when executorStatus is acceptable AND machineGate=pass AND the Brain explicitly accepts/advances it.
-- **Structured Brain envelope is mandatory (canonical).** Every actionable Brain response must carry one canonical envelope `{ runId, controlId, sequence, control, stepId, instruction, acceptance, ackResultId?, reviseDelta?, askUser? }`. Brain may write explanatory prose, but if no valid envelope exists, send ONE format-repair request to the SAME conversation (``Restate the immediately previous control in canonical structured form only. Do not replan or change its instruction/acceptance.``) and do NOT execute until it parses. Legacy prose parsing is only an explicit compatibility mode, not canonical Direct Mode.
+- **Structured Brain envelope is mandatory (canonical for this released Direct path).** Every actionable Brain response must carry one canonical envelope `{ runId, controlId, sequence, control, stepId, instruction, acceptance, ackResultId?, reviseDelta?, askUser? }`. Brain may write explanatory prose, but if no valid envelope exists, send ONE format-repair request to the SAME conversation (`Restate the immediately previous control in canonical structured form only. Do not replan or change its instruction/acceptance.`) and do NOT execute until it parses. Legacy prose parsing is only an explicit compatibility mode.
 - **Control / RESULT identity + monotonic cursor.** Every control has `runId` / `controlId` / `sequence`; every RESULT carries `runId` / `resultId` / `inReplyToControlId` / `sequence` / `stepId` / `payloadHash` / `executorStatus` / `machineGate` / `changed` / `evidence` / `blockers`. `sequence` strictly increases; only one outstanding control executes; RESULT must match the outstanding `controlId`; stale controls are rejected; already-processed controls are not re-executed; duplicate RESULT is idempotent; retransmission reuses the SAME `resultId` + `payloadHash`. Do not correlate by natural-language `stepId` alone.
 - **Piggyback ACK.** The next Brain control acknowledges the previous RESULT via `ackResultId` (`CONTROL c7 → RESULT r7 → CONTROL c8 {ackResultId: r7}`); when c8 is accepted, r7 is acknowledged. `provider.send(message, { nonce })` uses run/control/result correlation tokens so an old visible assistant reply cannot satisfy the current outbound turn.
-- **Evidence epistemic level.** Structured evidence carries `evidenceLevel` (observed | inferred | user_verified | unobservable) with optional `requiredEvidenceLevel`; inferred cannot satisfy an observed requirement, user_verified may satisfy an acceptance explicitly allowing it, and unobservable is never silently converted to pass. The Executor must not present inference as observed runtime fact.
+- **Evidence epistemic level.** Structured evidence carries `evidenceLevel` (`observed | inferred | user_verified | unobservable`) with optional `requiredEvidenceLevel`; inferred cannot satisfy an observed requirement, user_verified may satisfy an acceptance explicitly allowing it, and unobservable is never silently converted to pass. The Executor must not present inference as observed runtime fact.
 - **Minimal durable Direct run ledger.** A small atomic JSON checkpoint under the configured Direct data root persists only machine state needed for safe resume (`runId`, conversation identity, control/result identity, accepted sequence, outstanding / lastSent / lastAcknowledged ids, processed ids, brainAcceptance, frozen decisions, publication summary, minimal metrics). It never persists prompts, transcripts, terminal logs, secrets, or credential values. On resume it is combined with envelopes visible in the SAME conversation and fails closed on disagreement.
 - **Standard ASK_USER envelope.** `ASK_USER` may carry `whyBlocked`, `minimalUserAction`, `readOnly`, `expectedFields`, `resumeControlId`; the human-facing question stays concise.
-- **Single browser-runtime owner.** A canonical Direct run owns exactly ONE IAB provider/transport; it does not probe IAB availability from ordinary node subprocesses or start a separate browser runtime. Only the trusted IAB runtime may determine `IABUnavailableError`; all adoption / send / read / recovery / rebind go through the canonical provider, and if the runtime is lost it uses the persisted binding + `reopenConversationFromBinding`-style recovery.
+- **Single browser-runtime owner.** A released Direct run owns exactly ONE IAB provider/transport; it does not probe IAB availability from ordinary node subprocesses or start a separate browser runtime. Only the trusted IAB runtime may determine `IABUnavailableError`; all adoption / send / read / recovery / rebind go through the canonical provider, and if the runtime is lost it uses the persisted binding + `reopenConversationFromBinding`-style recovery.
 - **Publication truth.** `PUBLISH` authorizes the publication action; `DONE` is terminal and never authorizes publishing. The run ledger records publication state (`strategy`, `prNumber`, `checksState`, `mergeSha`, `externalVerified`); PR-based workflows may remain Brain-directed (no generic PR platform is built here).
 
 ## Terminal lifecycle (PUBLISH before DONE)
@@ -116,7 +118,7 @@ not inspect the orchestrator implementation source during normal startup.**
 
 2. **Resolve repo.** Prefer, in order: an explicit repo/path the user gave; the current cwd if it is the target repo; otherwise `config.workspaceRoot` / the deterministic configured location. No broad recursive filesystem discovery.
 
-3. **Create the canonical Direct controller** inside the trusted Codex in-app-browser (iab) context (iab **only**; never Edge/Chrome/external browser, no fallback):
+3. **Create the canonical Direct controller for this released fallback** inside the trusted Codex in-app-browser (iab) context (iab **only**; never Edge/Chrome/external browser, no fallback):
 
    ```js
    const { createDirectRun, DIRECT_ALPHA4_MODE } = await import('<orchestratorRoot>/src/legacy/direct-run-controller.js');
@@ -141,13 +143,13 @@ not inspect the orchestrator implementation source during normal startup.**
 
 6. **Resume / delivery recovery is controller-owned.** On provider/composer/kernel failure, `await run.resume()` reloads the `DirectRunLedger`, reopens the SAME conversation binding, recovers the current run/control/result cursor, and retransmits the SAME frozen `resultId` + `payloadHash` only when it was sent but not yet acknowledged (no new resultId, no duplicate execution). Do NOT instruct the user to click/paste until bounded canonical recovery has failed. No daemon, no background worker.
 
-7. **Runtime provenance is self-reported.** `run.statusPacket()` returns `{ mode: 'direct-alpha4', orchestratorHead, runId, conversationId, conversationUrl, ledgerPath }`, and `run.metrics()` returns the active-run metrics (`brainTurns`, `taskCount`, `reviseCount`, `replanCount`, `askUserCount`, `publishCount`, `protocolRepairCount`, `staleControlRejectedCount`, `duplicateResultCount`, `resultRetransmitCount`, `deliveryAckTimeoutCount`, `manualInterventionCount`, `reusedProofCount`, `staleProofCount`, `verificationRuns`, …). Include the status packet in the dogfood report so it is obvious canonical Direct Mode actually ran.
+7. **Runtime provenance is self-reported.** `run.statusPacket()` returns `{ mode: 'direct-alpha4', orchestratorHead, runId, conversationId, conversationUrl, ledgerPath }`, and `run.metrics()` returns the active-run metrics (`brainTurns`, `taskCount`, `reviseCount`, `replanCount`, `askUserCount`, `publishCount`, `protocolRepairCount`, `staleControlRejectedCount`, `duplicateResultCount`, `resultRetransmitCount`, `deliveryAckTimeoutCount`, `manualInterventionCount`, `reusedProofCount`, `staleProofCount`, `verificationRuns`, …). Include the status packet in the dogfood report so it is obvious the released Direct Mode actually ran.
 
-**Do NOT** enter the `TaskService` / `TaskManager` / worker bootstrap / `LoopController` / `scripts/brain-command-launcher.mjs` legacy execution path — that is the legacy/experimental runtime, not the canonical Alpha.4 path. A normal `$brain-command` invocation must reach the Direct controller, not the legacy path.
+**Do NOT** enter the `TaskService` / `TaskManager` / worker bootstrap / `LoopController` / `scripts/brain-command-launcher.mjs` legacy detached execution path — that is the legacy/experimental runtime, not the released Alpha.3 Direct path. A normal `$brain-command` invocation must reach the Direct controller, not the detached path.
 
 ## Direct Mode guarantees
 
-`src/legacy/direct-mode.js` (`DIRECT_MODE_REQUIRES`) documents that the default path does **not** require:
+`src/legacy/direct-mode.js` (`DIRECT_MODE_REQUIRES`) documents that the released Direct path does **not** require:
 - worker bootstrap
 - a ready file
 - a nested Codex executor
@@ -163,38 +165,27 @@ By default `$brain-command <goal>` creates a **new** dedicated Brain conversatio
 continue an existing ChatGPT history conversation, adopt it explicitly (no new
 conversation is created; the same conversation is reused for the whole loop):
 
-- `$brain-command --conversation "<title>"`       — find an existing conversation by title.
+- `$brain-command --conversation "<title>"` — find an existing conversation by title.
 - `$brain-command --conversation-url https://chatgpt.com/c/<id>` — open that conversation URL.
-- `$brain-command --adopt-current`                — adopt the currently selected IAB conversation (explicit opt-in).
+- `$brain-command --adopt-current` — adopt the currently selected IAB conversation (explicit opt-in).
 
 Natural-language equivalents: `使用 ChatGPT 历史会话 '...' 作为 Brain`, `继续我之前的 ChatGPT 对话`, `接上已有 ChatGPT conversation`.
 
 ### Resolution priority (`provider.adoptConversation`)
 
-1. **conversationUrl / conversationId** — open the conversation URL and validate the real
-   `/c/<conversationId>`; on identity mismatch fail explicitly (no fallback).
-2. **title** — open `chatgpt.com`, use the existing login, locate a history conversation in the
-   ChatGPT UI (sidebar / search) by accessible name/text/ARIA and stable `a[href*="/c/"]`
-   selectors (never a fragile nth-child / UI index). Open it, capture the real `/c/<id>`,
-   and bind to the ID thereafter (not the title). Unique match -> open; no match -> report
-   without creating a new conversation; multiple matches -> `ASK_USER` / ambiguity (never guess).
-3. **explicit `--adopt-current`** — only when the user explicitly asks; reuses
-   `captureCurrentConversation()`.
+1. **conversationUrl / conversationId** — open the conversation URL and validate the real `/c/<conversationId>`; on identity mismatch fail explicitly (no fallback).
+2. **title** — open `chatgpt.com`, use the existing login, locate a history conversation in the ChatGPT UI (sidebar / search) by accessible name/text/ARIA and stable `a[href*="/c/"]` selectors (never a fragile nth-child / UI index). Open it, capture the real `/c/<id>`, and bind to the ID thereafter (not the title). Unique match -> open; no match -> report without creating a new conversation; multiple matches -> `ASK_USER` / ambiguity (never guess).
+3. **explicit `--adopt-current`** — only when the user explicitly asks; reuses `captureCurrentConversation()`.
 
 ### Login
 
-Reuse the existing ChatGPT session/cookies in the built-in browser. Do not pre-block on a
-possible login; only `ASK_USER` to sign in when a real login page / session-expired / no-access
-is detected.
+Reuse the existing ChatGPT session/cookies in the built-in browser. Do not pre-block on a possible login; only `ASK_USER` to sign in when a real login page / session-expired / no-access is detected.
 
 ### Takeover message
 
-After binding an existing conversation, send `DEFAULT_TAKEOVER_MESSAGE` from `src/legacy/direct-mode.js`
-(do **not** dump the full history — the conversation already owns it). Then enter the normal
-Direct Brain Loop. Persist `conversationId` / `conversationUrl` / `conversationTitle` in the
-minimal task state so a later resume reuses the same conversation directly.
+After binding an existing conversation, send `DEFAULT_TAKEOVER_MESSAGE` from `src/legacy/direct-mode.js` (do **not** dump the full history — the conversation already owns it). Then enter the normal released Direct Brain Loop. Persist `conversationId` / `conversationUrl` / `conversationTitle` in the minimal task state so a later resume reuses the same conversation directly.
 
-## Legacy / experimental runtime
+## Legacy / experimental detached runtime
 
 The detached runtime is **legacy / experimental**, not the default:
 - `scripts/brain-command-launcher.mjs` + `scripts/brain-command-worker.mjs` + `scripts/codex-worker-host.mjs`
@@ -202,11 +193,11 @@ The detached runtime is **legacy / experimental**, not the default:
 - `src/legacy/task-service.js` / `src/legacy/task-manager.js` / `src/legacy/worker-client.js`
 - durable recovery machinery
 
-These are retained for compatibility/experimental use and are not part of the canonical startup path.
+These are retained for compatibility/experimental use and are not part of the released Direct startup path or the canonical v0.2 architecture.
 
-## Provider abstraction (thin)
+## Provider abstraction (thin, released path)
 
-Only a thin contract is reserved for future providers; only **ChatGPT** is canonical today.
+Only a thin contract is reserved for future providers; only **ChatGPT** is canonical in the released Direct path.
 
 ```ts
 interface BrainProvider {
@@ -219,14 +210,14 @@ interface BrainProvider {
 }
 ```
 
-Canonical implementation: `ChatGPTBrowserProvider` (`createChatGPTBrowserProvider`), built on the built-in browser. Claude / DeepSeek / GLM are **not** implemented in this Batch.
+Released implementation: `ChatGPTBrowserProvider` (`createChatGPTBrowserProvider`), built on the built-in browser. This provider abstraction does not define the canonical v0.2 capability architecture.
 
-## Minimal state
+## Minimal state (released Direct path)
 
-Normal Direct Mode does not require a daemon. `newDirectTaskState` carries the machine governance state used by the loop, all **in-memory** (NOT persistent/durable): the acceptance registry, the proof ledger snapshot, and Direct run metrics (via `governance`), plus `taskId`, `repoDir`, `brainProvider`, `executor`, `conversationId`, `conversationUrl`, `conversationTitle`, `plan`, `currentStepId`, `completedSteps`, `evidenceLedger`, `publishPolicy`. State persistence must never block the normal run; complex crash recovery is a later enhancement, not a P0.
+The released Direct Mode's state model is part of the Alpha.3 fallback and must not be confused with the accepted v0.2 Brain Continuity contract. v0.2's current blocker specifically requires canonical Governance state to become durable across runtime/conversation re-entry before default flip.
 
-## Scope boundaries (current Batch)
+## Scope boundaries
 
-- Do not add: `execute.start` / `execute.poll`, nested Codex executor, a long-lived REPL driver, a recovery job protocol, or a new worker daemon architecture.
-- Do not delete the existing worker / TaskService / recovery code; keep it as legacy / experimental.
-- Do not start a second Codex session; the current Codex agent is the executor.
+- Do not add new complexity to the feature-frozen Alpha.3 fallback merely to solve v0.2 requirements.
+- Do not delete the existing worker / TaskService / recovery or IAB code before an explicit compatibility/removal decision.
+- Do not claim v0.2 is the default until the Brain Continuity gate passes and the Parent Brain explicitly accepts an operational-default flip.
