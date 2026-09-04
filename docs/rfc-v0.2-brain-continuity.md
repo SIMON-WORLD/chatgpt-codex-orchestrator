@@ -1,8 +1,8 @@
 # RFC: v0.2 Brain Continuity
 
-> Status: **PROPOSED — Post-M7 default-flip hardening**
+> Status: **ACCEPTED CONTRACT — implementation / real dogfood pending**
 >
-> This RFC records the current best-known design based on M7 dogfood and subsequent Parent Brain review. It is intentionally revisable: new production evidence may trigger `REPLAN`. Implementation has not yet been accepted merely because this document exists.
+> This RFC records the current best-known design based on M7 dogfood and subsequent Parent Brain review. It is intentionally revisable: new production evidence may trigger `REPLAN`. Acceptance of this contract does not accept any future implementation automatically.
 
 ## 1. Problem
 
