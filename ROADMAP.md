@@ -14,8 +14,9 @@
 | M5 — Secure Tunnel + Real ChatGPT E2E | **CLOSED** | ChatGPT Web/Desktop → local runtime → Direct/Codex 实链路 |
 | M6 — Legacy IAB Isolation | **CLOSED** | IAB / Alpha.4 implementation 隔离到 `src/legacy/` |
 | N3 — Capability-First Re-baseline | **CLOSED** | capability-first 已成为当前 operating model |
-| M7 — Real-Project Capability Routing Dogfood | **ACTIVE** | Native-only / Codex-required 已 PASS；Hybrid 待验证 |
-| M8 — RC / Release | **PENDING** | v0.2 candidate 最终独立验收、default policy 与 release decision |
+| M7 — Real-Project Capability Routing Dogfood | **CLOSED / ACCEPTED** | Native-only / Codex-required / Hybrid 全部 PASS |
+| Default-policy review | **ACTIVE / DEFERRED** | M7 evidence review 完成；Governance restart durability 为当前 blocker |
+| M8 — RC / Release | **PENDING** | default-policy gate 关闭后再进入 |
 
 ## N3 — 已接受基线
 
@@ -33,104 +34,87 @@ N3 冻结当前控制原则：
 
 规范性 policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。
 
-## M7 — 当前验收路径
+## M7 — ACCEPTED
 
 ### M7-A — Native-only
 
-ChatGPT 当前 runtime 已有 capability 足够完成任务时，应直接执行；不为了统一形式调用 Codex 或 Local MCP。
-
-核心指标：
-
-- `route = CHATGPT_NATIVE`
-- `Codex calls = 0`
-- `manual relay = 0`
-- Brain 重新获取真实 resource evidence 后验收
-
-**Attempt #1:** N3 control-plane docs — **PASS**。
+**PASS.** 真实 GitHub Native task 完成 evidence / mutation / PR / CI / merge；Codex calls = 0；Local MCP calls = 0；manual relay = 0。
 
 ### M7-B — Codex-required
 
-多文件 coding、unknown-root-cause debugging、refactor、shell-heavy / iterative tests 等持续本地 execution，应委托 Codex。
-
-核心指标：
-
-- `route = CODEX_DELEGATE`（或 HYBRID 的 Codex local leg）
-- real Codex execution
-- `manual relay = 0`
-- Brain 可自主 `REVISE`
-- mutation lifecycle / recovery / handoff 安全闭合
-- Brain 独立 review 真实 diff / tests / CI evidence
-
-**Attempt #1:** nested `.git` hygiene — **FAIL as product task / PASS as failure-discovery dogfood**；真实暴露 Codex write contract 与 mutation reconciliation P0。
-
-**Lifecycle hardening:** R1–R6 — **ACCEPTED** via PR #11。Contract 现包含 explicit accessMode、read-only non-writer semantics、durable turn↔unit identity、public `codex_reconcile`、identity-safe process-death recovery、foreign-owner fail-closed 与 cross-route regressions。
-
-**Attempt #2:** nested `.git` hygiene — **FAIL as product task / PASS as failure-discovery dogfood**；lifecycle/recovery 未再次成为 blocker，但真实暴露 Orchestrator requested `workspace_write` 与 Codex effective runtime permission 不一致。
-
-**Runtime-permission hardening:** R1–R3 — **ACCEPTED** via PR #13。Contract 现包含 credential-safe isolated profile、per-job sandbox/approval/network policy、authoritative `thread/settings/updated` effective evidence、pre-turn fail-closed verification、durable verified snapshot、exact approval/network matching、bounded writable-root verification，以及 real read-only / workspace-write App Server smoke。
-
-**Attempt #3:** nested `.git` hygiene — **PASS / ACCEPTED**。
-
-Accepted production evidence：
-
-- real Codex `workspace_write` execution；
-- explicit `networkAccess=true` for push path；
-- authoritative effective permission verification；
-- manual relay = 0；
-- target branch `dogfood/v0.2-nested-git-hygiene`；
-- implementation commit `daa5d96c3d87314a56a6f7685d4e7f735483a292`；
-- verification PR `SIMON-WORLD/agent-workspace-playbook#20`；
-- PR-triggered GitHub Actions run `33783730803` PASS，包含 repository hygiene、commit emails、task structure、index freshness 与 full tests；
-- Brain 独立 GitHub evidence reacquisition 后 ACCEPT / DONE；
-- target PR 保持 open / unmerged；无 release/version mutation。
-
-因此 **M7-B 已 CLOSED as accepted dogfood path**；不再运行 attempt #4。
-
-### M7-B observations — non-blocking
-
-以下 finding 来自真实 attempt #3，但不反向阻塞 M7-B correctness：
-
-- **Long-running Brain re-entry:** ChatGPT turn/UI 可早于约 16 分钟 Codex job 完成而 timeout；同一 job 后续真实 completed，说明 durability 有效但 progress/re-entry UX 不足。
-- **Codex Desktop thread visibility:** 独立 App Server backend 的 thread 不一定显示在 Codex Desktop sidebar；需要后续 upstream/product capability 调查与可观测性设计。
-- **Custom App conversation binding:** Refresh 后部分既有 ChatGPT conversation 出现 tool discovery / invocation 不一致，新会话可正常使用；暂作为 product-integration observation。
-
-这些 observation 进入后续 evidence review / REPLAN candidate，不自动产生新的 permission/lifecycle hardening。
+**PASS.** 通过 `agent-workspace-playbook` nested `.git` hygiene 真实任务完成 Codex-required dogfood。前两次 attempt 分别暴露并推动 mutation-lifecycle hardening 与 runtime-permission hardening；attempt #3 使用真实 Codex workspace-write execution、tests、commit、push 与 Brain independent GitHub/CI verification 成功闭环。
 
 ### M7-C — Hybrid
 
-**NEXT.**
+**PASS.** 同一逻辑任务真实同时需要：
 
-ChatGPT Product Capability 与 Local Capability Plane 必须同时参与同一逻辑任务：
+`ChatGPT Native investigation / architecture decision → CODEX_DELEGATE implementation → ChatGPT Native diff / PR / CI independent acceptance`
 
-`ChatGPT 调查/定案 → Local Executor 执行必要实现 → ChatGPT 重新获取 GitHub/Web/local evidence → ACCEPT / REVISE`
+M7-C 解决 M7-B 长时 execution 后的 Brain re-entry discovery gap：
 
-`HYBRID` 是 composition route，不是 mutation owner。
+- durable orchestration binding (`taskId / stepId / identity`)；
+- bounded `codex_recover`；
+- exact unique-match recovery；
+- no generic `codex_list`；
+- no most-recent guessing；
+- no generic force unlock；
+- no-match / ambiguity / wrong-workspace / stale / foreign-owner fail closed；
+- Local MCP restart recovery tests；
+- PR #16 + PR-triggered CI #125 PASS；
+- accepted merge `994185503f7cbbf1ed8cd3d1276d8c5654e893f2`。
 
-M7-C 至少需要一次真实项目任务，而且：
+因此 M7 real-project routing dogfood 已完成：
 
-- Native leg 必须承担真实必要工作（例如外部/GitHub evidence 调查、架构或产品决策），不能只是装饰性 review；
-- Local leg 必须承担 Native capability 不适合完成的本地 execution；
-- final acceptance 仍由 Brain 独立重新获取 evidence；
-- 不能只是把 M7-A / M7-B 结果写进一篇文档来冒充 Hybrid。
+- `CHATGPT_NATIVE` ✅
+- `CODEX_DELEGATE` ✅
+- `HYBRID` ✅
 
-具体 M7-C task 由新的真实 evidence 决定，不在 Roadmap 里预先锁死实现方案。
+## Operational default policy review
 
-## Default policy decision
+M7 完成不自动触发 v0.2 default flip。Brain 已重新评估 M7 dogfood evidence。
 
-v0.2 operational default flip 不是自动发生的 milestone side effect。只有 M7-A / M7-B / M7-C 的真实 dogfood evidence 足以说明 capability-first 路径稳定、可恢复且不需要用户做人肉 API 后，才由 Brain 单独做 default-policy decision。
+### Current decision
 
-在该 decision 前，应同时重新评估 M7-B 暴露的 long-running Brain re-entry、Codex Desktop execution visibility 与 Custom App conversation binding observations，判断哪些属于上游产品限制、哪些需要 Orchestrator 自身 REPLAN。
+**DEFER operational default flip.**
+
+理由：M7-C dogfood 产生了新的直接 blocker evidence——Local MCP/runtime restart 后 Governance state 可能回到 fresh state；当前 `GovernanceService` 的 task/step/acceptance/evidence/Brain-acceptance lifecycle 仍主要是 in-memory，而当前 operating policy 要求 Local Capability Plane 的 Governance Service 承担持久控制与证据记录。
+
+这不是 M7-C failure。M7-C 的 durable Codex execution recovery 已通过；问题是更上一层的 Brain governance authority 在 runtime restart 后尚未形成同等级的 durable re-entry contract。
+
+### Required next gate: Governance restart durability
+
+下一次 PLAN 应 Evidence-first 调查现有 Governance / dataRoot / durable state patterns，并选择最小正确实现。验收目标至少包括：
+
+- Local MCP/runtime restart 后，能够恢复同一 logical task/step 的治理状态；
+- required acceptance / evidence / executorStatus / machineGate / brainAcceptance 不因 restart 静默丢失或被重置成可信 fresh state；
+- 已 terminal `DONE` 的 task 不因 restart 被错误重新执行；
+- active/ambiguous/recovery-required state fail closed；
+- 不要求用户人工保存或中转 taskId/stepId/jobId/RESULT；
+- 不绕过已有 Codex execution recovery、mutation-owner、permission contract；
+- automated restart tests + 至少一次 real runtime restart/re-entry dogfood；
+- Brain 独立重新获取 GitHub/CI/runtime evidence 后才关闭 blocker。
+
+具体 storage schema / API shape 不在 Roadmap 预设，由新的 Evidence-first PLAN 决定。
+
+## Non-blocking observations
+
+以下 finding 保留，但当前不单独阻塞 default flip：
+
+- **Codex Desktop thread visibility:** external App Server thread 的 Desktop sidebar live visibility 不可靠；作为独立 upstream/product investigation 处理，不回退 IAB。
+- **Passive execution observability:** long-running execution 缺少稳定用户 status/notification surface；后续作为 UX/observability candidate。
+- **Custom App conversation binding:** refresh 后部分旧 conversation 的 tool discovery/invocation 可能不一致；fresh conversation 可恢复；暂作为 product-integration observation。
+- **Windows local test process termination:** raw concurrent `node --test` 可出现 lingering process behavior；GitHub CI Node 22/24 已通过，因此当前非 release correctness blocker。
 
 ## M8 — RC / Release
 
-M8 只在 M7 验收完成并完成 default-policy decision 后进入。至少需要：
+M8 只在 Governance durability blocker 关闭并重新完成 operational default policy decision 后进入。至少需要：
 
-- 当前代码 / docs / public Skill 状态一致；
+- current code / docs / public Skill/default entry 一致；
 - required CI / regression green；
-- real-project dogfood evidence 完整；
-- legacy/default 语义清晰；
+- M7 real-project dogfood evidence 完整；
+- operational default 语义真实切换且 legacy IAB 保持 feature-frozen fallback/compatibility boundary；
 - release/version/tag 由 Brain 独立验收后决定。
 
 ## M8 之后
 
-不在本文件预设 v0.3 / v0.4 的固定阶段。可能的未来方向（如 generalized resource-scoped mutation leases、Claude/DeepSeek specialist/executor integration、multi-Brain research）必须由新的真实需求与 dogfood evidence 驱动，并通过后续 PLAN / RFC 决定。
+不在本文件预设 v0.3 / v0.4 固定阶段。未来方向必须由新的真实需求与 dogfood evidence 驱动，并通过后续 PLAN / RFC 决定。
