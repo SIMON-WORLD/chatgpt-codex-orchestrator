@@ -1,0 +1,34 @@
+name: Recovery Preflight Diagnostic
+
+on:
+  push:
+    branches:
+      - fix/brain-continuity-recovery-preflight
+
+permissions:
+  contents: read
+
+jobs:
+  focused-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+      - run: npm install
+      - name: Run focused tests and capture output
+        shell: bash
+        run: |
+          set +e
+          node --test test/executor/recovery-preflight.test.js test/mcp/codex-recovery-preflight.test.js > recovery-preflight-test.log 2>&1
+          code=$?
+          echo "$code" > recovery-preflight-exit-code.txt
+          cat recovery-preflight-test.log
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recovery-preflight-diagnostic
+          path: |
+            recovery-preflight-test.log
+            recovery-preflight-exit-code.txt
