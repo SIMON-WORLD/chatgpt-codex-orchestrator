@@ -235,3 +235,73 @@ not been pushed. Report only what is actually observable:
 Do not fabricate an `origin/<branch>` ref for an unpushed branch; this is a truth
 contract, not a formatting preference. A subsequent round that does push may then
 update the report to the real remote ref.
+
+---
+
+## M7-C: Durable Codex Execution Binding + Bounded Recovery Lookup (v0.2)
+
+M7-C adds the minimal durable mechanism that lets a later ChatGPT Brain session recover
+the *correct* prior Codex execution from a natural-language / durable orchestration
+identity, without the user ever having to save or relay `workspaceId`, `jobId`,
+`threadId`, or `turnId`. It is additive on top of the M7 mutation-lifecycle and
+permission hardening already on `main` (R2–R6): recovery reuses the authoritative
+`reconcile()` / `resume()` path and never force-unlocks.
+
+### Durable execution binding
+
+Each `JobMap` entry persists `jobId -> { threadId, turnId, state, mutationUnitId,
+turnUnits, accessMode, ... }` under the runtime data-root (`runtime/job-maps`), which
+survives a Local MCP process restart. M7-C adds a durable orchestration binding to the
+same entry:
+
+- `taskId`   — durable governance task identity.
+- `stepId`   — durable governance step identity.
+- `identity` — natural-language task identity / label supplied by Brain.
+
+`codex_start` (and `codex_continue`, when a new step is being continued) now accept
+optional `taskId` / `stepId` / `identity` and persist them with the job, so the binding
+is durable and survives session/turn loss. The App Server thread/turn identity remains
+authoritative and is never duplicated.
+
+### Bounded recovery lookup (`codex_recover`)
+
+`codex_recover` is a single bounded recovery lookup exposed on the MCP surface (no
+generic `codex_list`). It takes `workspaceId` plus at least one of `taskId` / `stepId` /
+`identity`, and returns **exactly one** bound job, or fails closed with a structured
+error:
+
+- `not_found` — no job is bound to the supplied orchestration identity.
+- `ambiguous` — more than one job in the requested workspace matches; no candidate is
+  selected (no "most recent" guess).
+- `wrong_workspace` — the matching job(s) belong to a different workspace;
+  cross-workspace recovery is refused.
+- `stale` — the bound job requires reconciliation (`recovery_required` / no thread /
+  unreachable) and authoritative reconciliation via `reconcile()` / `resume()` failed
+  (e.g. no thread identity, ambiguous turn state, or a foreign mutation owner). The job
+  is left in `recovery_required`; nothing is force-released.
+
+On a successful match, `codex_recover` returns the same structured state as `codex_get`.
+If the matched job needs reconciliation, it is reconciled authoritatively via the
+existing `resume()` path (`thread/resume` + `thread/read`), which never issues a
+duplicate `thread/start` or `turn/start` and never force-unlocks an owner.
+
+### Safety semantics preserved
+
+- No generic force-unlock: recovery only ever uses the authoritative reconcile
+  (`resume()`); a failed reconcile or a foreign mutation-owner conflict fails closed.
+- No heuristic recent-job selection: ambiguity, wrong-workspace, and unreconcilable
+  bindings are deterministic errors.
+- `codex_get` / `codex_continue` / `codex_interrupt` / `codex_reconcile` /
+  `codex_respond_approval` semantics and the governance / mutation-owner boundaries are
+  unchanged.
+- The Codex RESULT is only an evidence candidate; ChatGPT Brain independently verifies
+  GitHub / CI afterward.
+
+### Tests
+
+- `test/executor/job-map.test.js` — `findByBinding` exact identity matching and binding
+  persistence.
+- `test/executor/app-server-executor.test.js` — recover exact / ambiguous /
+  wrong-workspace / stale / foreign-owner plus authoritative reconcile-after-restart.
+- `test/mcp/codex-facade.test.js` — `codex_recover` MCP facade behavior incl. restart
+  reconcile and no-regression of ownership.

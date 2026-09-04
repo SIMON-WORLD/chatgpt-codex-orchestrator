@@ -200,6 +200,29 @@ function pendingForJob(job, approvals) {
   return pending;
 }
 
+// Structured fail-closed error for the bounded recovery lookup (v0.2 M7-C).
+// Carries a machine-readable code so Brain can distinguish not_found /
+// ambiguous / wrong_workspace / stale without heuristic selection.
+export class RecoveryError extends Error {
+  constructor(code, detail, extra = {}) {
+    super(detail);
+    this.name = 'RecoveryError';
+    this.code = code;
+    this.detail = detail;
+    this.matchCount = extra.matchCount ?? null;
+    this.jobId = extra.jobId ?? null;
+  }
+  toJSON() {
+    return {
+      ok: false,
+      error: this.code,
+      reason: this.detail,
+      ...(this.matchCount != null ? { matchCount: this.matchCount } : {}),
+      ...(this.jobId != null ? { jobId: this.jobId } : {}),
+    };
+  }
+}
+
 export class AppServerExecutor {
   constructor({ dataRoot = null, codexBin = null, listen = null, cwd = null, client = null, jobMap = null, mutationOwner = null } = {}) {
     this.client = client || new AppServerClient({ codexBin: codexBin || undefined, listen: listen || undefined, cwd: cwd || undefined });
@@ -483,7 +506,7 @@ export class AppServerExecutor {
     };
   }
 
-  async start({ prompt, cwd = null, accessMode = null, workspaceRoot = null, workspaceId = null, networkAccess = false } = {}) {
+  async start({ prompt, cwd = null, accessMode = null, workspaceRoot = null, workspaceId = null, networkAccess = false, taskId = null, stepId = null, identity = null } = {}) {
     await this._ensureConnected();
     if (!ACCESS_MODES.includes(accessMode)) {
       throw new Error(`codex start requires an explicit accessMode (one of: ${ACCESS_MODES.join(', ')}); refusing to default to read-only`);
@@ -495,7 +518,7 @@ export class AppServerExecutor {
 
     const jobId = makeJobId();
     const mutationUnitId = makeMutationUnitId();
-    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, sandboxPolicy, approvalPolicy, isWriter, workspaceRoot, workspaceId, networkAccess: networkAccess === true, requestPermission: { sandbox, approvalPolicy, sandboxPolicy }, effectiveVerified: false, threadId: null, turnId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
+    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, sandboxPolicy, approvalPolicy, isWriter, workspaceRoot, workspaceId, networkAccess: networkAccess === true, requestPermission: { sandbox, approvalPolicy, sandboxPolicy }, effectiveVerified: false, taskId: taskId || null, stepId: stepId || null, identity: identity || null, threadId: null, turnId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
 
     // Safe bootstrap: start a thread (no turn) with read-only sandbox + 'on-request'
     // approval. These differ from BOTH job targets (read_only=never, workspace_write=workspace-write),
@@ -671,7 +694,7 @@ export class AppServerExecutor {
     };
   }
 
-  async continue({ jobId, instruction }) {
+  async continue({ jobId, instruction, taskId = null, stepId = null, identity = null }) {
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
     if (!job.threadId) throw new Error(`job ${jobId} has no threadId`);
@@ -696,7 +719,11 @@ export class AppServerExecutor {
       this.jobMap.update(jobId, { effectiveSandbox: verified.effectiveSandbox, effectiveApprovalPolicy: verified.effectiveApprovalPolicy, effectiveVerified: true, effectiveWritableRoots: verified.effectiveWritableRoots, effectiveNetworkAccess: verified.effectiveNetworkAccess, effectiveWritableRootMatch: verified.effectiveWritableRootMatch, verifiedForRequestedContract: verified.verifiedForRequestedContract, verifiedAt: verified.verifiedAt, activePermissionProfile: verified.activePermissionProfile ?? null, updatedAt: Date.now() });
     }
     if (isWriter) this.owner.acquire('codex', mutationUnitId);
-    this.jobMap.update(jobId, { mutationUnitId, accessMode, sandbox: job.sandbox || null, sandboxPolicy, approvalPolicy, isWriter, ownershipReleased: false, state: 'starting', updatedAt: Date.now() });
+    const bindingPatch = { mutationUnitId, accessMode, sandbox: job.sandbox || null, sandboxPolicy, approvalPolicy, isWriter, ownershipReleased: false, state: 'starting', updatedAt: Date.now() };
+    if (taskId != null) bindingPatch.taskId = taskId;
+    if (stepId != null) bindingPatch.stepId = stepId;
+    if (identity != null) bindingPatch.identity = identity;
+    this.jobMap.update(jobId, bindingPatch);
 
     let turnRes;
     try {
@@ -751,6 +778,57 @@ export class AppServerExecutor {
       throw new Error(`cannot reconcile job ${jobId}: ${core.reason}`);
     }
     return this.get({ jobId });
+  }
+
+  // Bounded recovery lookup (v0.2 M7-C). Resolves the SINGLE Codex job bound to a
+  // durable orchestration identity (taskId/stepId/identity) within a workspace.
+  // Fails closed on not_found / ambiguous / wrong_workspace / stale and NEVER guesses
+  // 'most recent'. If the bound job needs reconciliation it is reconciled
+  // authoritatively via resume(); a failed reconcile surfaces as a structured
+  // RecoveryError rather than a silent force-unlock or a duplicate thread/turn.
+  async recover({ workspaceId = null, workspaceRoot = null, taskId = null, stepId = null, identity = null } = {}) {
+    if (workspaceId == null && workspaceRoot == null) {
+      throw new RecoveryError('bad_request', 'codex_recover requires a workspace');
+    }
+    const candidates = this.jobMap.findByBinding({ taskId, stepId, identity });
+    if (candidates.length === 0) {
+      throw new RecoveryError('not_found', `no Codex execution bound to the provided orchestration identity (taskId=${taskId || '-'}, stepId=${stepId || '-'}, identity=${identity || '-'})`);
+    }
+    const sameWorkspace = (j) => {
+      if (workspaceId && j.workspaceId && j.workspaceId === workspaceId) return true;
+      if (workspaceRoot && j.workspaceRoot && rootsEqual(j.workspaceRoot, workspaceRoot)) return true;
+      return false;
+    };
+    const inWorkspace = candidates.filter(sameWorkspace);
+    if (inWorkspace.length === 0) {
+      throw new RecoveryError('wrong_workspace', 'the Codex execution(s) bound to this identity do not belong to the requested workspace; refusing cross-workspace recovery');
+    }
+    if (inWorkspace.length > 1) {
+      throw new RecoveryError('ambiguous', `${inWorkspace.length} Codex executions are bound to this identity in this workspace; refine with taskId/stepId or disambiguate (no guess)`, { matchCount: inWorkspace.length });
+    }
+    const job = inWorkspace[0];
+    const jobId = job.jobId;
+    // Determine whether the persisted binding requires authoritative reconciliation.
+    // Force reconcile when the binding is already recovery_required, has no thread
+    // identity, or the client is not live (local restart). Never infer a stale turn.
+    let needsReconcile = job.state === 'recovery_required' || !job.threadId || !this.client.isRunning;
+    let state = null;
+    if (!needsReconcile) {
+      try {
+        state = await this.get({ jobId });
+      } catch (e) {
+        throw new RecoveryError('stale', `cannot read bound Codex execution ${jobId}: ${e.message}`, { jobId });
+      }
+      if (state.recoveryRequired) needsReconcile = true;
+    }
+    if (needsReconcile) {
+      try {
+        return await this.resume({ jobId });
+      } catch (e) {
+        throw new RecoveryError('stale', `cannot reconcile bound Codex execution ${jobId}: ${e.message}`, { jobId });
+      }
+    }
+    return state;
   }
 
   async _boundedReconcile(jobId, attempts = 3, delayMs = 150) {

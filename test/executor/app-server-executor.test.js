@@ -1425,3 +1425,83 @@ test('R3 thread/settings/update request failure -> immediate fail closed, no orp
   const jobs = Object.values(exec.jobMap.list()).filter((j) => j.state === 'recovery_required');
   assert.equal(jobs[0].effectiveVerified, false);
 });
+
+// --- v0.2 M7-C: bounded recovery lookup --------------------------------
+
+test('recover resolves the exact bound job by durable orchestration identity', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-rec-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'do it', accessMode: 'workspace_write', workspaceRoot: root, workspaceId: 'ws-1', taskId: 'task-1', stepId: 'step-1', identity: 'build parser' });
+  const job = exec.load(r.jobId);
+  assert.equal(job.taskId, 'task-1');
+  assert.equal(job.stepId, 'step-1');
+  assert.equal(job.identity, 'build parser');
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const rec = await exec.recover({ workspaceId: 'ws-1', workspaceRoot: root, taskId: 'task-1' });
+  assert.equal(rec.jobId, r.jobId);
+  assert.equal(rec.threadId, r.threadId);
+  assert.equal(rec.turnId, r.turnId);
+  assert.equal(rec.workspaceId, 'ws-1');
+});
+
+test('recover fails closed on multiple matches (ambiguous, no guess)', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-amb-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const a = await exec.start({ prompt: 'a', accessMode: 'workspace_write', workspaceRoot: root, workspaceId: 'ws-1', taskId: 'task-x', identity: 'same' });
+  await waitFor(() => exec.load(a.jobId).state === 'completed');
+  const b = await exec.start({ prompt: 'b', accessMode: 'workspace_write', workspaceRoot: root, workspaceId: 'ws-1', taskId: 'task-x', identity: 'same' });
+  await assert.rejects(() => exec.recover({ workspaceId: 'ws-1', workspaceRoot: root, taskId: 'task-x' }), (e) => e.name === 'RecoveryError' && e.code === 'ambiguous');
+  assert.notEqual(a.jobId, b.jobId);
+});
+
+test('recover fails closed when the bound job is in a different workspace', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-ws-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const repoA = path.join(root, 'repoA'); fs.mkdirSync(repoA);
+  const repoB = path.join(root, 'repoB'); fs.mkdirSync(repoB);
+  const r = await exec.start({ prompt: 'do it', accessMode: 'workspace_write', workspaceRoot: repoA, workspaceId: 'ws-A', taskId: 'task-1', identity: 'build' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  await assert.rejects(() => exec.recover({ workspaceId: 'ws-B', workspaceRoot: repoB, taskId: 'task-1' }), (e) => e.name === 'RecoveryError' && e.code === 'wrong_workspace');
+});
+
+test('recover authoritatively reconciles a recovery_required job after restart', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-rec2-'));
+  const execA = makeExecutor({ dataRoot: root, slowTurn: true });
+  const rA = await execA.start({ prompt: 'do it', accessMode: 'workspace_write', workspaceRoot: root, workspaceId: 'ws-1', taskId: 'task-9', stepId: 'step-9', identity: 'build x' });
+  const persisted = execA.load(rA.jobId);
+  assert.equal(persisted.taskId, 'task-9');
+  await execA.shutdown();
+  const execB = makeExecutor({ dataRoot: root });
+  t.after(() => execB.shutdown());
+  const rec = await execB.recover({ workspaceId: 'ws-1', workspaceRoot: root, taskId: 'task-9' });
+  assert.equal(rec.jobId, rA.jobId);
+  assert.equal(execB.owner.owner, 'codex');
+  const job = execB.load(rA.jobId);
+  assert.equal(job.threadId, rA.threadId);
+  assert.equal(job.turnId, rA.turnId); // no duplicate thread/turn
+});
+
+test('recover fails closed on a stale/unreconcilable binding (no thread identity)', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-stale-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const j = exec.jobMap.create();
+  exec.jobMap.update(j.jobId, { taskId: 'task-s', stepId: 'step-s', identity: 'stale', workspaceRoot: root, workspaceId: 'ws-1', threadId: null, turnId: null, state: 'recovery_required' });
+  await assert.rejects(() => exec.recover({ workspaceId: 'ws-1', workspaceRoot: root, taskId: 'task-s' }), (e) => e.name === 'RecoveryError' && e.code === 'stale');
+});
+
+test('recover does not force-unlock: a foreign owner blocks authoritative recovery', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-owner-'));
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'do it', accessMode: 'workspace_write', workspaceRoot: root, workspaceId: 'ws-1', taskId: 'task-o', identity: 'x' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  // Mark the bound job as requiring recovery, then take the workspace with a foreign owner.
+  exec.jobMap.update(r.jobId, { state: 'recovery_required' });
+  exec.owner.acquire('chatgpt', 'foreign-unit');
+  await assert.rejects(() => exec.recover({ workspaceId: 'ws-1', workspaceRoot: root, taskId: 'task-o' }), (e) => e.name === 'RecoveryError' && e.code === 'stale');
+  assert.equal(exec.owner.owner, 'chatgpt'); // ownership is NOT force-released
+});
