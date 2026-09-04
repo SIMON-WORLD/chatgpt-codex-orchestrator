@@ -2,7 +2,7 @@
   "name": "chatgpt-codex-orchestrator",
   "version": "0.1.0-alpha.3",
   "private": true,
-  "description": "Durable orchestration between ChatGPT as planner/reviewer and Codex as local executor.",
+  "description": "Capability orchestrator with ChatGPT as the authoritative Brain across native, local, and Codex execution routes.",
   "keywords": [
     "chatgpt",
     "codex",

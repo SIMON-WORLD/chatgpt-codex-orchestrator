@@ -1,7 +1,7 @@
-// chatgpt-codex-orchestrator: MCP v2 tool registration (v0.2 M2/M3).
-// Tool groups: Direct Local (read-only + bounded edit + verify) and Codex Delegate.
-// No Capability Router yet (M4). No edit/write/create/verify/general bash beyond the
-// explicit edit + verify tools. Workspace auth enforced on all workspace ops.
+// chatgpt-codex-orchestrator: MCP v0.2 tool registration.
+// Tool groups: Direct Local (read-only + bounded edit + verify), Capability Router /
+// Governance, and Codex Delegate. No general bash or unconstrained local mutation;
+// workspace authorization is enforced on all workspace-scoped operations.
 
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/server';
@@ -189,7 +189,8 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.interrupt({ jobId })); } catch (e) { return errText(e.message); } });
 
     server.registerTool('codex_reconcile', { description: 'Authoritatively reconcile a Codex job after process death / connection loss. Uses thread/resume + thread/read (never creates a new turn, never a generic force-unlock). Terminal -> release writer; inProgress -> retain writer; ambiguous -> fail closed.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string() }) },
-      async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.reconcile({ jobId })); } catch (e) { return errText(e.message); } });    server.registerTool('codex_respond_approval', { description: 'Respond to a pending Codex approval.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string(), approvalId: z.string(), decision: z.enum(['approve', 'deny']) }) },
+      async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.reconcile({ jobId })); } catch (e) { return errText(e.message); } });
+    server.registerTool('codex_respond_approval', { description: 'Respond to a pending Codex approval.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string(), approvalId: z.string(), decision: z.enum(['approve', 'deny']) }) },
       async ({ workspaceId, jobId, approvalId, decision }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.respondApproval({ jobId, approvalId, decision })); } catch (e) { return errText(e.message); } });
     server.registerTool('codex_recover', {
       description: 'Bounded recovery lookup: resolve the single Codex job bound to a durable orchestration identity (taskId/stepId/identity) in a workspace. Fails closed on not_found / ambiguous / wrong_workspace / stale and never guesses most-recent. May authoritatively reconcile a recovery_required job.',

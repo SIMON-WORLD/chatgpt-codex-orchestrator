@@ -1,11 +1,13 @@
 ---
 name: brain-command
-description: "Canonical launcher for the ChatGPT-command orchestrator. Default = Direct Brain Loop: the current Codex agent talks to ChatGPT via the built-in browser, executes the Brain TASKs itself, and runs the PUBLISH -> publication transaction -> external readback -> terminal DONE lifecycle. Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as the local executor, e.g. '用 ChatGPT 指挥模式完成...', '让 ChatGPT 指挥 Codex...', or 'Use ChatGPT as the brain and Codex as executor...'. Default Brain = ChatGPT, default Executor = the current Codex agent. The detached worker/nested-Codex runtime is kept as legacy/experimental. Released Alpha.3 operational default = legacy IAB Direct Brain Loop (feature-frozen); v0.2 canonical architecture (ChatGPT Custom MCP App -> Secure Tunnel -> local MCP -> Router/Governance -> Direct Local or Codex App Server) is NOT yet the CLI/Skill default (M7 decides the flip)."
+description: "Canonical launcher for the ChatGPT-command orchestrator. Default = Direct Brain Loop: the current Codex agent talks to ChatGPT via the built-in browser, executes the Brain TASKs itself, and runs the PUBLISH -> publication transaction -> external readback -> terminal DONE lifecycle. Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as the local executor, e.g. '用 ChatGPT 指挥模式完成...', '让 ChatGPT 指挥 Codex...', or 'Use ChatGPT as the brain and Codex as executor...'. Default Brain = ChatGPT, default Executor = the current Codex agent. The detached worker/nested-Codex runtime is kept as legacy/experimental. Released Alpha.3 operational default = legacy IAB Direct Brain Loop (feature-frozen); v0.2 canonical architecture (ChatGPT Custom MCP App -> Secure Tunnel -> local MCP -> Router/Governance -> Direct Local or Codex App Server) completed M7 real-project dogfood but is NOT yet the CLI/Skill default because the post-M7 Brain Continuity/default-policy gate remains open."
 ---
 
 # brain-command (Direct Brain Loop)
 
 The default production path is the **Direct Brain Loop**.
+
+> **Status boundary:** this Skill documents the currently released Alpha.3 operational fallback. Current v0.2 project status and architecture live in `PROJECT_STATUS.md`, `CAPABILITY_ROUTING.md`, `docs/architecture.md`, and `docs/rfc-v0.2-brain-continuity.md`; do not infer current v0.2 milestone status from the legacy runtime mechanics below.
 
 ```
 User
@@ -33,14 +35,14 @@ Trigger on natural-language requests such as:
 
 Do **not** trigger for ordinary local-only coding.
 
-## Architecture status (M6)
+## Architecture status (post-M7)
 
 These states are distinct and must not be conflated:
 
 1. **Released Alpha.3 operational default** — the legacy IAB **Direct Brain Loop** (current Codex agent + built-in IAB + ChatGPT). This is what `$brain-command` runs today; it is **feature-frozen** and NOT deleted.
 2. **v0.2 canonical architecture** — `ChatGPT (Custom MCP App)` → `OpenAI Secure Tunnel` → `local MCP` → `Router/Governance` → `Direct Local` or `Codex App Server`. This is the new canonical path; it is **NOT yet the CLI/Skill default**.
 3. **M6** — the IAB / Alpha.4 implementation has been **structurally isolated** under `src/legacy/` and is feature-frozen.
-4. **M7** — the **real-project dogfood + operational default flip** decision has **not** happened yet. Until then v0.2 must not be claimed as the default entry for all CLI/Skill invocations.
+4. **M7** — Native-only, Codex-required, and Hybrid real-project dogfood are **COMPLETE / ACCEPTED**. The separate operational-default decision is **DEFERRED** while Brain Continuity / Governance durability implementation and real re-entry dogfood remain pending. Until that gate closes and the Brain explicitly flips policy, v0.2 must not be claimed as the default entry for all CLI/Skill invocations.
 
 `src/index.js` is a **compatibility barrel**; it is **not** the canonical v0.2 runtime import root. Canonical v0.2 production entries are `scripts/v0.2-start.mjs`, `src/transport/brain-local.js`, and the direct v0.2 modules under `src/{mcp,router,governance,local,executor,state,transport}`.
 
