@@ -8,8 +8,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting. This project is **Alpha** and behavior may change.
-        Please do not include secrets or private conversation contents in your report.
+        Thanks for reporting. This project is **Alpha** and currently has both a released Alpha.3 legacy path and a capability-first v0.2 candidate path.
+        Please do not include secrets, private repository data, or private conversation contents.
 
   - type: textarea
     id: problem
@@ -44,8 +44,44 @@ body:
     id: actual
     attributes:
       label: Actual behavior / error
-      description: What actually happened. Include logs/error output.
+      description: What actually happened. Include logs/error output if useful.
       placeholder: Paste logs/errors here. REDACT secrets, bearer tokens, cookies, API keys, private repository data, and private conversation content.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime_path
+    attributes:
+      label: Runtime path
+      description: Which project path was involved?
+      options:
+        - "v0.2 candidate: ChatGPT Native / Connected App"
+        - "v0.2 candidate: Direct Local via Local MCP"
+        - "v0.2 candidate: Codex Delegate via App Server"
+        - "v0.2 candidate: Hybrid"
+        - "Released Alpha.3 legacy IAB Direct Brain Loop"
+        - "Legacy detached worker / TaskService"
+        - "Unsure / not applicable"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Relevant component
+      description: The area you believe is involved.
+      options:
+        - Runtime capability discovery / routing
+        - Local MCP / Secure Tunnel
+        - Governance / acceptance / Brain Continuity
+        - Direct Local workspace operation
+        - Codex App Server executor / approvals / recovery
+        - Mutation ownership / durable state
+        - GitHub / connected-app capability
+        - Released Alpha.3 IAB / brain-command
+        - Legacy detached worker / TaskService
+        - Documentation / tooling
+        - Unsure / other
     validations:
       required: true
 
@@ -65,7 +101,7 @@ body:
     id: node
     attributes:
       label: Node.js version
-      placeholder: "20.x"
+      placeholder: "22.x or 24.x"
     validations:
       required: true
 
@@ -73,39 +109,17 @@ body:
     id: version
     attributes:
       label: Repository commit / version
-      placeholder: "v0.1.0-alpha.1 or commit SHA"
+      placeholder: "v0.1.0-alpha.3 or exact commit SHA"
     validations:
       required: true
 
-  - type: dropdown
-    id: mode
+  - type: textarea
+    id: recovery
     attributes:
-      label: Conversation mode
-      description: "Which conversation mode did you use? Note that `conversation: 'current'` / `adopt-current` is experimental."
-      options:
-        - "conversation: 'new'"
-        - "conversation: 'current'"
-        - "Not applicable / unsure"
+      label: Recovery / continuity context
+      description: If this involved restart, timeout, re-entry, or duplicate execution, describe the semantic task state. Do not post internal secrets; internal IDs are optional and should be redacted when sensitive.
     validations:
-      required: true
-
-  - type: dropdown
-    id: component
-    attributes:
-      label: Relevant component
-      description: The area you believe is involved.
-      options:
-        - Brain / IAB transport
-        - TaskService / TaskManager / state
-        - Protocol / acceptance-evidence gate
-        - Codex executor / worker / runtime host
-        - Recovery / locking
-        - Context / redaction
-        - Doctor / configuration
-        - Documentation
-        - Unsure / other
-    validations:
-      required: true
+      required: false
 
   - type: textarea
     id: context
@@ -123,5 +137,5 @@ body:
       options:
         - label: I have removed sensitive values (credentials, bearer tokens, cookies, API keys, private repository data, and private conversation content) from this report.
           required: true
-        - label: "I have checked that this behavior is not merely a documented experimental limitation (e.g. `conversation: 'current'` / `adopt-current`)."
+        - label: I have identified the runtime path as accurately as I can and have not treated an expected legacy/experimental limitation as a v0.2 correctness claim.
           required: true
