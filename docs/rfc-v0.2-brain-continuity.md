@@ -31,6 +31,8 @@ The current main branch already contains durable patterns that should be reused 
 - legacy `src/task-state.js` already implements versioned JSON state, atomic write, `.bak` fallback, hydration, and corruption handling that refuses silent fresh reset when both primary and backup are invalid.
 - `src/runtime-paths.js` provides a unified user-level durable `dataRoot` outside both the orchestrator repository and target repositories.
 - `src/governance/index.js` already has strong task/step lifecycle semantics, terminal `DONE` idempotency/immutability, acceptance/evidence gates, and fail-closed task/step identity checks.
+- current `MutationOwner` is intentionally single-process and is not a distributed lock.
+- `proofLedger` is currently an in-memory verification-reuse cache. Losing it may reduce reuse efficiency, but continuity must never turn loss of proof freshness data into an implicit acceptance.
 
 The smallest correct design should therefore extend canonical Governance with durable state and re-entry semantics. It should not introduce a database, Temporal-like workflow service, distributed lock system, or a second orchestration stack without evidence that the existing data-root patterns are insufficient.
 
@@ -108,6 +110,8 @@ The Local Capability Plane persists the control state required to safely resume 
 - authority generation/fencing state;
 - bounded history required for recovery/audit.
 
+Verification-reuse caches and metrics are not automatically control truth. If reusable proof freshness cannot be safely rehydrated/revalidated after restart, the safe fallback is to require re-verification, not to infer pass. Observability metrics may reset if they are not required for correctness.
+
 ### 4.3 Executor durable state — execution truth
 
 Codex execution identity continues to be owned by the existing JobMap/AppServer recovery contract. Brain Continuity must reuse `codex_recover`, `reconcile`, mutation ownership, and permission contracts rather than duplicating them inside Governance.
@@ -156,6 +160,18 @@ Reuse the proven repository pattern:
 ### 5.4 Snapshot plus bounded history
 
 The current authoritative Governance snapshot is sufficient for normal resume. A bounded/event history may be retained for audit/recovery diagnostics, but v0.2 does not need a general event-sourced workflow engine.
+
+### 5.5 One canonical local Governance writer per namespace
+
+Parent authority fencing assumes Governance mutations pass through one serialized authoritative local writer.
+
+v0.2 does not need a distributed lock manager, but it must not allow two canonical Local MCP/runtime processes to concurrently mutate the same Governance namespace/dataRoot as independent writers. The implementation must either prevent that configuration with a lightweight runtime/namespace ownership guard or detect contention and fail closed.
+
+This process-level writer boundary is separate from Parent conversation authority generation and from workspace mutation ownership. All three scopes must remain explicit:
+
+- Parent authority: who may issue new Brain controls;
+- Governance runtime writer: which local runtime may persist control state;
+- resource mutation owner: who may mutate a workspace/resource.
 
 ## 6. Logical identity and bounded re-entry
 
@@ -214,7 +230,7 @@ Recovery must preserve terminal and safety semantics:
 
 - `DONE` remains terminal and cannot become executable after restart;
 - a step with a recorded RESULT is not silently re-executed;
-- `recovery_required` remains recovery-required until authoritative reconciliation;
+- any local execution state that requires reconciliation remains fail-closed until authoritative reconciliation;
 - `ASK_USER` remains blocked pending a user decision;
 - ambiguous state never becomes a fresh trusted task.
 
@@ -282,7 +298,7 @@ At minimum:
 1. Governance snapshot survives Local MCP/runtime restart with the same task/step/acceptance/evidence/gate state.
 2. Terminal `DONE` remains terminal after restart; non-DONE mutations remain rejected.
 3. A RESULT-bearing step is not silently re-executed after restart.
-4. `ASK_USER` and `recovery_required` survive restart without becoming executable fresh state.
+4. `ASK_USER` and any recovery-required local condition survive restart without becoming executable fresh state.
 5. Primary-state corruption with a valid backup recovers the backup.
 6. Primary + backup corruption fails closed with a named error.
 7. Unknown/future schema fails closed or performs an explicit tested migration.
@@ -291,6 +307,8 @@ At minimum:
 10. Parent takeover does not duplicate/cancel a still-valid delegated Codex execution.
 11. Re-entry reuses the existing Codex durable binding/reconciliation path.
 12. Capability availability from a prior session is not trusted as current proof after re-entry.
+13. A second canonical runtime attempting to own the same Governance namespace is rejected or fails closed; two concurrent control-state writers are never accepted.
+14. Loss of a non-authoritative proof-reuse cache can only force conservative re-verification; it cannot create a pass/acceptance that was not durably justified.
 
 ### 12.2 Real runtime dogfood
 
@@ -318,6 +336,7 @@ Required metrics:
 - manual RESULT relay = `0`;
 - duplicate execution = `0`;
 - stale Parent mutation accepted = `0`;
+- concurrent Governance writer accepted = `0`;
 - lost required acceptance/evidence = `0`;
 - production/control-state pollution from the dogfood = `0`.
 
