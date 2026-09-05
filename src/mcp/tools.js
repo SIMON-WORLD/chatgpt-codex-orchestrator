@@ -15,6 +15,7 @@ import { OperationState } from '../state/operation-state.js';
 import { VerifyService } from '../local/verify.js';
 import { createCapabilityRouter } from '../router/capability-router.js';
 import { createGovernanceService } from '../governance/index.js';
+import { reconcileRecoveryPreflightWithDiagnostics } from '../executor/recovery-reconcile-diagnostics.js';
 
 const R = { readOnlyHint: true };
 const M = { readOnlyHint: false, destructiveHint: true };
@@ -201,7 +202,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     }, async ({ workspaceId, taskId, stepId, identity }) => {
       try {
         const root = assertSameWorkspace(workspaceRegistry, workspaceId, null);
-        const result = await appServerExecutor.reconcileRecoveryPreflight({ workspaceId, workspaceRoot: root, taskId, stepId, identity });
+        const result = await reconcileRecoveryPreflightWithDiagnostics(appServerExecutor, { workspaceId, workspaceRoot: root, taskId, stepId, identity });
         if (!result.ok) return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: true };
         return text(result);
       } catch (e) {
