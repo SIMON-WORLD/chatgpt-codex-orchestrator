@@ -8,10 +8,15 @@
 // Semantics:
 //   - First writer in a namespace acquires the namespace writer slot.
 //   - A second writer in the same namespace fails closed (writer_conflict) while the
-//     slot owner is alive and its heartbeat is fresh.
-//   - A dead owner is reclaimed immediately (crash/restart continuity).
-//   - A live-but-idle owner (heartbeat stale past the window) may be reclaimed after
-//     the stale window; the guard is intentionally not a distributed lease service.
+//     recorded owner PID is alive. A LIVE owner is NEVER reclaimed, even if its
+//     heartbeat is older than the stale window (inactivity is not a license to create
+//     a second live canonical writer).
+//   - A DEAD owner (recorded PID no longer alive) is reclaimed immediately
+//     (crash/restart continuity).
+//   - An owner with no recorded PID (unknown) is reclaimed only when its heartbeat is
+//     older than the stale window.
+//   - assertOwned()/refresh() fail closed whenever this writer no longer owns the slot,
+//     so no durable Governance mutation can be persisted after ownership loss.
 //   - Clean shutdown releases the slot. Read-only recovery discovery never needs it.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -77,14 +82,17 @@ export class GovernanceWriterGuard {
     this._held = true;
   }
 
-  // A writer slot is stale when the recorded owner is no longer alive (crash/restart
-  // reclaims immediately) OR the heartbeat is older than the stale window (protects
-  // against pid reuse / unknown owners). A genuinely live owner refreshes its heartbeat
-  // on every canonical persistence and is never stolen while its heartbeat is fresh.
+  // A writer slot is stale ONLY when:
+  //   - the recorded owner PID is no longer alive (crash/restart reclaim), or
+  //   - no PID was recorded (unknown owner) and the heartbeat is older than the
+  //     stale window.
+  // A LIVE owner is never stale: heartbeat age alone must never create two live
+  // canonical writers.
   _isStale(existing, now) {
+    if (existing.pid) {
+      return !this._pidAlive(existing.pid);
+    }
     const age = now - (existing.heartbeatAt || existing.at || 0);
-    const ownerAlive = existing.pid ? this._pidAlive(existing.pid) : false;
-    if (!ownerAlive) return true;
     return age > this.staleMs;
   }
 
@@ -107,7 +115,8 @@ export class GovernanceWriterGuard {
         return { ok: true, writerId: this.writerId, acquired: true };
       }
       if (existing && this._isStale(existing, this._now())) {
-        // Owner is dead or stale: reclaim the slot (never delete a live owner's file).
+        // Owner is dead (or an unknown-PID owner is stale): reclaim the slot. A live
+        // owner's file is never deleted.
         try { fs.rmSync(file, { force: true }); } catch {}
         const fd = fs.openSync(file, 'wx');
         fs.writeSync(fd, JSON.stringify(this._payload(), null, 2), 'utf8');
@@ -122,22 +131,36 @@ export class GovernanceWriterGuard {
     }
   }
 
-  _refresh() {
-    const file = this._file();
-    const existing = this._read();
-    if (!existing) { this._write(); return; }
-    if (existing.writerId !== this.writerId) {
-      throw new GovernanceWriterError('cannot refresh governance writer slot: slot is owned by another writer', { code: 'writer_conflict' });
+  // Fail-closed ownership assertion: this writer must still own the on-disk slot.
+  // Called before every durable Governance mutation so a stale/ousted writer can
+  // never persist state after losing ownership.
+  assertOwned() {
+    if (!this._held) {
+      throw new GovernanceWriterError('this runtime is not the canonical Governance writer for the namespace', { code: 'writer_conflict' });
     }
+    const existing = this._read();
+    if (!existing) {
+      throw new GovernanceWriterError('governance writer slot is missing; this writer no longer owns the namespace', { code: 'writer_conflict' });
+    }
+    if (existing.writerId !== this.writerId) {
+      throw new GovernanceWriterError('governance writer slot is owned by another writer; this writer is no longer canonical', { code: 'writer_conflict' });
+    }
+    return { ok: true, writerId: this.writerId };
+  }
+
+  _refresh() {
+    // Fail closed: never silently re-create or continue under a lost/foreign slot.
+    this.assertOwned();
+    const file = this._file();
     const tmp = file + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(this._payload(), null, 2), 'utf8');
     fs.renameSync(tmp, file);
     this._held = true;
   }
 
-  // Called after each canonical persistence so an active writer keeps a fresh heartbeat.
+  // Called after each canonical persistence so an active writer keeps a fresh
+  // heartbeat. Throws writer_conflict (never swallowed) if ownership was lost.
   refresh() {
-    if (!this._held) return false;
     this._refresh();
     return true;
   }

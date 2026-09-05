@@ -148,7 +148,7 @@ Brain Continuity **core** 已作为 isolated milestone 在 `feat/brain-continuit
 - bounded semantic re-entry `0 -> not_found`、`1 -> unique`、`>1 -> ambiguous/fail closed`，never most-recent；
 - durable Parent authority generation/fencing：takeover 递增 generation 并发新 opaque token，stale Parent mutation 抛 `stale_authority`；
 - takeover 只走既有 `executor.recover` 路径 reconcile，不 cancel/restart/duplicate delegated Codex execution；
-- 同一 Governance namespace/dataRoot 单 canonical writer：第二个 writer 被 `writer_conflict` fail closed（lightweight guard，非 distributed lock manager）；
+- 同一 Governance namespace/dataRoot 单 canonical writer：live owner 永不因 heartbeat 过期被 reclaim，第二个 writer 被 `writer_conflict` fail closed；每次 durable mutation 前先 assert ownership，失去 slot 的旧 writer 不能写任何 state（lightweight guard，非 distributed lock manager）；
 - bounded Context Capsule 由 durable structured state 生成（不 dump transcript）；capability observation 保持 ephemeral，re-entry 必须 rediscovery；proof-reuse cache 丢失只触发 conservative re-verification，不生成 pass/acceptance；
 - 新增 deterministic tests：`test/governance/{store,writer-guard,durable,capsule-observation}.test.js`、`test/mcp/governance-durable.test.js`（全部随 `npm test` 运行）。
 
@@ -201,8 +201,7 @@ Brain Continuity **core** 已作为 isolated milestone 在 `feat/brain-continuit
 2. **Brain Continuity core 已实现于 Issue #23 / Draft PR #24（isolated，未 merge）。** Parent Brain 独立 review PR diff / exact-head CI 后 ACCEPT/REVISE；不默认 flip。
 3. implementation 通过 automated tests 后，由 Parent Brain 另行授权执行 isolated real Conversation A → B runtime restart/re-entry dogfood（独立 dataRoot / semantic identity / target repo）。
 4. blocker 关闭后，由 Brain **重新执行 operational default flip decision**；flip 不自动发生。
-5. blocker 关闭后，由 Brain **重新执行 operational default flip decision**；flip 不自动发生。
-6. 只有 default-policy decision 通过后才进入 M8 RC / release。
+5. 只有 default-policy decision 通过后才进入 M8 RC / release。
 
 ## Authority
 

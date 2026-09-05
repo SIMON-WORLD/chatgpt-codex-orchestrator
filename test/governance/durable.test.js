@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createDurableGovernanceService, GovernanceWriterError } from '../../src/governance/durable.js';
+import { createDurableGovernanceService, GovernanceWriterError, GovernanceWriterGuard } from '../../src/governance/durable.js';
 import { GovernanceStoreError } from '../../src/governance/store.js';
 import { GovernanceError } from '../../src/governance/index.js';
 import { createProofLedger } from '../../src/direct-governance.js';
@@ -415,4 +415,32 @@ test('semantic re-entry reuses the durable binding/reconciliation path even with
   assert.equal(result.capsule.taskId, 't1');
   assert.equal(result.capsule.step.executorStatus, 'unknown');
   r2.close();
+});
+
+
+test('an ousted writer cannot persist any subsequent Governance mutation/state change (fail closed before write)', () => {
+  const { dataRoot, namespace } = fixture();
+  const r1 = createDurableGovernanceService({ dataRoot, namespace });
+  const plan = r1.transition({ taskId: 't1', control: 'PLAN', projectKey: 'repo/x', identity: 'id-lost' });
+  const token = plan.authorityToken;
+  r1.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }], authorityToken: token });
+  const file = path.join(r1.store.dir, 't1.json');
+  const before = fs.readFileSync(file, 'utf8');
+
+  // The slot is reclaimed by another runtime (this writer's recorded PID is dead).
+  const guard2 = new GovernanceWriterGuard({ dataRoot, namespace, pidAlive: () => false });
+  const acq = guard2.acquire();
+  assert.equal(acq.reclaimed, true);
+
+  // Every subsequent durable mutation fails closed BEFORE any state change.
+  assert.throws(() => r1.transition({ taskId: 't1', stepId: 's1', control: 'REVISE', authorityToken: token }), (e) => e instanceof GovernanceWriterError && e.code === 'writer_conflict');
+  assert.throws(() => r1.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }], authorityToken: token }), (e) => e.code === 'writer_conflict');
+  assert.throws(() => r1.takeover({ taskId: 't1' }), (e) => e.code === 'writer_conflict');
+  assert.throws(() => r1.transition({ taskId: 't2', control: 'PLAN' }), (e) => e.code === 'writer_conflict');
+  assert.equal(r1.store.hasTask('t2'), false, 'no new task state was written by the ousted writer');
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'existing durable state was not mutated by the ousted writer');
+  assert.equal(r1.status().control, 'TASK'); // in-memory lifecycle unchanged (no partial mutation)
+
+  r1.close();
+  guard2.release();
 });

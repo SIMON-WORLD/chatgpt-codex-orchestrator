@@ -58,18 +58,51 @@ test('dead + stale owner is reclaimed (crash restart), never a live owner', () =
   w2.release();
 });
 
-test('live owner with a stale heartbeat is not stolen while pid alive but may be reclaimed after the stale window per heartbeat rule', () => {
+test('a LIVE owner is never reclaimed after the stale window (heartbeat age alone must not create two live canonical writers)', () => {
   const { dataRoot, namespace } = fixture();
   let clock = 5000;
   const now = () => clock;
   const w1 = new GovernanceWriterGuard({ dataRoot, namespace, now, staleMs: 1000 });
   w1.acquire();
-  // pid alive (same process) but heartbeat older than the stale window.
-  clock += 2000;
+  // The owner PID is alive (same process) but its heartbeat is far older than the
+  // stale window. Inactivity must NOT allow a second live canonical writer.
+  clock += 60000;
   const w2 = new GovernanceWriterGuard({ dataRoot, namespace, now, staleMs: 1000, pidAlive: () => true });
+  assert.throws(() => w2.acquire(), (e) => e instanceof GovernanceWriterError && e.code === 'writer_conflict');
+  // The slot still belongs to w1.
+  const file = path.join(w1.dir, 'writer.json');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).writerId, w1.writerId);
+  w1.release();
+});
+
+test('a DEAD owner is reclaimed immediately even with a fresh heartbeat (crash/restart continuity)', () => {
+  const { dataRoot, namespace } = fixture();
+  let clock = 9000;
+  const now = () => clock;
+  const w1 = new GovernanceWriterGuard({ dataRoot, namespace, now });
+  w1.acquire();
+  // Simulate a crash: the recorded owner PID is no longer alive while the heartbeat
+  // is still fresh. A restarting runtime must be able to reclaim without waiting.
+  const w2 = new GovernanceWriterGuard({ dataRoot, namespace, now, pidAlive: () => false });
   const acq = w2.acquire();
   assert.equal(acq.ok, true);
   assert.equal(acq.reclaimed, true);
+  const file = path.join(w1.dir, 'writer.json');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).writerId, w2.writerId);
+  w2.release();
+});
+
+test('assertOwned/refresh fail closed once the writer slot belongs to another writer', () => {
+  const { dataRoot, namespace } = fixture();
+  const w1 = new GovernanceWriterGuard({ dataRoot, namespace });
+  w1.acquire();
+  // Another runtime takes over the slot (w1's recorded PID is treated as dead).
+  const w2 = new GovernanceWriterGuard({ dataRoot, namespace, pidAlive: () => false });
+  w2.acquire();
+  assert.equal(w2.held, true);
+  // w1 still believes it holds the slot, but ownership is gone: fail closed.
+  assert.throws(() => w1.assertOwned(), (e) => e instanceof GovernanceWriterError && e.code === 'writer_conflict');
+  assert.throws(() => w1.refresh(), (e) => e.code === 'writer_conflict');
   w2.release();
 });
 

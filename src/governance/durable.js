@@ -126,14 +126,19 @@ export class DurableGovernanceService {
     };
   }
 
+  // Ownership is fail-closed and checked BEFORE every durable state write. If this
+  // writer's slot was reclaimed/ousted, the mutation throws writer_conflict and no
+  // state is written. refresh() re-asserts ownership after the write and is never
+  // swallowed, so a concurrently lost slot surfaces as an error on the mutation.
   _persist(taskId, meta) {
+    this.guard.assertOwned();
     this.store.saveTask(taskId, {
       state: this.svc.state,
       projectKey: meta ? meta.projectKey : null,
       identity: meta ? meta.identity : null,
       authority: meta && meta.authority ? { ...meta.authority } : null,
     });
-    try { this.guard.refresh(); } catch {}
+    this.guard.refresh();
   }
 
   _authorityPublic(meta) {
@@ -178,6 +183,7 @@ export class DurableGovernanceService {
 
   transition(args = {}) {
     this._ensureOpen();
+    this.guard.assertOwned(); // fail closed before ANY control mutation
     const normalized = { ...args };
     // Restart continuation: no active task in memory, but the requested taskId already
     // exists durably -> hydrate it before applying the control.
@@ -201,6 +207,7 @@ export class DurableGovernanceService {
 
   recordResult(args = {}) {
     this._ensureOpen();
+    this.guard.assertOwned(); // fail closed before ANY RESULT mutation
     const normalized = { ...args };
     if (this.svc.state.taskId == null && normalized.taskId != null && this.store.hasTask(normalized.taskId)) {
       this._hydrateTask(normalized.taskId);
@@ -292,6 +299,7 @@ export class DurableGovernanceService {
   // Takeover NEVER touches delegated execution; reconcile that through the executor.
   takeover({ taskId = null, projectKey = null, identity = null, authorityToken = null } = {}) {
     this._ensureOpen();
+    this.guard.assertOwned(); // fail closed before a takeover can persist new authority
     const rec = this.resolveSemantic({ taskId, projectKey, identity });
     if (!rec.ok) throw governanceError(`${rec.error}: ${rec.reason}`, rec.error);
     const env = this.store.loadTask(rec.taskId);
