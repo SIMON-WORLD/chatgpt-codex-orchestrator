@@ -1,12 +1,12 @@
 # CAPABILITY_ROUTING
 
-> 当前规范性 routing / executor policy。历史研究与设计见 `docs/rfc-v0.2-chatgpt-native-capability-inventory.md`、`docs/rfc-v0.2-capability-routing.md` 与 `docs/rfc-v0.2-implementation-architecture.md`。如历史 RFC 与本文件对当前 operating policy 的表述冲突，以本文件为准；实现事实仍以 GitHub 当前代码为准。
+> 当前规范性 routing / executor / Brain governance policy。历史研究与设计见 `docs/rfc-v0.2-chatgpt-native-capability-inventory.md`、`docs/rfc-v0.2-capability-routing.md` 与 `docs/rfc-v0.2-implementation-architecture.md`。如历史 RFC 与本文件对当前 operating policy 的表述冲突，以本文件为准；实现事实仍以 GitHub 当前代码为准。
 
 ## 1. Authoritative Brain
 
-v0.2 的唯一 **authoritative Brain** 是 ChatGPT。
+v0.2 的唯一 **authoritative Brain** 是 ChatGPT；项目级 authority 同一时刻只有一个 **active Parent holder**。
 
-ChatGPT 负责：
+ChatGPT Parent 负责：
 
 - Evidence acquisition / investigation；
 - architecture / planning / decision；
@@ -17,7 +17,33 @@ ChatGPT 负责：
 - independent evidence reacquisition；
 - 最终 `ACCEPT / REVISE / DONE`。
 
-Codex、未来 Claude / DeepSeek 或其他 Agent 可以作为 specialist、advisor 或 executor，返回分析、执行结果和 evidence candidate；它们不与 ChatGPT 共享 v0.2 的最终 acceptance authority。
+Codex、未来 Claude / DeepSeek 或其他 Agent，以及 implementation / research / review ChatGPT sessions，可以作为 specialist、advisor、reviewer 或 executor，返回分析、执行结果和 evidence candidate；它们不与 active Parent 共享 v0.2 的项目级 final acceptance authority。
+
+### Parent authority is not a permanent conversation identity
+
+Parent role 是逻辑 authority role，不永久绑定某一条 ChatGPT conversation。ChatGPT conversation 是 disposable session/context surface。
+
+```text
+Project Parent Authority
+        |
+        +-- currently hosted by Parent Session A
+        |
+        +-- later hosted by Parent Session B after bounded takeover
+```
+
+Parent session replacement 必须复用 Brain Continuity 的 bounded re-entry / generation / fencing contract。新 Parent takeover 后，旧 Parent 的迟到 mutation 必须 fail closed；human 不中转 authority token 或内部 orchestration IDs。
+
+### Mission sessions
+
+v0.2 不把普通工作会话建模成永久 `Child Brain` hierarchy。可使用简单 operational role：
+
+- **Implementation Session** — 负责一个 bounded implementation mission，可将 sustained local coding 委托 Codex；
+- **Research Session** — 负责 bounded research mission；
+- **Review Session** — 独立评审 decision / implementation / evidence。
+
+这些 session 可以 reasoning、调查和调用工具，但其 mission scope 不自动授予 project-level architecture / roadmap / default-flip / release / final `DONE` authority。
+
+如果一个 conversation 没有通过当前 mission 或明确 Parent takeover 被指定为 Parent，它不得自动假设自己是 project-level Parent。
 
 未来是否引入 multi-Brain / shared-authority model 是独立架构问题，不在 v0.2 预先实现。
 
@@ -288,6 +314,34 @@ Executor RESULT / self-report
 
 执行 action 的返回值可以作为 evidence，但不应自动等于最终 acceptance。
 
+### Independent Review Gate
+
+正式原则：**single authority, plural evidence**。
+
+Independent review 是 Parent 可按风险和不确定性调用的 governance capability，不是每个任务的强制 quorum，也不是 multi-Parent voting。
+
+典型触发条件包括：
+
+- high architecture impact；
+- meaningful uncertainty / genuine disagreement；
+- difficult design/root-cause trade-off；
+- irreversible / expensive decision；
+- project kickoff；
+- operational default flip / release gate；
+- security / authority model change。
+
+可根据风险选择：Parent 直接决定、一个 independent reviewer，或 correctness + red-team/YAGNI 两类 reviewer。
+
+Reviewer 默认 contract：
+
+```text
+READ authoritative evidence
+→ ANALYZE independently
+→ RETURN structured critique
+```
+
+Reviewer finding 是 evidence，不是投票。重大 review 应尽量独立重取 GitHub/Web/runtime evidence；重要 reviewer finding 与 Parent adjudication 应持久化到对应 GitHub Issue/PR。
+
 ## 9. Governance Semantics
 
 Governance 属于 Brain control semantics，不等于 Local MCP transport。
@@ -295,6 +349,20 @@ Governance 属于 Brain control semantics，不等于 Local MCP transport。
 Native-only 任务不应为了形式统一强制经过 Secure Tunnel / Local MCP。
 
 当任务进入 Local Capability Plane 时，Local Governance Service 负责 local execution lifecycle 的持久控制与证据记录；Brain 仍拥有最终 `ACCEPT / REVISE / DONE`。
+
+### Architecture change control
+
+Accepted architecture 不应因为某个 Parent session 想到更漂亮的抽象就被随意替换。
+
+重大 `REPLAN` 前，Parent 应明确：
+
+1. 新出现了什么 authoritative / dogfood evidence；
+2. 哪一条 accepted contract 已不足或被证据反驳；
+3. 为什么更小的 bounded correction 不够；
+4. 是否应触发 Independent Review Gate；
+5. 如果涉及 North Star、重大 architecture 或 irreversible policy change，取得用户 approval。
+
+Complexity must earn existence through real dogfood evidence。
 
 ## 10. Mutation Policy
 
@@ -363,6 +431,8 @@ M7 通过后才单独决定 v0.2 operational default flip。
 
 ## 13. Future Agents
 
-项目当前以 ChatGPT 为主导。如果未来接入 Claude、DeepSeek 或其他 Agent，优先把它们视为 specialist / advisor / executor plane，并复用现有 capability/governance/evidence model。
+项目当前以 ChatGPT 为主导。如果未来接入 Claude、DeepSeek 或其他 Agent，优先把它们视为 specialist / advisor / reviewer / executor plane，并复用现有 capability/governance/evidence model。
 
-只有真实需求证明多 authoritative Brain 带来明确收益时，才单独研究 arbitration / consensus / shared-state authority；不要在 v0.2 为假设性 multi-Brain 复杂度付出实现成本。
+当前默认拓扑是：**one active Parent authority + optional independent reviewers/specialists/executors**。Reviewer 可以挑战 Parent，但不通过多数票取得 final authority。
+
+只有真实需求证明 multi-authoritative Brain 带来明确收益时，才单独研究 arbitration / consensus / shared-state authority；不要在 v0.2 为假设性 multi-Brain 复杂度付出实现成本。
