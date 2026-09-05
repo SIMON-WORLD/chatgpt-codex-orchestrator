@@ -1,6 +1,6 @@
 # Documentation Map
 
-This directory contains both **current architecture/contract documents** and **historical design evidence**. They intentionally serve different roles.
+This directory contains both **current architecture/contract documents**, **operational configuration templates**, and **historical design evidence**. They intentionally serve different roles.
 
 When documents disagree about the current project, do not infer recency from an RFC filename alone.
 
@@ -8,13 +8,27 @@ When documents disagree about the current project, do not infer recency from an 
 
 Use these documents for current project decisions:
 
-1. [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) — current phase, accepted milestones, active blocker, and next action.
+1. [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) — current phase, accepted milestones, active blocker, candidate governance clarification, and next action.
 2. [`../ROADMAP.md`](../ROADMAP.md) — accepted high-level path; future phases are not pre-invented without evidence.
-3. [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md) — normative current capability / route / executor policy.
+3. [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md) — normative current capability / route / executor / Brain-governance policy.
 4. [`architecture.md`](architecture.md) — current technical architecture and released-vs-candidate boundary.
 5. [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md) — **accepted post-M7 contract**, with implementation / real restart-re-entry dogfood still pending.
+6. [`chatgpt-project-instructions.md`](chatgpt-project-instructions.md) — canonical copy/paste source for ChatGPT Project Settings → Instructions after the corresponding documentation change is reviewed and merged.
 
 Implementation truth remains GitHub current code, PRs, CI, and releases. Project Library or narrative handoff material must not silently override newer GitHub evidence.
+
+## Current governance design work
+
+### Parent authority / independent review clarification
+
+The current candidate design is:
+
+- [`superpowers/specs/2026-09-05-parent-review-governance-design.md`](superpowers/specs/2026-09-05-parent-review-governance-design.md) — user-approved design pending independent review;
+- [`superpowers/plans/2026-09-05-parent-review-governance.md`](superpowers/plans/2026-09-05-parent-review-governance.md) — docs/config rollout and review plan.
+
+Core principle: **single authority, plural evidence** — one active project-level Parent authority, replaceable Parent sessions, and optional independent implementation/research/review sessions that do not automatically gain project-level final authority.
+
+This is a governance/documentation clarification. It does not add a reviewer scheduler, multi-Parent consensus, permanent Child-Brain hierarchy, new route, or new workflow runtime.
 
 ## Historical / design-input RFCs
 
@@ -62,11 +76,12 @@ These describe the currently released Alpha.3 operational fallback. They must no
 At the time of this map:
 
 ```text
-M0–M7                         ACCEPTED
-Brain Continuity contract     ACCEPTED
-Brain Continuity implementation / real dogfood     PENDING
-Operational default flip      DEFERRED
-M8 RC / release               NOT STARTED
+M0–M7                                      ACCEPTED
+Brain Continuity contract                  ACCEPTED
+Brain Continuity implementation / dogfood  PENDING
+Parent governance clarification             REVIEW PENDING
+Operational default flip                   DEFERRED
+M8 RC / release                            NOT STARTED
 ```
 
 For live status, always re-read [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) rather than treating this summary as a status database.
