@@ -19,6 +19,14 @@ ChatGPT 负责：
 
 Codex、未来 Claude / DeepSeek 或其他 Agent 可以作为 specialist、advisor 或 executor，返回分析、执行结果和 evidence candidate；它们不与 ChatGPT 共享 v0.2 的最终 acceptance authority。
 
+对当前 v0.2 control model，项目同时只维护一个 **project-authoritative Governance mission/task context**；并行的独立 project-authoritative Governance tasks 不在当前 scope。Parent role 不永久绑定某一条 ChatGPT conversation；replacement Parent 通过 Brain Continuity 对这个 active mission/task 做 bounded recovery / takeover / generation / fencing，而不是依赖一个新的 project-wide Parent registry。
+
+未被当前 mission 或明确 bounded Parent takeover 指定为 Parent 的 ChatGPT conversation，是 **bounded non-Parent mission session**。它可以在既定 scope 内 reasoning、调查、调用工具，并执行或 reconcile 已由 Parent 授权的 bounded work；但不取得 Parent generation，也不自行发起新的 project-level Governance control、改变 scope/acceptance、default flip、release 或项目 `DONE`。这些变化返回当前 Parent。
+
+对于 material / uncertain decision，Parent 可以按需请求独立 reviewer 挑战。Review finding 是 evidence，不是投票；只需把对 architecture、acceptance、PR、default flip、release 等有实质影响的 findings/decision 持久化到现有 GitHub Issue/PR。若 reviewer 本身无 GitHub 写能力，由有 GitHub 能力的 Parent/session 记录 material result，不要求用户充当 review courier。
+
+Material architecture change 必须有新的 authoritative / dogfood evidence，并优先采用最小 correction；只有真正 North Star、destructive、irreversible 或高风险 policy 决策才需要用户裁决。
+
 未来是否引入 multi-Brain / shared-authority model 是独立架构问题，不在 v0.2 预先实现。
 
 ## 2. Operating Loop
