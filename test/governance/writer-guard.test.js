@@ -142,7 +142,7 @@ test('two reclaimers against one dead/stale owner: exactly one wins; loser fails
   assert.equal(loser.held, false);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).writerId, winner.writerId);
   winner.assertOwned(); // winner remains canonical
-  const leftovers = fs.readdirSync(probe.dir).filter((n) => n.includes('.claim.'));
+  const leftovers = fs.readdirSync(probe.dir).filter((n) => n.includes('.claim.') || n.includes('.elect'));
   assert.equal(leftovers.length, 0);
   winner.release();
 });
@@ -152,16 +152,55 @@ test('reclaim is single-winner even when the slot changed after inspection (cont
   const probe = new GovernanceWriterGuard({ dataRoot, namespace });
   const file = writeDeadSlot(probe.dir);
   const winner = new GovernanceWriterGuard({ dataRoot, namespace });
-  // The loser inspects the dead slot; before it can claim, the winner reclaims and
-  // creates a live slot. The loser must detect the change, restore, and fail closed -
-  // never unlink/replace the winner's slot (the exact old rm+wx race).
-  const loser = new GovernanceWriterGuard({ dataRoot, namespace, hooks: { beforeStaleClaim() { winner.acquire(); } } });
+  // The loser inspects the dead slot; before it can claim (and crucially before it
+  // takes ANY destructive step), the winner reclaims and creates a live slot. The
+  // loser must then revalidate, detect the change, back off, and fail closed - it
+  // must NEVER move/delete/rewrite the winner's canonical slot. The winner must stay
+  // canonical throughout the loser's attempt (assertOwned + refresh while the loser
+  // is mid-attempt).
+  const winnerProbe = [];
+  const loser = new GovernanceWriterGuard({
+    dataRoot, namespace,
+    hooks: {
+      beforeReclaim() {
+        winner.acquire();                 // winner reclaims while loser is mid-attempt
+        winner.assertOwned();             // still canonical DURING loser's attempt
+        winner.refresh();                 // winner can still operate its slot
+        winnerProbe.push('winner-canonical-during-loser-attempt');
+      },
+    },
+  });
   assert.throws(() => loser.acquire(), (e) => e instanceof GovernanceWriterError && e.code === 'writer_conflict');
   assert.equal(loser.held, false);
+  assert.deepEqual(winnerProbe, ['winner-canonical-during-loser-attempt']);
+  // Winner slot was never moved/deleted/replaced and remains continuously canonical.
   const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(onDisk.writerId, winner.writerId);
-  winner.assertOwned(); // winner slot intact and canonical
-  const leftovers = fs.readdirSync(probe.dir).filter((n) => n.includes('.claim.'));
+  winner.assertOwned();
+  winner.refresh();
+  const leftovers = fs.readdirSync(probe.dir).filter((n) => n.includes('.claim.') || n.includes('.elect'));
   assert.equal(leftovers.length, 0);
   winner.release();
+});
+
+
+
+
+test('a pre-existing election token is NEVER removed/replaced (even dead PID); contender fails closed and the canonical slot stays byte-for-byte untouched', () => {
+  const { dataRoot, namespace } = fixture();
+  const probe = new GovernanceWriterGuard({ dataRoot, namespace });
+  const file = writeDeadSlot(probe.dir);
+  const electPath = path.join(probe.dir, 'writer.json.elect');
+  const electPayload = JSON.stringify({ reclaimerId: 'dead-elector', pid: 2147483647, at: 1000, heartbeatAt: 1000 });
+  fs.writeFileSync(electPath, electPayload, 'utf8');
+  const slotBefore = fs.readFileSync(file, 'utf8');
+
+  // A crashed reclaimer left its token behind. No automatic stale-election recovery
+  // exists: the contender must fail closed and must not delete/replace either the
+  // election token or the canonical writer slot.
+  const contender = new GovernanceWriterGuard({ dataRoot, namespace });
+  assert.throws(() => contender.acquire(), (e) => e instanceof GovernanceWriterError && e.code === 'writer_conflict');
+  assert.equal(contender.held, false);
+  assert.equal(fs.readFileSync(electPath, 'utf8'), electPayload, 'election token was not touched');
+  assert.equal(fs.readFileSync(file, 'utf8'), slotBefore, 'canonical slot was not touched');
 });

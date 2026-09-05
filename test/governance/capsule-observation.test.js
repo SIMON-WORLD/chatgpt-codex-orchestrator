@@ -110,6 +110,45 @@ test('capsule nextSafeAction is deterministic across durable states', () => {
 });
 
 
+test('capsule bound is unconditional: huge ids, statuses, and a huge caller execution still fit', () => {
+  const huge = 'H'.repeat(4000);
+  const state = sampleState({
+    taskId: huge + 'task',
+    control: 'ASK_USER',
+    awaitingUser: true,
+    askUser: { whyBlocked: huge, minimalUserAction: huge, question: huge },
+    currentStepId: huge + 'step',
+    previousStepId: huge + 'prev',
+    steps: { [huge + 'step']: {
+      stepId: huge + 'step',
+      acceptance: [{ id: huge + 'acc', required: true, status: 'pass' }, { id: huge + 'acc2', required: true, status: huge + 'status' }],
+      evidence: [{ acceptanceId: huge + 'acc', status: huge + 'status', kind: huge + 'kind', summary: huge }],
+      changed: [huge + 'file'],
+      executorStatus: 'success',
+      machineGate: 'pass',
+      brainAcceptance: 'pending',
+    } },
+  });
+  // A huge caller-supplied execution object (nested arrays/objects of long strings).
+  const hugeExecution = {
+    route: 'CODEX_DELEGATE',
+    payload: { deep: { list: [huge, huge, huge], text: huge } },
+    note: huge,
+  };
+  const cap = buildContextCapsule(state, { projectKey: huge + 'repo', identity: huge + 'id', taskId: huge + 'task', authority: { generation: 1 }, execution: hugeExecution });
+  const size = JSON.stringify(cap).length;
+  assert.ok(size <= CAPSULE_BOUNDS.maxSerializedBytes, 'serialized capsule must fit, got ' + size);
+  assert.equal(cap.truncation.serializedBytes, size, 'self-size metadata equals the emitted serialized length');
+  assert.ok(cap.truncation.serializedBytes <= CAPSULE_BOUNDS.maxSerializedBytes);
+  // Truncation metadata reflects loss and no full-size text survived.
+  assert.ok(cap.truncation.text.length > 0, 'truncated fields are reported');
+  assert.equal(JSON.stringify(cap).includes(huge), false);
+  // Head references/statuses still reflect durable truth (no fabrication).
+  assert.equal(cap.step.acceptance[0].status, 'pass');
+  // execution was bounded (marker or clamped), never passed through raw.
+  assert.notEqual(JSON.stringify(cap.execution).length, JSON.stringify(hugeExecution).length);
+});
+
 test('capsule stays bounded on large durable state (cardinality + text caps, counts/references preserved)', () => {
   const bigAcceptance = [];
   const bigEvidence = [];
