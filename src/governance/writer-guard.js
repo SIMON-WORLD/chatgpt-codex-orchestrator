@@ -15,6 +15,11 @@
 //     (crash/restart continuity).
 //   - An owner with no recorded PID (unknown) is reclaimed only when its heartbeat is
 //     older than the stale window.
+//   - Reclaim is single-winner and CAS-equivalent: a contender atomically moves the
+//     stale slot it inspected to a private tombstone, verifies the moved record is the
+//     exact stale owner it observed, and only then creates its own slot. If the slot
+//     changed since inspection (e.g. another contender already won), the contender
+//     restores it and fails closed - it never deletes/replaces a live winner's slot.
 //   - assertOwned()/refresh() fail closed whenever this writer no longer owns the slot,
 //     so no durable Governance mutation can be persisted after ownership loss.
 //   - Clean shutdown releases the slot. Read-only recovery discovery never needs it.
@@ -41,7 +46,7 @@ function realPidAlive(pid) {
 function makeWriterId() { return `writer-${process.pid}-${crypto.randomUUID()}`; }
 
 export class GovernanceWriterGuard {
-  constructor({ dataRoot, namespace = 'default', writerId = null, staleMs = WRITER_STALE_MS_DEFAULT, now = null, pidAlive = null } = {}) {
+  constructor({ dataRoot, namespace = 'default', writerId = null, staleMs = WRITER_STALE_MS_DEFAULT, now = null, pidAlive = null, hooks = null } = {}) {
     if (!dataRoot) throw new GovernanceWriterError('GovernanceWriterGuard requires a dataRoot', { code: 'bad_request' });
     this.dataRoot = path.resolve(dataRoot);
     this.namespace = String(namespace);
@@ -51,6 +56,8 @@ export class GovernanceWriterGuard {
     this.staleMs = staleMs;
     this._now = now || (() => Date.now());
     this._pidAlive = pidAlive || realPidAlive;
+    // Deterministic-race test seam only (never set in production callers).
+    this._hooks = hooks || {};
     this._held = false;
   }
 
@@ -100,34 +107,87 @@ export class GovernanceWriterGuard {
   acquire() {
     if (this._held) return { ok: true, writerId: this.writerId, acquired: true };
     const file = this._file();
-    try {
-      const fd = fs.openSync(file, 'wx');
-      fs.writeSync(fd, JSON.stringify(this._payload(), null, 2), 'utf8');
-      fs.closeSync(fd);
-      this._held = true;
-      return { ok: true, writerId: this.writerId, acquired: true };
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      const existing = this._read();
-      if (existing && existing.writerId === this.writerId) {
-        // Re-entrant acquire by the same writer object: refresh and continue.
-        this._refresh();
-        return { ok: true, writerId: this.writerId, acquired: true };
-      }
-      if (existing && this._isStale(existing, this._now())) {
-        // Owner is dead (or an unknown-PID owner is stale): reclaim the slot. A live
-        // owner's file is never deleted.
-        try { fs.rmSync(file, { force: true }); } catch {}
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
         const fd = fs.openSync(file, 'wx');
         fs.writeSync(fd, JSON.stringify(this._payload(), null, 2), 'utf8');
         fs.closeSync(fd);
         this._held = true;
+        return { ok: true, writerId: this.writerId, acquired: true };
+      } catch (e) {
+        if (e.code !== 'EEXIST') throw e;
+      }
+      const existing = this._read();
+      if (!existing) continue; // slot vanished; retry the exclusive create
+      if (existing.writerId === this.writerId) {
+        // Re-entrant acquire by the same writer object: refresh and continue.
+        this._refresh();
+        return { ok: true, writerId: this.writerId, acquired: true };
+      }
+      if (!this._isStale(existing, this._now())) {
+        throw new GovernanceWriterError(
+          `governance namespace ${this.namespace} at ${this.dataRoot} is already owned by active writer ${existing.writerId}; a second canonical Governance writer is not allowed`,
+          { code: 'writer_conflict' },
+        );
+      }
+      const claim = this._claimStaleSlot(existing);
+      if (claim.ok) {
+        this._held = true;
         return { ok: true, writerId: this.writerId, acquired: true, reclaimed: true };
       }
-      throw new GovernanceWriterError(
-        `governance namespace ${this.namespace} at ${this.dataRoot} is already owned by active writer ${existing ? existing.writerId : 'unknown'}; a second canonical Governance writer is not allowed`,
-        { code: 'writer_conflict' },
-      );
+      if (claim.restored) continue; // slot changed since inspection; retry from scratch
+      // Lost the claim race (slot moved/claimed by another contender): retry; a later
+      // attempt will observe the winner as a live owner and fail closed.
+    }
+    throw new GovernanceWriterError(
+      `governance namespace ${this.namespace} at ${this.dataRoot} could not be claimed after bounded retries; a second canonical Governance writer is not allowed`,
+      { code: 'writer_conflict' },
+    );
+  }
+
+  // CAS-equivalent single-winner reclaim. The contender atomically renames the stale
+  // slot it inspected to a private tombstone, verifies the moved record is the exact
+  // stale owner it observed, and only then creates its own slot. If the slot changed
+  // since inspection, the contender restores it and fails closed so it can never
+  // delete/replace a live winner's slot.
+  _claimStaleSlot(existing) {
+    const file = this._file();
+    const tomb = `${file}.claim.${this.writerId}.${crypto.randomUUID()}`;
+    if (typeof this._hooks.beforeStaleClaim === 'function') {
+      this._hooks.beforeStaleClaim({ existing, file, guard: this });
+    }
+    try {
+      fs.renameSync(file, tomb);
+    } catch {
+      // Slot vanished or was moved concurrently: another contender already claimed.
+      return { ok: false, reason: 'lost_rename' };
+    }
+    let moved = null;
+    try { moved = JSON.parse(fs.readFileSync(tomb, 'utf8')); } catch {}
+    if (!moved || moved.writerId !== existing.writerId) {
+      // We atomically moved a slot that is NOT the stale owner we inspected (a live
+      // winner created it after our inspection). Restore it; never delete a changed slot.
+      try {
+        fs.renameSync(tomb, file);
+        return { ok: false, reason: 'changed', restored: true };
+      } catch {
+        // Path is occupied again; preserve the moved winner record rather than delete it.
+        return { ok: false, reason: 'changed_unrestorable' };
+      }
+    }
+    // We hold the only stale inode. Create our fresh slot; the exclusive create makes
+    // the outcome single-winner even if another contender raced into the gap.
+    try {
+      const fd = fs.openSync(file, 'wx');
+      fs.writeSync(fd, JSON.stringify(this._payload(), null, 2), 'utf8');
+      fs.closeSync(fd);
+      try { fs.rmSync(tomb, { force: true }); } catch {}
+      return { ok: true, reclaimed: true };
+    } catch (e) {
+      // Another contender created its slot first in the gap: we lose. Remove only our
+      // tombstone (the stale record we claimed) and fail closed.
+      try { fs.rmSync(tomb, { force: true }); } catch {}
+      return { ok: false, reason: 'lost_create' };
     }
   }
 

@@ -444,3 +444,40 @@ test('an ousted writer cannot persist any subsequent Governance mutation/state c
   r1.close();
   guard2.release();
 });
+
+
+test('unique semantic recovery resolves a task with corrupt primary + valid backup', () => {
+  const { dataRoot, namespace } = fixture();
+  const r1 = createDurableGovernanceService({ dataRoot, namespace });
+  const plan = r1.transition({ taskId: 't1', control: 'PLAN', projectKey: 'repo/backup', identity: 'issue-backup' });
+  const token = plan.authorityToken;
+  r1.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }], authorityToken: token });
+  const storeDir = r1.store.dir;
+  r1.close();
+
+  const r2 = createDurableGovernanceService({ dataRoot, namespace });
+  fs.writeFileSync(path.join(storeDir, 't1.json'), '{{corrupt primary', 'utf8'); // .bak valid
+  const rec = r2.recoverSemantic({ projectKey: 'repo/backup', identity: 'issue-backup' });
+  assert.equal(rec.ok, true);
+  assert.equal(rec.taskId, 't1');
+  const to = r2.takeover({ projectKey: 'repo/backup', identity: 'issue-backup' });
+  assert.equal(to.ok, true);
+  assert.equal(to.capsule.taskId, 't1');
+  assert.equal(r2.status().steps.s1.machineGate, 'pending');
+  r2.close();
+});
+
+test('unique semantic recovery resolves a backup-only task when the primary is missing', () => {
+  const { dataRoot, namespace } = fixture();
+  const r1 = createDurableGovernanceService({ dataRoot, namespace });
+  r1.transition({ taskId: 't1', control: 'PLAN', projectKey: 'repo/backup-only', identity: 'issue-backup-only' });
+  const storeDir = r1.store.dir;
+  r1.close();
+
+  const r2 = createDurableGovernanceService({ dataRoot, namespace });
+  fs.rmSync(path.join(storeDir, 't1.json')); // only .bak remains
+  const rec = r2.recoverSemantic({ projectKey: 'repo/backup-only', identity: 'issue-backup-only' });
+  assert.equal(rec.ok, true);
+  assert.equal(rec.taskId, 't1');
+  r2.close();
+});

@@ -102,3 +102,42 @@ test('scanStrict returns task envelopes, excludes writer.json, and counts corrup
   assert.equal(corruptCount, 1);
   assert.deepEqual(tasks.map((t) => t.taskId).sort(), ['a', 'b']);
 });
+
+
+test('scanStrict resolves a candidate with corrupt primary + valid backup (same semantics as loadTask)', () => {
+  const { dataRoot, namespace } = fixture();
+  const store = new GovernanceStore({ dataRoot, namespace });
+  store.saveTask('t1', makeGovernanceEnvelope({ taskId: 't1', state: state('t1'), projectKey: 'p', identity: 'i' }));
+  fs.writeFileSync(path.join(store.dir, 't1.json'), '{{corrupt primary', 'utf8'); // .bak remains valid
+  const { tasks, corruptCount } = store.scanStrict();
+  assert.equal(corruptCount, 0);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].taskId, 't1');
+  assert.equal(tasks[0].state.control, 'TASK');
+  assert.equal(store.loadTask('t1').taskId, 't1'); // loadTask agrees
+});
+
+test('scanStrict includes a backup-only candidate when the primary is missing', () => {
+  const { dataRoot, namespace } = fixture();
+  const store = new GovernanceStore({ dataRoot, namespace });
+  store.saveTask('t1', makeGovernanceEnvelope({ taskId: 't1', state: state('t1'), projectKey: 'p', identity: 'i' }));
+  fs.rmSync(path.join(store.dir, 't1.json')); // primary lost; only .bak remains
+  const { tasks, corruptCount } = store.scanStrict();
+  assert.equal(corruptCount, 0);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].taskId, 't1');
+  assert.equal(store.loadTask('t1').taskId, 't1');
+});
+
+test('scanStrict still fails closed for primary+backup corruption and future schema', () => {
+  const { dataRoot, namespace } = fixture();
+  const store = new GovernanceStore({ dataRoot, namespace });
+  store.saveTask('a', makeGovernanceEnvelope({ taskId: 'a', state: state('a') }));
+  store.saveTask('b', makeGovernanceEnvelope({ taskId: 'b', state: state('b') }));
+  fs.writeFileSync(path.join(store.dir, 'a.json'), 'broken', 'utf8');
+  fs.writeFileSync(path.join(store.dir, 'a.json.bak'), 'broken too', 'utf8');
+  fs.writeFileSync(path.join(store.dir, 'c.json'), JSON.stringify({ schemaVersion: GOVERNANCE_SCHEMA_VERSION + 9, kind: GOVERNANCE_STATE_KIND, taskId: 'c', state: state('c') }), 'utf8');
+  const { tasks, corruptCount } = store.scanStrict();
+  assert.equal(corruptCount, 2); // a (primary+backup) and c (future schema)
+  assert.deepEqual(tasks.map((t) => t.taskId), ['b']);
+});

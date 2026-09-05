@@ -81,7 +81,7 @@ export { GovernanceService, createGovernanceService, GovernanceError, GOV_CONTRO
 export { DurableGovernanceService, createDurableGovernanceService, performContinuityTakeover, reconcileDelegatedExecution, makeAuthorityToken, governanceError } from './governance/durable.js';
 export { GovernanceStore, GovernanceStoreError, GOVERNANCE_SCHEMA_VERSION, GOVERNANCE_STATE_KIND, atomicWriteJsonWithBackup } from './governance/store.js';
 export { GovernanceWriterGuard, GovernanceWriterError, WRITER_STALE_MS_DEFAULT } from './governance/writer-guard.js';
-export { buildContextCapsule, buildExecutionSummary, deriveNextSafeAction } from './governance/capsule.js';
+export { buildContextCapsule, buildExecutionSummary, deriveNextSafeAction, CAPSULE_BOUNDS, CAPSULE_VERSION } from './governance/capsule.js';
 export { CapabilityObservationLedger, CapabilityObservationError, requireCapabilityRediscovery, capabilityIsCurrent } from './governance/observation.js';
 
 // --- v0.2 M5: production runtime assembly + Brain-local transport ------------

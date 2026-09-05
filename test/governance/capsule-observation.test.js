@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CapabilityObservationLedger, requireCapabilityRediscovery, capabilityIsCurrent } from '../../src/governance/observation.js';
-import { buildContextCapsule, deriveNextSafeAction } from '../../src/governance/capsule.js';
+import { buildContextCapsule, deriveNextSafeAction, CAPSULE_BOUNDS } from '../../src/governance/capsule.js';
 
 // ---- Capability observations are ephemeral, never timeless truth -------------
 test('capability observations are scoped and available only within the current session', () => {
@@ -107,4 +107,50 @@ test('capsule nextSafeAction is deterministic across durable states', () => {
   assert.equal(buildContextCapsule(delegated).nextSafeAction, 'reconcile');
   const failing = sampleState({ steps: { s1: { stepId: 's1', acceptance: [], evidence: [], executorStatus: 'failure', machineGate: 'fail', changed: [] } } });
   assert.equal(buildContextCapsule(failing).nextSafeAction, 'revise');
+});
+
+
+test('capsule stays bounded on large durable state (cardinality + text caps, counts/references preserved)', () => {
+  const bigAcceptance = [];
+  const bigEvidence = [];
+  const bigChanged = [];
+  const longText = 'x'.repeat(3000);
+  for (let i = 0; i < 300; i++) {
+    bigAcceptance.push({ id: 'acc-' + i, required: true, status: i % 2 === 0 ? 'pass' : 'missing' });
+    bigEvidence.push({ acceptanceId: 'acc-' + i, status: i % 2 === 0 ? 'pass' : 'missing', kind: 'verify', summary: longText });
+    bigChanged.push('src/file-' + i + '.js/' + longText);
+  }
+  const state = sampleState({
+    control: 'ASK_USER',
+    awaitingUser: true,
+    askUser: { whyBlocked: longText, minimalUserAction: longText, question: longText + 'q' },
+    steps: { s1: {
+      stepId: 's1',
+      acceptance: bigAcceptance,
+      evidence: bigEvidence,
+      changed: bigChanged,
+      executorStatus: 'success',
+      machineGate: 'pass',
+      brainAcceptance: 'pending',
+    } },
+  });
+  const cap = buildContextCapsule(state, { projectKey: 'simon-world/repo', identity: 'issue-large', authority: { generation: 3 } });
+  const size = JSON.stringify(cap).length;
+  assert.ok(size <= CAPSULE_BOUNDS.maxSerializedBytes, 'capsule must stay within the enforced serialized bound, got ' + size);
+  // Count/reference metadata tells the Parent the authoritative state has more content.
+  assert.equal(cap.truncation.acceptance.total, 300);
+  assert.equal(cap.truncation.evidence.total, 300);
+  assert.equal(cap.truncation.changed.total, 300);
+  assert.ok(cap.truncation.acceptance.dropped > 0);
+  assert.ok(cap.truncation.evidence.dropped > 0);
+  assert.ok(cap.truncation.changed.dropped > 0);
+  assert.ok(cap.step.acceptance.length <= CAPSULE_BOUNDS.fallbackAcceptanceItems || cap.truncation.boundsUsed === 'normal');
+  assert.ok(cap.step.acceptance.length <= CAPSULE_BOUNDS.acceptanceItems);
+  // Truncation never fabricates acceptance: included statuses match durable input order.
+  assert.equal(cap.step.acceptance[0].status, 'pass');
+  assert.equal(cap.step.acceptance[1].status, 'missing');
+  // No full-size variable text survived.
+  const raw = JSON.stringify(cap);
+  assert.equal(raw.includes(longText), false);
+  assert.ok(raw.includes('capability availability is an ephemeral runtime observation'), 'freshness contract remains present');
 });

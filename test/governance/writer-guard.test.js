@@ -121,3 +121,47 @@ test('refresh keeps the heartbeat fresh so an active live writer is not stolen',
   assert.throws(() => w2.acquire(), (e) => e.code === 'writer_conflict');
   w1.release();
 });
+
+
+function writeDeadSlot(guardDir, { writerId = 'dead-owner', pid = 2147483647 } = {}) {
+  const file = path.join(guardDir, 'writer.json');
+  fs.writeFileSync(file, JSON.stringify({ writerId, namespace: 'default', dataRoot: guardDir, pid, at: 1000, heartbeatAt: 1000 }), 'utf8');
+  return file;
+}
+
+test('two reclaimers against one dead/stale owner: exactly one wins; loser fails closed and cannot delete/replace winner slot', () => {
+  const { dataRoot, namespace } = fixture();
+  const probe = new GovernanceWriterGuard({ dataRoot, namespace });
+  const file = writeDeadSlot(probe.dir);
+  const winner = new GovernanceWriterGuard({ dataRoot, namespace });
+  const win = winner.acquire();
+  assert.equal(win.ok, true);
+  assert.equal(win.reclaimed, true);
+  const loser = new GovernanceWriterGuard({ dataRoot, namespace });
+  assert.throws(() => loser.acquire(), (e) => e instanceof GovernanceWriterError && e.code === 'writer_conflict');
+  assert.equal(loser.held, false);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).writerId, winner.writerId);
+  winner.assertOwned(); // winner remains canonical
+  const leftovers = fs.readdirSync(probe.dir).filter((n) => n.includes('.claim.'));
+  assert.equal(leftovers.length, 0);
+  winner.release();
+});
+
+test('reclaim is single-winner even when the slot changed after inspection (contender never deletes the winner slot)', () => {
+  const { dataRoot, namespace } = fixture();
+  const probe = new GovernanceWriterGuard({ dataRoot, namespace });
+  const file = writeDeadSlot(probe.dir);
+  const winner = new GovernanceWriterGuard({ dataRoot, namespace });
+  // The loser inspects the dead slot; before it can claim, the winner reclaims and
+  // creates a live slot. The loser must detect the change, restore, and fail closed -
+  // never unlink/replace the winner's slot (the exact old rm+wx race).
+  const loser = new GovernanceWriterGuard({ dataRoot, namespace, hooks: { beforeStaleClaim() { winner.acquire(); } } });
+  assert.throws(() => loser.acquire(), (e) => e instanceof GovernanceWriterError && e.code === 'writer_conflict');
+  assert.equal(loser.held, false);
+  const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(onDisk.writerId, winner.writerId);
+  winner.assertOwned(); // winner slot intact and canonical
+  const leftovers = fs.readdirSync(probe.dir).filter((n) => n.includes('.claim.'));
+  assert.equal(leftovers.length, 0);
+  winner.release();
+});

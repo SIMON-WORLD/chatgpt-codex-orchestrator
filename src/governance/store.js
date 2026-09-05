@@ -187,32 +187,49 @@ export class GovernanceStore {
     }
   }
 
+  // Shared primary -> backup -> named fail-closed resolution. Both loadTask() and the
+  // bounded semantic enumeration reuse EXACTLY the same semantics so a recoverable
+  // candidate (corrupt primary + valid backup, or backup-only after primary loss) is
+  // never treated as corruption, while primary+backup corruption and future/unknown
+  // schema stay fail-closed.
+  _resolveStateFile(primaryPath, backupPath, { taskId = null } = {}) {
+    const primary = this._loadCandidate(primaryPath, taskId);
+    if (primary.env) return primary.env;
+    if (primary.error && primary.error.code === 'schema_unsupported') throw primary.error;
+    const bak = this._loadCandidate(backupPath, taskId);
+    if (bak.env) return bak.env;
+    if (bak.error && bak.error.code === 'schema_unsupported') throw bak.error;
+    const detail = (primary.error && primary.error.message) || (bak.error && bak.error.message) || 'no primary or backup file';
+    throw new GovernanceStoreError(`governance state corrupt (primary and backup) for ${taskId || path.basename(primaryPath)}: ${detail}`, { code: 'corrupt', taskId });
+  }
+
   // Primary -> backup -> named fail-closed error. Migrations run for known older
   // schema versions; future/unknown schema throws schema_unsupported (never falls back).
   loadTask(taskId) {
     const file = this._taskFile(taskId);
-    const primary = this._loadCandidate(file, taskId);
-    if (primary.env) return primary.env;
-    if (primary.error && primary.error.code === 'schema_unsupported') throw primary.error;
-    const bak = this._loadCandidate(file + '.bak', taskId);
-    if (bak.env) return bak.env;
-    if (bak.error && bak.error.code === 'schema_unsupported') throw bak.error;
-    const detail = (primary.error && primary.error.message) || (bak.error && bak.error.message) || 'no primary or backup file';
-    throw new GovernanceStoreError(`governance state corrupt (primary and backup) for ${taskId}: ${detail}`, { code: 'corrupt', taskId });
+    return this._resolveStateFile(file, file + '.bak', { taskId });
   }
 
   // Strict namespace scan used only by bounded recovery. Corruption is never treated
-  // as absence: any unreadable/non-envelope file makes recovery fail closed.
+  // as absence. Each candidate (identified by a .json primary and/or its .json.bak)
+  // is resolved with the SAME primary -> backup -> schema semantics as loadTask, so a
+  // candidate with a corrupt primary + valid backup (or only a backup) is enumerated
+  // normally. Only candidates where primary AND backup are corrupt/unreadable, or
+  // whose primary carries a future/unknown schema, fail closed as corrupt.
   scanStrict() {
     if (!fs.existsSync(this.dir)) return { tasks: [], corruptCount: 0 };
+    const names = fs.readdirSync(this.dir);
+    const keys = new Set();
+    for (const name of names) {
+      if (name === 'writer.json' || name.startsWith('.writer') || name.endsWith('.tmp')) continue;
+      if (name.endsWith('.json.bak')) { keys.add(name.slice(0, -9)); continue; }
+      if (name.endsWith('.json')) { keys.add(name.slice(0, -5)); continue; }
+    }
     const tasks = [];
     let corruptCount = 0;
-    for (const name of fs.readdirSync(this.dir)) {
-      if (!name.endsWith('.json') || name.endsWith('.json.bak') || name.endsWith('.tmp')) continue;
-      if (name === 'writer.json' || name.startsWith('.writer')) continue;
+    for (const key of keys) {
       try {
-        const obj = JSON.parse(fs.readFileSync(path.join(this.dir, name), 'utf8'));
-        const env = migrateEnvelope(validateEnvelope(obj));
+        const env = this._resolveStateFile(path.join(this.dir, key + '.json'), path.join(this.dir, key + '.json.bak'), { taskId: null });
         tasks.push(env);
       } catch {
         corruptCount += 1;
