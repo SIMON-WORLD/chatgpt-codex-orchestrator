@@ -232,6 +232,7 @@ export class AppServerExecutor {
     this._notifiers = new Set();
     this._turnUnits = new Map(); // in-memory cache (durable source of truth is job.turnUnits)
     this._settingsWaiters = new Map(); // threadId -> { resolve, reject, timer } for thread/settings/updated
+    this._recoveryObservationThreads = new Set(); // suppress replayed turn lifecycle side-effects during bounded remediation
     this._setup();
   }
 
@@ -275,6 +276,7 @@ export class AppServerExecutor {
     if (method === 'turn/started' || method === 'turn/completed') {
       const params = note.params || {};
       const threadId = params.threadId;
+      if (this._recoveryObservationThreads.has(threadId)) { this._emit(note); return; }
       const turn = params.turn || {};
       const job = this.jobMap.findByThread(threadId);
       if (!job) { this._emit(note); return; }
@@ -362,53 +364,77 @@ export class AppServerExecutor {
     return { ok: false, reason: unbound.length === 0 ? 'no candidate turn for current mutation unit' : 'multiple candidate turns for current mutation unit', unitId };
   }
 
-  // Shared authoritative identity-safe reconciliation (used by reconcile() and resume()).
-  // thread/resume + thread/read -> resolve the CURRENT mutation unit's turn (durably
-  // binding a single unseen candidate) -> reconcile its real status.
-  async _authoritativeReconcileCore(job) {
+  // Read-only authoritative lifecycle observation for one already-selected durable job.
+  // It may bind a uniquely identifiable unseen turn to the persisted mutation unit, but
+  // it never starts/continues/interrupts a turn and never acquires a writer. This is the
+  // primitive used by bounded ambiguity remediation before the normal public recovery path.
+  async _authoritativeObserveLifecycle(job) {
+    if (!job || !job.threadId) return this._authoritativeObserveLifecycleCore(job);
+    this._recoveryObservationThreads.add(job.threadId);
+    try {
+      return await this._authoritativeObserveLifecycleCore(job);
+    } finally {
+      this._recoveryObservationThreads.delete(job.threadId);
+    }
+  }
+
+  async _authoritativeObserveLifecycleCore(job) {
     const jobId = job.jobId;
     const unitId = job.mutationUnitId || null;
-    if (!job.threadId) return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: 'no thread identity to reconcile' };
-    const isWriter = this._isWriter(job);
-
+    if (!job.threadId) return { ok: false, resolution: 'unresolved', reason: 'no thread identity to reconcile' };
     let resumed;
     try {
       resumed = await this.client.request('thread/resume', { threadId: job.threadId, ...(job.cwd ? { cwd: job.cwd } : {}) });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: 'resume failed: ' + String(e.message || e).slice(0, 160) };
+      return { ok: false, resolution: 'unresolved', reason: 'resume failed: ' + String(e.message || e).slice(0, 160) };
     }
     if (!(resumed && resumed.thread && resumed.thread.id)) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: 'thread/resume returned no thread id' };
+      return { ok: false, resolution: 'unresolved', reason: 'thread/resume returned no thread id' };
     }
     let read;
     try {
       read = await this.client.request('thread/read', { threadId: job.threadId, includeTurns: true });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: 'thread/read failed: ' + String(e.message || e).slice(0, 160) };
+      return { ok: false, resolution: 'unresolved', reason: 'thread/read failed: ' + String(e.message || e).slice(0, 160) };
     }
     const thread = read && read.thread;
     const turns = (thread && Array.isArray(thread.turns)) ? thread.turns : [];
-
     const resolved = this._resolveCurrentUnitTurn(job, turns);
     if (!resolved.ok) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: resolved.reason };
+      return { ok: false, resolution: 'unresolved', reason: resolved.reason };
     }
     const turn = resolved.turn;
-    // Durable-bind a single unseen candidate to the current mutation unit.
     if (resolved.resolution === 'unbound_single') {
       const tu = { ...(job.turnUnits || {}), [turn.id]: unitId };
       this.jobMap.update(jobId, { turnId: turn.id, turnUnits: tu, updatedAt: Date.now() });
       this._turnUnits.set(turn.id, unitId);
     }
+    if (TERMINAL_TURN_STATES.includes(turn.status)) return { ok: true, resolution: 'terminal', state: turn.status, unitId };
+    if (turn.status === 'inProgress') return { ok: true, resolution: 'in_progress', state: 'running', unitId };
+    this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
+    return { ok: false, resolution: 'unresolved', reason: 'ambiguous or unreadable turn state' };
+  }
 
-    if (TERMINAL_TURN_STATES.includes(turn.status)) {
+  // Shared authoritative identity-safe reconciliation (used by reconcile() and resume()).
+  // thread/resume + thread/read -> resolve the CURRENT mutation unit's turn (durably
+  // binding a single unseen candidate) -> reconcile its real status.
+  async _authoritativeReconcileCore(job) {
+    const jobId = job.jobId;
+    const unitId = job.mutationUnitId || null;
+    const isWriter = this._isWriter(job);
+    const observed = await this._authoritativeObserveLifecycle(job);
+    if (!observed.ok) {
+      return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: observed.reason };
+    }
+
+    if (observed.resolution === 'terminal') {
       if (!isWriter) {
-        const rel = this._releaseUnitOnTerminal(job, turn.status);
-        return { ok: true, resolution: 'terminal', state: turn.status, ownershipReleased: rel.ownershipReleased, recoveredUnitId: unitId, mutationUnitId: unitId };
+        const rel = this._releaseUnitOnTerminal(job, observed.state);
+        return { ok: true, resolution: 'terminal', state: observed.state, ownershipReleased: rel.ownershipReleased, recoveredUnitId: unitId, mutationUnitId: unitId };
       }
       if (this.owner.owner === 'codex' && this.owner.unitId !== unitId) {
         this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
@@ -418,11 +444,11 @@ export class AppServerExecutor {
         this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
         return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: 'ownership conflict: workspace owned by chatgpt' };
       }
-      const rel = this._releaseUnitOnTerminal(job, turn.status);
-      return { ok: true, resolution: 'terminal', state: turn.status, ownershipReleased: rel.ownershipReleased, recoveredUnitId: unitId, mutationUnitId: unitId };
+      const rel = this._releaseUnitOnTerminal(job, observed.state);
+      return { ok: true, resolution: 'terminal', state: observed.state, ownershipReleased: rel.ownershipReleased, recoveredUnitId: unitId, mutationUnitId: unitId };
     }
 
-    if (turn.status === 'inProgress') {
+    if (observed.resolution === 'in_progress') {
       if (!isWriter) {
         this.jobMap.update(jobId, { state: 'running', updatedAt: Date.now() });
         return { ok: true, resolution: 'in_progress', state: 'running', ownershipReleased: false, recoveredUnitId: unitId, mutationUnitId: unitId };
@@ -743,6 +769,50 @@ export class AppServerExecutor {
     this.jobMap.update(jobId, { turnId, turnUnits: { ...(contJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
     const contEff = permissionContract(this.jobMap.load(jobId));
     return { jobId, threadId: job.threadId, turnId, state: 'running', accessMode, sandbox: job.sandbox || null, approvalPolicy, isWriter, mutationOwner: this.owner.owner, effectiveSandbox: contEff.effectiveSandbox, effectiveApprovalPolicy: contEff.effectiveApprovalPolicy, effectiveVerified: contEff.effectiveVerified, permissionContract: contEff };
+  }
+
+  async reconcileRecoveryPreflight({ workspaceId = null, workspaceRoot = null, taskId = null, stepId = null, identity = null } = {}) {
+    const args = { workspaceId, workspaceRoot, taskId, stepId, identity };
+    const selected = this.jobMap.recoveryPreflightCandidates(args);
+    if (!selected.ok) return selected;
+    if (selected.dangerous.length === 0) return this.jobMap.recoveryPreflight(args);
+
+    await this._ensureConnected();
+    let unresolvedCandidateCount = 0;
+    for (const { job } of selected.dangerous) {
+      const observed = await this._authoritativeObserveLifecycle(job);
+      if (!observed.ok) {
+        unresolvedCandidateCount += 1;
+        continue;
+      }
+      if (observed.resolution === 'terminal') {
+        if (this._isWriter(job) && this.owner.owner === 'codex' && this.owner.unitId === (job.mutationUnitId || null)) {
+          this._releaseUnitOnTerminal(job, observed.state);
+        } else {
+          this.jobMap.update(job.jobId, { state: observed.state, ownershipReleased: this.owner.owner === 'none', updatedAt: Date.now() });
+        }
+      } else if (observed.resolution === 'in_progress') {
+        this.jobMap.update(job.jobId, { state: 'running', ownershipReleased: false, updatedAt: Date.now() });
+      }
+    }
+
+    if (unresolvedCandidateCount > 0) {
+      return {
+        ok: false,
+        error: 'reconciliation_unresolved',
+        reason: 'one or more hidden recovery-risk executions could not be authoritatively reconciled; refusing to infer safety',
+        unresolvedCandidateCount,
+      };
+    }
+    const after = this.jobMap.recoveryPreflight(args);
+    if (after.ok && after.status === 'recover_existing' && after.dangerousCandidateCount === 1 && after.recovery && after.recovery.jobId) {
+      return {
+        ...after,
+        nextAction: 'codex_reconcile',
+        recovery: { ...after.recovery, mode: 'job_id' },
+      };
+    }
+    return after;
   }
 
   async reconcile({ jobId }) {
