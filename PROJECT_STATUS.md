@@ -12,19 +12,16 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 
 长期连续性原则：**Brain session 可以替换，但 logical work / authority / evidence 不能依赖单一 conversation 或单一 runtime process 的内存存活。** Conversation 是 interaction/context surface，不是 project/control truth。
 
-当前 Parent-governance clarification 的核心原则是：**single authority, plural evidence**。项目同一时刻只有一个 active project-level Parent authority；Parent session 可以 bounded takeover 替换；implementation / research / review sessions 可提供 bounded reasoning/evidence/execution，但不自动取得 project-level final authority。
-
 ## 当前发布 / operational 状态
 
 - **Released version:** `v0.1.0-alpha.3`
 - **Released/default operational path:** Alpha.3 legacy IAB Direct Brain Loop（feature-frozen）
 - **v0.2:** candidate；核心 capability-first runtime 已完成 M0–M7 dogfood，但尚未 operational default flip / release
 - **Post-M7:** Brain Continuity hardening contract 已接受，implementation / real re-entry dogfood 尚未完成
-- **Parent governance clarification:** **CANDIDATE / INDEPENDENT REVIEW PENDING**；docs-only clarification，不扩张 Issue #23 runtime scope
 - **M8:** 尚未进入
 - **Version bump / release:** 尚未执行
 
-当前规范性 routing / Brain-governance policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。当前 Brain Continuity contract 见 [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md)。ChatGPT Project Instructions canonical template 见 [`docs/chatgpt-project-instructions.md`](docs/chatgpt-project-instructions.md)。
+当前规范性 routing policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。当前 Brain Continuity contract 见 [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md)。
 
 ## 已接受基线
 
@@ -40,35 +37,6 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 | N3 | **ACCEPTED** | Capability-First operating model / control-plane re-baseline |
 | M7 | **ACCEPTED / COMPLETE** | Native-only + Codex-required + Hybrid real-project dogfood |
 | Brain Continuity contract | **ACCEPTED / IMPLEMENTATION PENDING** | durable Governance + Parent re-entry + authority fencing + isolated dogfood contract |
-| Parent authority / independent review clarification | **CANDIDATE / REVIEW PENDING** | one active Parent authority + replaceable Parent sessions + optional independent review; docs/config only |
-
-## Parent authority / independent review clarification
-
-### Triggering evidence
-
-Real Issue #23 dogfood exposed a role-resolution ambiguity:
-
-- ChatGPT Project Instructions declared the project assistant to be `Parent Brain / 总控 / 总设计师` at project scope;
-- a separate Issue #23 implementation conversation correctly operated as a scoped implementation controller in durable GitHub checkpoints, but when directly asked for its identity it also claimed project-level Parent status;
-- ChatGPT Custom App/tool availability was also observed to vary by conversation, reinforcing that conversation surfaces are runtime/context containers rather than durable authority identity;
-- the project needs independent challenge for difficult/high-impact decisions without creating multi-Parent authority or requiring the user to arbitrate internal IDs/results.
-
-### Candidate clarification
-
-The smallest correction is:
-
-1. **one active Parent authority** at a time;
-2. Parent role is logical and can move from Parent Session A → B through existing Brain Continuity bounded takeover/fencing;
-3. Project Instructions provide shared policy and do not automatically grant every conversation Parent identity;
-4. Implementation / Research / Review conversations are disposable mission sessions, not permanent Child-Brain authority entities;
-5. **Independent Review Gate** is optional/risk-based: reviewers independently read evidence and return critique; Parent adjudicates; no voting/quorum;
-6. important reviewer findings and Parent decisions persist on existing GitHub Issue/PR surfaces;
-7. material architecture `REPLAN` requires new evidence, affected-contract identification, minimal-correction reasoning, appropriate independent review, and user approval for genuine major/North-Star changes;
-8. no reviewer scheduler, multi-Parent consensus, permanent Child-Brain registry, agent council, new route, DB, DAG, or distributed workflow system is introduced.
-
-Canonical design candidate: [`docs/superpowers/specs/2026-09-05-parent-review-governance-design.md`](docs/superpowers/specs/2026-09-05-parent-review-governance-design.md).
-
-This clarification is intentionally being held behind independent correctness + red-team/YAGNI review before merge/Project-Instructions synchronization.
 
 ## M7 — Real-Project Capability Routing Dogfood
 
@@ -141,7 +109,7 @@ M7 A/B/C correctness evidence 足够，但 M7-C dogfood 同时暴露一个新的
 
 ### Contract 已冻结的核心语义
 
-1. **Brain sessions are disposable; work state is durable.** Conversation 不是 durable task identity / permanent Parent identity。
+1. **Brain sessions are disposable; work state is durable.** Conversation 不是 durable task identity。
 2. **Conversation context is not authority.** narrative handoff / summary 不能覆盖 structured Governance / authoritative GitHub/runtime evidence。
 3. Canonical Governance state 必须使用 existing `dataRoot` 形成 versioned durable persistence；优先复用 atomic JSON + `.bak` pattern，不引入无 evidence 支撑的 database/workflow service。
 4. Corruption / unknown schema 必须 fail closed，禁止 silent `_freshState()` reset。
@@ -160,15 +128,14 @@ M7 A/B/C correctness evidence 足够，但 M7-C dogfood 同时暴露一个新的
 当前 **不** 建设：
 
 - multi-Child scheduler；
-- recursive / permanent Child Brain authority tree；
+- recursive Child Brain tree；
 - generalized work DAG；
-- multi-authoritative-Brain voting / consensus；
-- reviewer scheduler / consensus engine / agent council runtime；
+- multi-authoritative-Brain consensus；
 - distributed lock/database/workflow service；
 - Codex Desktop sidebar integration；
 - rich execution dashboard。
 
-未来如果真实长期项目出现多个独立 workstream，应把 durable work identity 设计成 workstream，而不是某条 conversation；是否真正实现 multi-workstream orchestration，必须等待后续真实 dogfood evidence。
+未来如果真实长期项目出现多个独立 workstream，应把 durable work identity 设计成 workstream，而不是某条 Child conversation；是否真正实现 multi-workstream / multi-Child orchestration，必须等待后续真实 dogfood evidence。
 
 ## Brain Continuity acceptance gate
 
@@ -211,25 +178,22 @@ M7 A/B/C correctness evidence 足够，但 M7-C dogfood 同时暴露一个新的
 1. **Codex Desktop thread visibility:** external/independent App Server thread 的 Desktop sidebar live visibility 不可靠；已分流为独立 upstream investigation，不回退 IAB。
 2. **Passive execution observability:** long-running execution 可处于 `inProgress / waitingOnApproval / completed / recoveryRequired`，但普通用户缺少稳定 status/notification surface；属于后续 UX/observability candidate。
 3. **Custom App conversation binding:** refresh 后旧 conversation 曾出现 discovery/invocation mismatch；fresh conversation 可恢复；这一 observation 强化 capability snapshot 必须 task/session-ephemeral。
-4. **Role topology / Project Instructions:** project-level Instructions 曾导致 implementation conversation 同时表现出 scoped-controller与 Parent identity；当前以 docs/config clarification 处理，不扩张 Brain Continuity runtime scope。
-5. **Windows local test process termination:** raw concurrent `node --test` 曾出现 lingering child-handle/termination 行为；GitHub CI Node 22/24 已稳定 PASS，当前不作为 correctness blocker。
+4. **Windows local test process termination:** raw concurrent `node --test` 曾出现 lingering child-handle/termination 行为；GitHub CI Node 22/24 已稳定 PASS，当前不作为 correctness blocker。
 
 ## 当前下一步
 
 1. **M7 已完成，不再新增 M7-A/B/C dogfood attempt。**
-2. 完成 Parent authority / Independent Review clarification 的 dedicated docs PR，并由 correctness reviewer + red-team/YAGNI reviewer 对 exact PR/head 独立评审。
-3. Parent 对 review 做 evidence-based adjudication；接受后 merge，并把 `docs/chatgpt-project-instructions.md` 的 accepted `main` 文本同步到 ChatGPT Project Settings → Instructions。
-4. **Brain Continuity contract 仍已接受。** 完成上述 role clarification 后继续 SAME Issue #23 implementation，不创建新 milestone、不扩张成 multi-agent hierarchy。
-5. Issue #23 implementation 通过 automated tests 后，再执行 isolated real Conversation A → B runtime restart/re-entry dogfood。
-6. blocker 关闭后，由 active Parent **重新执行 operational default flip decision**；flip 不自动发生。
-7. 只有 default-policy decision 通过后才进入 M8 RC / release。
+2. **Brain Continuity contract 已接受。** 当前进入 implementation，而不是继续无边界 architecture expansion。
+3. Parent Brain 先从 current main 独立形成完整 implementation acceptance contract；然后以 `HYBRID` 路由执行：ChatGPT Native 定案 → `CODEX_DELEGATE` milestone-sized implementation → ChatGPT Native independent GitHub/CI verification。
+4. implementation 通过 automated tests 后，再执行 isolated real Conversation A → B runtime restart/re-entry dogfood。
+5. blocker 关闭后，由 Brain **重新执行 operational default flip decision**；flip 不自动发生。
+6. 只有 default-policy decision 通过后才进入 M8 RC / release。
 
 ## Authority
 
 - **GitHub `main` / current code / PR / CI:** implementation truth / canonical authority。
-- **`CAPABILITY_ROUTING.md`:** 当前 routing / executor / Brain-governance policy。
+- **`CAPABILITY_ROUTING.md`:** 当前 routing / executor policy。
 - **`docs/rfc-v0.2-brain-continuity.md`:** 当前 post-M7 Brain Continuity contract。
 - **`docs/architecture.md`:** 当前技术架构事实。
-- **`docs/chatgpt-project-instructions.md`:** ChatGPT Project Settings → Instructions 的 canonical copy/paste source（仅在相应 docs PR review/merge 后生效）。
 - **`docs/rfc-*`:** 历史研究与设计决策记录；accepted contract 仍可由新 evidence 触发后续 `REPLAN`。
 - **ChatGPT Project Library:** Brain-readable slow-changing reference mirror，不得静默覆盖 GitHub 最新事实。
