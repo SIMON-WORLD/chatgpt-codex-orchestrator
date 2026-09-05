@@ -16,7 +16,13 @@ const BINDING = {
 };
 
 class DiagnosticClient {
-  constructor() { this.states = {}; this.requests = []; this.isRunning = true; this._connected = true; this._closing = false; }
+  constructor(states = {}) {
+    this.states = states;
+    this.requests = [];
+    this.isRunning = true;
+    this._connected = true;
+    this._closing = false;
+  }
   onNotification() {}
   onServerRequest() {}
   onExit() {}
@@ -24,33 +30,33 @@ class DiagnosticClient {
   async close() { this.isRunning = false; this._connected = false; }
   async request(method, params) {
     this.requests.push(method);
-    const state = this.states[params.threadId] || {};
+    const state = this.states[params.threadId];
     if (method === 'thread/resume') {
-      if (state.resumeError) throw new Error(state.resumeError);
+      if (state.failResume) throw new Error(`RAW_MCP_RESUME:${params.threadId}`);
       return { thread: { id: params.threadId } };
     }
     if (method === 'thread/read') {
-      if (state.readError) throw new Error(state.readError);
-      return { thread: { id: params.threadId, turns: state.turns || [] } };
+      if (state.failRead) throw new Error(`RAW_MCP_READ:${params.threadId}`);
+      return { thread: { id: params.threadId, turns: state.turns } };
     }
     throw new Error(`unexpected request: ${method}`);
   }
 }
 
 function textOf(res) {
-  const t = res && res.content && res.content.find((c) => c.type === 'text');
-  return t ? t.text : '';
+  const item = res && res.content && res.content.find((c) => c.type === 'text');
+  return item ? item.text : '';
 }
 
-function addBrokenCandidate(executor, backend, { workspaceId, workspaceRoot, suffix, resumeError = null, readError = null }) {
-  const created = executor.jobMap.create();
+function addCandidate(executor, clientBackend, ws, repo, suffix, stateSpec = {}) {
+  const job = executor.jobMap.create();
   const threadId = `thread-${suffix}`;
   const turnId = `turn-${suffix}`;
   const unitId = `unit-${suffix}`;
-  executor.jobMap.update(created.jobId, {
+  executor.jobMap.update(job.jobId, {
     ...BINDING,
-    workspaceId,
-    workspaceRoot,
+    workspaceId: ws.workspaceId,
+    workspaceRoot: repo,
     state: 'recovery_required',
     accessMode: 'workspace_write',
     isWriter: true,
@@ -59,21 +65,17 @@ function addBrokenCandidate(executor, backend, { workspaceId, workspaceRoot, suf
     mutationUnitId: unitId,
     turnUnits: { [turnId]: unitId },
   });
-  backend.states[threadId] = {
-    turns: [{ id: turnId, status: 'completed' }],
-    resumeError,
-    readError,
-  };
-  return { jobId: created.jobId, threadId, turnId };
+  clientBackend.states[threadId] = { turns: [{ id: turnId, status: stateSpec.status || 'completed' }], ...stateSpec };
+  return { jobId: job.jobId, threadId, turnId };
 }
 
-test('MCP reconciliation_unresolved response exposes only aggregate reasonCounts', async (t) => {
+test('MCP unresolved recovery diagnostics expose aggregate reasonCounts only from authoritative executor path', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-recovery-diagnostics-mcp-'));
   const repo = path.join(root, 'repo');
   fs.mkdirSync(repo);
   const registry = new WorkspaceRegistry({ allowedRoots: [root] });
-  const backend = new DiagnosticClient();
-  const executor = new AppServerExecutor({ client: backend, jobMap: new JobMap({ dataRoot: root }) });
+  const clientBackend = new DiagnosticClient();
+  const executor = new AppServerExecutor({ client: clientBackend, jobMap: new JobMap({ dataRoot: root }) });
   const srv = await startMcpServer({ workspaceRegistry: registry, appServerExecutor: executor, host: '127.0.0.1', port: 0, allowedRoots: [root] });
   const client = new Client({ name: 'recovery-diagnostics-test', version: '1.0.0' });
   await client.connect(new StreamableHTTPClientTransport(srv.url));
@@ -82,35 +84,36 @@ test('MCP reconciliation_unresolved response exposes only aggregate reasonCounts
   t.after(() => executor.shutdown());
 
   const ws = JSON.parse(textOf(await client.callTool({ name: 'workspace_open', arguments: { path: repo } })));
-  const hidden = [
-    addBrokenCandidate(executor, backend, { workspaceId: ws.workspaceId, workspaceRoot: repo, suffix: 'resume', resumeError: 'RAW_SECRET_RESUME_ERROR' }),
-    addBrokenCandidate(executor, backend, { workspaceId: ws.workspaceId, workspaceRoot: repo, suffix: 'read', readError: 'RAW_SECRET_READ_ERROR' }),
-  ];
+  const resumeFailed = addCandidate(executor, clientBackend, ws, repo, 'resume-failed', { failResume: true });
+  const readFailed = addCandidate(executor, clientBackend, ws, repo, 'read-failed', { failRead: true });
+  const unreadable = addCandidate(executor, clientBackend, ws, repo, 'unreadable', { status: 'waitingOnApproval' });
 
   const res = await client.callTool({ name: 'codex_recovery_reconcile_preflight', arguments: { workspaceId: ws.workspaceId, ...BINDING } });
   assert.equal(res.isError, true);
   const body = JSON.parse(textOf(res));
-  assert.deepEqual(body, {
-    ok: false,
-    error: 'reconciliation_unresolved',
-    reason: 'one or more hidden recovery-risk executions could not be authoritatively reconciled; refusing to infer safety',
-    unresolvedCandidateCount: 2,
-    reasonCounts: {
-      resume_failed: 1,
-      read_failed: 1,
-    },
+  assert.equal(body.ok, false);
+  assert.equal(body.error, 'reconciliation_unresolved');
+  assert.equal(body.unresolvedCandidateCount, 3);
+  assert.deepEqual(body.reasonCounts, {
+    resume_failed: 1,
+    read_failed: 1,
+    lifecycle_unreadable: 1,
   });
+  assert.equal(Object.values(body.reasonCounts).reduce((a, b) => a + b, 0), body.unresolvedCandidateCount);
 
-  const publicJson = JSON.stringify(body);
-  assert.equal(publicJson.includes('RAW_SECRET_RESUME_ERROR'), false);
-  assert.equal(publicJson.includes('RAW_SECRET_READ_ERROR'), false);
-  assert.equal('jobId' in body, false);
-  assert.equal('threadId' in body, false);
-  assert.equal('turnId' in body, false);
-  assert.equal('jobs' in body, false);
-  assert.equal('candidates' in body, false);
-  assert.equal('createdAt' in body, false);
-  assert.equal('updatedAt' in body, false);
-  for (const value of hidden.flatMap((x) => [x.jobId, x.threadId, x.turnId])) assert.equal(publicJson.includes(value), false);
-  assert.ok(backend.requests.every((method) => method === 'thread/resume' || method === 'thread/read'));
+  const publicText = JSON.stringify(body);
+  assert.equal(publicText.includes('RAW_MCP_RESUME'), false);
+  assert.equal(publicText.includes('RAW_MCP_READ'), false);
+  for (const candidate of [resumeFailed, readFailed, unreadable]) {
+    assert.equal(publicText.includes(candidate.jobId), false);
+    assert.equal(publicText.includes(candidate.threadId), false);
+    assert.equal(publicText.includes(candidate.turnId), false);
+  }
+  for (const forbiddenKey of ['jobId', 'threadId', 'turnId', 'createdAt', 'updatedAt', 'jobs', 'candidates']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(body, forbiddenKey), false);
+  }
+  assert.ok(clientBackend.requests.every((method) => method === 'thread/resume' || method === 'thread/read'));
+  assert.equal(clientBackend.requests.includes('thread/start'), false);
+  assert.equal(clientBackend.requests.includes('turn/start'), false);
+  assert.equal(clientBackend.requests.includes('turn/interrupt'), false);
 });
