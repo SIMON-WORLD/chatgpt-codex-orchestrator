@@ -36,7 +36,7 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 | M6 | **ACCEPTED** | Legacy IAB isolation under `src/legacy/` |
 | N3 | **ACCEPTED** | Capability-First operating model / control-plane re-baseline |
 | M7 | **ACCEPTED / COMPLETE** | Native-only + Codex-required + Hybrid real-project dogfood |
-| Brain Continuity contract | **ACCEPTED / IMPLEMENTATION PENDING** | durable Governance + Parent re-entry + authority fencing + isolated dogfood contract |
+| Brain Continuity contract | **ACCEPTED / CORE IMPLEMENTED (PR #24, isolated)** | durable Governance + Parent re-entry + authority fencing + single canonical Governance writer + Context Capsule; isolated real re-entry dogfood + default-flip still pending |
 
 ## M7 — Real-Project Capability Routing Dogfood
 
@@ -139,6 +139,21 @@ M7 A/B/C correctness evidence 足够，但 M7-C dogfood 同时暴露一个新的
 
 ## Brain Continuity acceptance gate
 
+### 当前实现状态（Issue #23 / Draft PR #24）
+
+Brain Continuity **core** 已作为 isolated milestone 在 `feat/brain-continuity-core` 实现并 push（Draft PR #24，未 merge）：
+
+- durable canonical Governance state 位于 `runtime/governance/<namespace>/`（versioned schema + atomic write + known-good `.bak`；fail-closed load：primary corrupt + backup good 恢复，双 corrupt 抛命名错误，future schema 抛 `schema_unsupported`，v0 有显式 tested migration）；
+- restart 恢复 task/step/acceptance/evidence/executorStatus/machineGate/brainAcceptance；`DONE` 保持 terminal；RESULT-bearing step 不 silent re-execute；`ASK_USER` / recovery-required 状态不被 reset 成 fresh executable state；
+- bounded semantic re-entry `0 -> not_found`、`1 -> unique`、`>1 -> ambiguous/fail closed`，never most-recent；
+- durable Parent authority generation/fencing：takeover 递增 generation 并发新 opaque token，stale Parent mutation 抛 `stale_authority`；
+- takeover 只走既有 `executor.recover` 路径 reconcile，不 cancel/restart/duplicate delegated Codex execution；
+- 同一 Governance namespace/dataRoot 单 canonical writer：第二个 writer 被 `writer_conflict` fail closed（lightweight guard，非 distributed lock manager）；
+- bounded Context Capsule 由 durable structured state 生成（不 dump transcript）；capability observation 保持 ephemeral，re-entry 必须 rediscovery；proof-reuse cache 丢失只触发 conservative re-verification，不生成 pass/acceptance；
+- 新增 deterministic tests：`test/governance/{store,writer-guard,durable,capsule-observation}.test.js`、`test/mcp/governance-durable.test.js`（全部随 `npm test` 运行）。
+
+该 core 不构成 default flip：operational default 仍未 flip，M8 未开始，真实 Conversation A → runtime restart → Conversation B re-entry dogfood 仍未执行，blocker 保持 open。
+
 在把该 blocker 关闭前，至少需要：
 
 ### Automated / deterministic
@@ -183,9 +198,9 @@ M7 A/B/C correctness evidence 足够，但 M7-C dogfood 同时暴露一个新的
 ## 当前下一步
 
 1. **M7 已完成，不再新增 M7-A/B/C dogfood attempt。**
-2. **Brain Continuity contract 已接受。** 当前进入 implementation，而不是继续无边界 architecture expansion。
-3. Parent Brain 先从 current main 独立形成完整 implementation acceptance contract；然后以 `HYBRID` 路由执行：ChatGPT Native 定案 → `CODEX_DELEGATE` milestone-sized implementation → ChatGPT Native independent GitHub/CI verification。
-4. implementation 通过 automated tests 后，再执行 isolated real Conversation A → B runtime restart/re-entry dogfood。
+2. **Brain Continuity core 已实现于 Issue #23 / Draft PR #24（isolated，未 merge）。** Parent Brain 独立 review PR diff / exact-head CI 后 ACCEPT/REVISE；不默认 flip。
+3. implementation 通过 automated tests 后，由 Parent Brain 另行授权执行 isolated real Conversation A → B runtime restart/re-entry dogfood（独立 dataRoot / semantic identity / target repo）。
+4. blocker 关闭后，由 Brain **重新执行 operational default flip decision**；flip 不自动发生。
 5. blocker 关闭后，由 Brain **重新执行 operational default flip decision**；flip 不自动发生。
 6. 只有 default-policy decision 通过后才进入 M8 RC / release。
 

@@ -460,6 +460,7 @@ export class GovernanceService {
       publishResult: this.state.publishResult,
       published: this.state.published,
       awaitingUser: this.state.awaitingUser,
+      askUser: this.state.askUser || null,
       planned: this.state.planRevision > 0,
       history: this.state.history.slice(-8),
     };

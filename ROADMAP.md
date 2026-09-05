@@ -15,7 +15,7 @@
 | M6 — Legacy IAB Isolation | **CLOSED** | IAB / Alpha.4 implementation 隔离到 `src/legacy/` |
 | N3 — Capability-First Re-baseline | **CLOSED** | capability-first 已成为当前 operating model |
 | M7 — Real-Project Capability Routing Dogfood | **CLOSED / ACCEPTED** | Native-only / Codex-required / Hybrid 全部 PASS |
-| Brain Continuity hardening | **ACTIVE / CONTRACT ACCEPTED** | post-M7 REPLAN 已接受；durable Governance + Parent re-entry implementation / dogfood 待完成 |
+| Brain Continuity hardening | **ACTIVE / CORE IMPLEMENTED (PR #24, isolated)** | post-M7 REPLAN 已接受；durable Governance + Parent re-entry core 已在 Issue #23/PR #24 实现（未 merge）；isolated real re-entry dogfood 待 Parent 授权执行 |
 | Default-policy review | **DEFERRED** | Brain Continuity gate 关闭后重新决策，不自动 flip |
 | M8 — RC / Release | **PENDING** | default-policy gate 关闭后再进入 |
 
