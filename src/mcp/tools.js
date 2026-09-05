@@ -15,7 +15,6 @@ import { OperationState } from '../state/operation-state.js';
 import { VerifyService } from '../local/verify.js';
 import { createCapabilityRouter } from '../router/capability-router.js';
 import { createGovernanceService } from '../governance/index.js';
-import { reconcileRecoveryPreflightWithDiagnostics } from '../executor/recovery-reconcile-diagnostics.js';
 
 const R = { readOnlyHint: true };
 const M = { readOnlyHint: false, destructiveHint: true };
@@ -42,53 +41,35 @@ function assertSameWorkspace(registry, workspaceId, job) {
 }
 
 export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, verifyService = null, operationState = null, verifyChecks = {}, capabilityRouter = null, governanceService = null } = {}) {
-  // Shared mutation-ownership authority: when a Codex executor is present, Direct
-  // Local mutation MUST use the SAME owner instance.
   let owner = mutationOwner;
   if (appServerExecutor) {
     if (owner && owner !== appServerExecutor.owner) throw new Error('mutationOwner must be shared with appServerExecutor; refusing unsafe concurrency');
     if (!owner) owner = appServerExecutor.owner;
   }
-  // Externally injected Direct mutation services must use the SAME mutation owner.
   if (changeSetService && changeSetService.owner && owner && changeSetService.owner !== owner) throw new Error('changeSetService.mutationOwner must be shared; refusing unsafe concurrency');
   if (verifyService && verifyService.owner && owner && verifyService.owner !== owner) throw new Error('verifyService.mutationOwner must be shared; refusing unsafe concurrency');
-  // Direct Local mutation tools are only auto-registered when explicitly configured
-  // (operationState for edit, verifyChecks for verify). A codex-delegate-only server must
-  // NOT auto-create an OperationState (which requires a data root) just because an owner
-  // happens to be present.
   const hasVerifyChecks = Object.keys(verifyChecks || {}).length > 0;
   const changeSet = changeSetService || (operationState && owner ? new ChangeSetService({ workspaceRegistry, operationState, mutationOwner: owner }) : null);
   const verify = verifyService || (owner && hasVerifyChecks ? new VerifyService({ workspaceRegistry, mutationOwner: owner, verifyChecks }) : null);
 
   const server = new McpServer({ name: 'chatgpt-codex-orchestrator', version: '0.2.0-dev' });
 
-  // ---- Direct Local (read-only + mutation) --------------------------------
   server.registerTool('workspace_open', { description: 'Bind an explicit workspace root before local repo operations.', annotations: R, inputSchema: z.object({ path: z.string() }) },
     async ({ path }) => { try { return text(workspaceRegistry.open({ path })); } catch (e) { return errText(e.message); } });
-
   server.registerTool('read', { description: 'Bounded read of a file inside a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string(), maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional() }) },
     async ({ workspaceId, path, maxBytes }) => { try { return text(readFile({ workspaceId, path, maxBytes }, workspaceRegistry)); } catch (e) { return errText(e.message); } });
-
   server.registerTool('search', { description: 'Bounded text search inside a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, query: z.string(), path: z.string().optional(), maxResults: z.number().int().positive().max(1000).optional() }) },
     async ({ workspaceId, query, path, maxResults }) => { try { return text(search({ workspaceId, query, path, maxResults }, workspaceRegistry)); } catch (e) { return errText(e.message); } });
-
   server.registerTool('git_status', { description: 'Read-only git status for a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema }) },
     async ({ workspaceId }) => { try { return text(await gitStatus({ workspaceId }, workspaceRegistry)); } catch (e) { return errText(e.message); } });
-
   server.registerTool('git_diff', { description: 'Read-only git diff (worktree|staged).', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, mode: z.enum(['worktree', 'staged']).optional() }) },
     async ({ workspaceId, mode }) => { try { return text(await gitDiff({ workspaceId, mode }, workspaceRegistry)); } catch (e) { return errText(e.message); } });
 
-  // ---- Direct Local bounded edit (M3) -------------------------------------
   if (changeSet) {
     server.registerTool('edit', {
       description: 'Two-phase bounded Direct Local edit (preview or apply). One target file, base-hash stale-write protection, atomic apply.',
       annotations: M,
-      inputSchema: z.object({
-        workspaceId: workspaceIdSchema,
-        mode: z.enum(['preview', 'apply']),
-        changeSetId: z.string().optional(),
-        change: z.object({ path: z.string(), baseHash: z.string().nullable().optional(), replacements: z.array(z.object({ oldText: z.string(), newText: z.string(), expectedOccurrences: z.number().int().positive().optional() })).optional(), createContent: z.string().nullable().optional() }).optional(),
-      }),
+      inputSchema: z.object({ workspaceId: workspaceIdSchema, mode: z.enum(['preview', 'apply']), changeSetId: z.string().optional(), change: z.object({ path: z.string(), baseHash: z.string().nullable().optional(), replacements: z.array(z.object({ oldText: z.string(), newText: z.string(), expectedOccurrences: z.number().int().positive().optional() })).optional(), createContent: z.string().nullable().optional() }).optional() }),
     }, async ({ workspaceId, mode, changeSetId, change }) => {
       try {
         if (mode === 'preview') return text(await changeSet.preview({ workspaceId, change }));
@@ -98,7 +79,6 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     });
   }
 
-  // ---- Narrow allowlisted verify (M3) -------------------------------------
   if (verify) {
     server.registerTool('verify', {
       description: 'Run a server-configured allowlisted verification check (read_only or workspace_effect). Caller supplies only check name.',
@@ -109,7 +89,6 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     });
   }
 
-  // ---- Capability Router + Governance (M4) ---------------------------------
   const router = capabilityRouter || createCapabilityRouter();
   const governance = governanceService || createGovernanceService();
 
@@ -117,68 +96,27 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     server.registerTool('route_decide', {
       description: 'Deterministic capability routing over structured task facts (read-only). No model/NL reasoning.',
       annotations: R,
-      inputSchema: z.object({
-        requiresNative: z.boolean().optional(),
-        requiresLocal: z.boolean().optional(),
-        readOnly: z.boolean().optional(),
-        mutationRequired: z.boolean().optional(),
-        exactChangeKnown: z.boolean().optional(),
-        boundedChange: z.boolean().optional(),
-        multiFile: z.boolean().optional(),
-        unknownRootCause: z.boolean().optional(),
-        iterative: z.boolean().optional(),
-        longRunning: z.boolean().optional(),
-      }),
-    }, async (facts) => {
-      try { return text(router.decideStrict(facts)); } catch (e) { return errText(e.message); }
-    });
+      inputSchema: z.object({ requiresNative: z.boolean().optional(), requiresLocal: z.boolean().optional(), readOnly: z.boolean().optional(), mutationRequired: z.boolean().optional(), exactChangeKnown: z.boolean().optional(), boundedChange: z.boolean().optional(), multiFile: z.boolean().optional(), unknownRootCause: z.boolean().optional(), iterative: z.boolean().optional(), longRunning: z.boolean().optional() }),
+    }, async (facts) => { try { return text(router.decideStrict(facts)); } catch (e) { return errText(e.message); } });
   }
 
   if (governance) {
     server.registerTool('governance_transition', {
       description: 'Record a Brain governance control (PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE) with acceptance contract and revise delta. Executor RESULT fields belong only to governance_record_result.',
       annotations: M,
-      inputSchema: z.object({
-        taskId: z.string().optional(),
-        stepId: z.string().optional(),
-        control: z.enum(['PLAN', 'TASK', 'REVISE', 'REPLAN', 'ASK_USER', 'PUBLISH', 'DONE']),
-        route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
-        localRoute: z.enum(['CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE']).optional(),
-        acceptance: z.array(z.object({ id: z.string(), required: z.boolean().optional(), requiredEvidenceLevel: z.string().optional() })).optional(),
-        reviseDelta: z.object({ preserve: z.array(z.string()).optional(), invalidate: z.array(z.string()).optional() }).optional(),
-        whyBlocked: z.string().optional(),
-        minimalUserAction: z.string().optional(),
-        question: z.string().optional(),
-      }).strict(),
-    }, async (args) => {
-      try { return text(governance.transition(args)); } catch (e) { return errText(e.message); }
-    });
+      inputSchema: z.object({ taskId: z.string().optional(), stepId: z.string().optional(), control: z.enum(['PLAN', 'TASK', 'REVISE', 'REPLAN', 'ASK_USER', 'PUBLISH', 'DONE']), route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(), localRoute: z.enum(['CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE']).optional(), acceptance: z.array(z.object({ id: z.string(), required: z.boolean().optional(), requiredEvidenceLevel: z.string().optional() })).optional(), reviseDelta: z.object({ preserve: z.array(z.string()).optional(), invalidate: z.array(z.string()).optional() }).optional(), whyBlocked: z.string().optional(), minimalUserAction: z.string().optional(), question: z.string().optional() }).strict(),
+    }, async (args) => { try { return text(governance.transition(args)); } catch (e) { return errText(e.message); } });
 
     server.registerTool('governance_record_result', {
       description: 'Ingest an executor RESULT for the active step: writes executorStatus, evidence, machine gate, changed/proof invalidation, and optional publication result.',
       annotations: M,
-      inputSchema: z.object({
-        taskId: z.string().optional(),
-        stepId: z.string(),
-        executorStatus: z.enum(['success', 'failure', 'unknown']),
-        evidence: z.array(z.object({ acceptanceId: z.string(), status: z.string().optional(), evidenceLevel: z.string().optional(), kind: z.string().optional(), summary: z.string().optional() })).optional(),
-        changed: z.array(z.string()).optional(),
-        publication: z.object({ ok: z.boolean().optional(), externalReadback: z.any().optional() }).optional(),
-      }),
-    }, async (args) => {
-      try { return text(governance.recordResult(args)); } catch (e) { return errText(e.message); }
-    });
+      inputSchema: z.object({ taskId: z.string().optional(), stepId: z.string(), executorStatus: z.enum(['success', 'failure', 'unknown']), evidence: z.array(z.object({ acceptanceId: z.string(), status: z.string().optional(), evidenceLevel: z.string().optional(), kind: z.string().optional(), summary: z.string().optional() })).optional(), changed: z.array(z.string()).optional(), publication: z.object({ ok: z.boolean().optional(), externalReadback: z.any().optional() }).optional() }),
+    }, async (args) => { try { return text(governance.recordResult(args)); } catch (e) { return errText(e.message); } });
 
-    server.registerTool('governance_status', {
-      description: 'Return compact current governance state (read-only).',
-      annotations: R,
-      inputSchema: z.object({}),
-    }, async () => {
-      try { return text(governance.status()); } catch (e) { return errText(e.message); }
-    });
+    server.registerTool('governance_status', { description: 'Return compact current governance state (read-only).', annotations: R, inputSchema: z.object({}) },
+      async () => { try { return text(governance.status()); } catch (e) { return errText(e.message); } });
   }
 
-  // ---- Codex Delegate ------------------------------------------------------
   if (appServerExecutor) {
     server.registerTool('codex_recovery_preflight', {
       description: 'Read-only duplicate-execution risk preflight for one workspace and semantic task scope. Considers only recovery-risk/non-terminal jobs that are unbound or exactly match taskId/stepId/identity; ignores terminal history; never lists jobs, selects most-recent, resumes, reconciles, starts, interrupts, or force-unlocks anything.',
@@ -190,9 +128,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         const result = appServerExecutor.jobMap.recoveryPreflight({ workspaceId, workspaceRoot: root, taskId, stepId, identity });
         if (!result.ok) return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: true };
         return text(result);
-      } catch (e) {
-        return errText(e.message);
-      }
+      } catch (e) { return errText(e.message); }
     });
 
     server.registerTool('codex_recovery_reconcile_preflight', {
@@ -202,12 +138,10 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     }, async ({ workspaceId, taskId, stepId, identity }) => {
       try {
         const root = assertSameWorkspace(workspaceRegistry, workspaceId, null);
-        const result = await reconcileRecoveryPreflightWithDiagnostics(appServerExecutor, { workspaceId, workspaceRoot: root, taskId, stepId, identity });
+        const result = await appServerExecutor.reconcileRecoveryPreflight({ workspaceId, workspaceRoot: root, taskId, stepId, identity });
         if (!result.ok) return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: true };
         return text(result);
-      } catch (e) {
-        return errText(e.message);
-      }
+      } catch (e) { return errText(e.message); }
     });
 
     server.registerTool('codex_start', { description: 'Start a Codex App Server thread + turn in a workspace. accessMode is required (read_only | workspace_write); a mutation delegation must not silently default to read-only. networkAccess is an optional minimal job-level flag (default false) for operations like git push, and is never granted to every job.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, prompt: z.string(), accessMode: z.enum(['read_only', 'workspace_write']), networkAccess: z.boolean().optional(), taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }) },
@@ -218,7 +152,6 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       async ({ workspaceId, jobId, instruction, taskId, stepId, identity }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.continue({ jobId, instruction, taskId, stepId, identity })); } catch (e) { return errText(e.message); } });
     server.registerTool('codex_interrupt', { description: 'Interrupt a running Codex turn.', annotations: { readOnlyHint: false, destructiveHint: false }, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string() }) },
       async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.interrupt({ jobId })); } catch (e) { return errText(e.message); } });
-
     server.registerTool('codex_reconcile', { description: 'Authoritatively reconcile a Codex job after process death / connection loss. Uses thread/resume + thread/read (never creates a new turn, never a generic force-unlock). Terminal -> release writer; inProgress -> retain writer; ambiguous -> fail closed.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string() }) },
       async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.reconcile({ jobId })); } catch (e) { return errText(e.message); } });
     server.registerTool('codex_respond_approval', { description: 'Respond to a pending Codex approval.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string(), approvalId: z.string(), decision: z.enum(['approve', 'deny']) }) },
