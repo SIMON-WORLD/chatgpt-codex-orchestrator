@@ -352,16 +352,17 @@ export class AppServerExecutor {
   }
 
   // Resolve which turn belongs to the CURRENT mutation unit (durable identity).
-  // Returns { ok, turn?, reason? }.
+  // Failure returns a stable observationCode for bounded aggregate diagnostics.
   _resolveCurrentUnitTurn(job, turns) {
     const unitId = job.mutationUnitId || null;
-    if (!unitId) return { ok: false, reason: 'no current mutation unit' };
+    if (!unitId) return { ok: false, reason: 'no current mutation unit', observationCode: 'turn_binding_none' };
     const turnUnits = job.turnUnits || {};
     const bound = turns.find((t) => t && turnUnits[t.id] === unitId);
     if (bound) return { ok: true, turn: bound, resolution: 'bound', unitId };
     const unbound = turns.filter((t) => t && !turnUnits[t.id]);
     if (unbound.length === 1) return { ok: true, turn: unbound[0], resolution: 'unbound_single', unitId };
-    return { ok: false, reason: unbound.length === 0 ? 'no candidate turn for current mutation unit' : 'multiple candidate turns for current mutation unit', unitId };
+    if (unbound.length === 0) return { ok: false, reason: 'no candidate turn for current mutation unit', observationCode: 'turn_binding_none', unitId };
+    return { ok: false, reason: 'multiple candidate turns for current mutation unit', observationCode: 'turn_binding_multiple', unitId };
   }
 
   // Read-only authoritative lifecycle observation for one already-selected durable job.
@@ -381,31 +382,31 @@ export class AppServerExecutor {
   async _authoritativeObserveLifecycleCore(job) {
     const jobId = job.jobId;
     const unitId = job.mutationUnitId || null;
-    if (!job.threadId) return { ok: false, resolution: 'unresolved', reason: 'no thread identity to reconcile' };
+    if (!job.threadId) return { ok: false, resolution: 'unresolved', reason: 'no thread identity to reconcile', observationCode: 'missing_thread_identity' };
     let resumed;
     try {
       resumed = await this.client.request('thread/resume', { threadId: job.threadId, ...(job.cwd ? { cwd: job.cwd } : {}) });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', reason: 'resume failed: ' + String(e.message || e).slice(0, 160) };
+      return { ok: false, resolution: 'unresolved', reason: 'resume failed: ' + String(e.message || e).slice(0, 160), observationCode: 'resume_failed' };
     }
     if (!(resumed && resumed.thread && resumed.thread.id)) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', reason: 'thread/resume returned no thread id' };
+      return { ok: false, resolution: 'unresolved', reason: 'thread/resume returned no thread id', observationCode: 'resume_no_thread_identity' };
     }
     let read;
     try {
       read = await this.client.request('thread/read', { threadId: job.threadId, includeTurns: true });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', reason: 'thread/read failed: ' + String(e.message || e).slice(0, 160) };
+      return { ok: false, resolution: 'unresolved', reason: 'thread/read failed: ' + String(e.message || e).slice(0, 160), observationCode: 'read_failed' };
     }
     const thread = read && read.thread;
     const turns = (thread && Array.isArray(thread.turns)) ? thread.turns : [];
     const resolved = this._resolveCurrentUnitTurn(job, turns);
     if (!resolved.ok) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', reason: resolved.reason };
+      return { ok: false, resolution: 'unresolved', reason: resolved.reason, observationCode: resolved.observationCode || 'lifecycle_unreadable' };
     }
     const turn = resolved.turn;
     if (resolved.resolution === 'unbound_single') {
@@ -416,7 +417,7 @@ export class AppServerExecutor {
     if (TERMINAL_TURN_STATES.includes(turn.status)) return { ok: true, resolution: 'terminal', state: turn.status, unitId };
     if (turn.status === 'inProgress') return { ok: true, resolution: 'in_progress', state: 'running', unitId };
     this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-    return { ok: false, resolution: 'unresolved', reason: 'ambiguous or unreadable turn state' };
+    return { ok: false, resolution: 'unresolved', reason: 'ambiguous or unreadable turn state', observationCode: 'lifecycle_unreadable' };
   }
 
   // Shared authoritative identity-safe reconciliation (used by reconcile() and resume()).
@@ -779,10 +780,13 @@ export class AppServerExecutor {
 
     await this._ensureConnected();
     let unresolvedCandidateCount = 0;
+    const reasonCounts = {};
     for (const { job } of selected.dangerous) {
       const observed = await this._authoritativeObserveLifecycle(job);
       if (!observed.ok) {
         unresolvedCandidateCount += 1;
+        const code = observed.observationCode || 'lifecycle_unreadable';
+        reasonCounts[code] = (reasonCounts[code] || 0) + 1;
         continue;
       }
       if (observed.resolution === 'terminal') {
@@ -802,6 +806,7 @@ export class AppServerExecutor {
         error: 'reconciliation_unresolved',
         reason: 'one or more hidden recovery-risk executions could not be authoritatively reconciled; refusing to infer safety',
         unresolvedCandidateCount,
+        reasonCounts,
       };
     }
     const after = this.jobMap.recoveryPreflight(args);
