@@ -143,51 +143,48 @@ export class JobMap {
     return { jobs, corruptCount };
   }
 
-  // Brain Continuity bootstrap preflight. This is deliberately NOT a generic job list:
-  // the caller must provide semantic scope, terminal history is ignored, timestamps are
-  // never used for selection, ambiguity discloses only a count, and only one uniquely
-  // dangerous execution may expose the exact internal recovery identity needed by Brain.
-  recoveryPreflight({ workspaceId = null, workspaceRoot = null, taskId = null, stepId = null, identity = null } = {}) {
+  // Internal selector shared by recovery preflight and bounded remediation. It preserves
+  // exactly the same semantic scope and dangerous-candidate rules without exposing a
+  // generic job browser. Callers must never sort or select by timestamps.
+  recoveryPreflightCandidates({ workspaceId = null, workspaceRoot = null, taskId = null, stepId = null, identity = null } = {}) {
     if (workspaceId == null && workspaceRoot == null) {
       return { ok: false, error: 'bad_request', reason: 'recovery preflight requires a workspace' };
     }
     if (taskId == null && stepId == null && identity == null) {
       return { ok: false, error: 'bad_request', reason: 'recovery preflight requires semantic task scope (taskId/stepId/identity)' };
     }
-
     const { jobs, corruptCount } = this._scanStrict();
     if (corruptCount > 0) {
       return { ok: false, error: 'corrupt', reason: 'durable Codex job state is unreadable; refusing to infer absence' };
     }
-
     const scope = { workspaceId, workspaceRoot };
     const binding = { taskId, stepId, identity };
     const dangerous = [];
-
-    // A semantically matching non-terminal execution in another workspace is a foreign
-    // authority conflict, not a candidate to recover here.
     for (const job of jobs) {
       if (!matchesBinding(job, binding) || sameWorkspace(job, scope)) continue;
       if (TERMINAL_JOB_STATES.has(job.state)) continue;
-      if (RECOVERY_RISK_STATES.has(job.state)) {
-        return { ok: false, error: 'foreign', reason: 'the current semantic binding has a non-terminal Codex execution in another workspace' };
-      }
+      if (RECOVERY_RISK_STATES.has(job.state)) return { ok: false, error: 'foreign', reason: 'the current semantic binding has a non-terminal Codex execution in another workspace' };
       return { ok: false, error: 'lifecycle_unknown', reason: 'a foreign semantic match has an unknown lifecycle; refusing to infer safety' };
     }
-
     for (const job of jobs) {
-      if (!sameWorkspace(job, scope)) continue;
-      if (TERMINAL_JOB_STATES.has(job.state)) continue;
-
+      if (!sameWorkspace(job, scope) || TERMINAL_JOB_STATES.has(job.state)) continue;
       const unbound = missingBinding(job);
       const matched = matchesBinding(job, binding);
-      if (!unbound && !matched) continue; // another explicitly-bound task is out of scope
-
-      if (!RECOVERY_RISK_STATES.has(job.state)) {
-        return { ok: false, error: 'lifecycle_unknown', reason: 'a would-be recovery candidate has an unknown lifecycle; refusing to infer safety' };
-      }
+      if (!unbound && !matched) continue;
+      if (!RECOVERY_RISK_STATES.has(job.state)) return { ok: false, error: 'lifecycle_unknown', reason: 'a would-be recovery candidate has an unknown lifecycle; refusing to infer safety' };
       dangerous.push({ job, unbound, matched });
     }
+    return { ok: true, dangerous };
+  }
+
+  // Brain Continuity bootstrap preflight. This is deliberately NOT a generic job list:
+  // the caller must provide semantic scope, terminal history is ignored, timestamps are
+  // never used for selection, ambiguity discloses only a count, and only one uniquely
+  // dangerous execution may expose the exact internal recovery identity needed by Brain.
+  recoveryPreflight({ workspaceId = null, workspaceRoot = null, taskId = null, stepId = null, identity = null } = {}) {
+    const selected = this.recoveryPreflightCandidates({ workspaceId, workspaceRoot, taskId, stepId, identity });
+    if (!selected.ok) return selected;
+    const { dangerous } = selected;
 
     if (dangerous.length === 0) {
       return {

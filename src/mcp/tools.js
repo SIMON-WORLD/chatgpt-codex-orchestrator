@@ -194,6 +194,21 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       }
     });
 
+    server.registerTool('codex_recovery_reconcile_preflight', {
+      description: 'Bounded authoritative ambiguity remediation for recovery preflight. Reuses the exact hidden dangerous-candidate scope, reconciles candidates only via thread/resume + thread/read, never starts/continues/interrupts/selects-most-recent/lists jobs, then returns only the aggregate post-reconcile recovery decision.',
+      annotations: { readOnlyHint: false, destructiveHint: false },
+      inputSchema: z.object({ workspaceId: workspaceIdSchema, taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }),
+    }, async ({ workspaceId, taskId, stepId, identity }) => {
+      try {
+        const root = assertSameWorkspace(workspaceRegistry, workspaceId, null);
+        const result = await appServerExecutor.reconcileRecoveryPreflight({ workspaceId, workspaceRoot: root, taskId, stepId, identity });
+        if (!result.ok) return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: true };
+        return text(result);
+      } catch (e) {
+        return errText(e.message);
+      }
+    });
+
     server.registerTool('codex_start', { description: 'Start a Codex App Server thread + turn in a workspace. accessMode is required (read_only | workspace_write); a mutation delegation must not silently default to read-only. networkAccess is an optional minimal job-level flag (default false) for operations like git push, and is never granted to every job.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, prompt: z.string(), accessMode: z.enum(['read_only', 'workspace_write']), networkAccess: z.boolean().optional(), taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }) },
       async ({ workspaceId, prompt, accessMode, networkAccess = false, taskId, stepId, identity }) => { try { const root = assertSameWorkspace(workspaceRegistry, workspaceId, null); return text(await appServerExecutor.start({ prompt, cwd: root, accessMode, workspaceRoot: root, workspaceId, networkAccess, taskId, stepId, identity })); } catch (e) { return errText(e.message); } });
     server.registerTool('codex_get', { description: 'Read structured state + bounded result + pending approvals for a Codex job.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string() }) },
