@@ -77,6 +77,12 @@ export { isBlockedMutationPath } from './local/sensitive.js';
 export { CapabilityRouter, createCapabilityRouter, decideRoute, normalizeFacts, validateConsistency, RouterError, ROUTES, FACT_KEYS, MUTATION_OWNERS as ROUTE_MUTATION_OWNERS } from './router/capability-router.js';
 export { buildHandoff, validateHandoff, HANDOFF_FIELDS, HandoffError } from './state/handoff.js';
 export { GovernanceService, createGovernanceService, GovernanceError, GOV_CONTROLS, GOV_ROUTES, governanceGateOk } from './governance/index.js';
+// --- v0.2 Brain Continuity core: durable Governance + re-entry -----------------
+export { DurableGovernanceService, createDurableGovernanceService, performContinuityTakeover, reconcileDelegatedExecution, makeAuthorityToken, governanceError } from './governance/durable.js';
+export { GovernanceStore, GovernanceStoreError, GOVERNANCE_SCHEMA_VERSION, GOVERNANCE_STATE_KIND, atomicWriteJsonWithBackup } from './governance/store.js';
+export { GovernanceWriterGuard, GovernanceWriterError, WRITER_STALE_MS_DEFAULT } from './governance/writer-guard.js';
+export { buildContextCapsule, buildExecutionSummary, deriveNextSafeAction, CAPSULE_BOUNDS, CAPSULE_VERSION } from './governance/capsule.js';
+export { CapabilityObservationLedger, CapabilityObservationError, requireCapabilityRediscovery, capabilityIsCurrent } from './governance/observation.js';
 
 // --- v0.2 M5: production runtime assembly + Brain-local transport ------------
 export { loadV02Config, DEFAULT_V02_CONFIG } from './config.js';

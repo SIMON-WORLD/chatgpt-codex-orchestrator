@@ -163,6 +163,7 @@ The normative policy is [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md).
 
 - `src/router/decide.js`, `src/router/capability-router.js` — deterministic routing over structured task facts. Natural-language project reasoning remains with ChatGPT.
 - `src/governance/index.js` — canonical Brain control lifecycle and acceptance/evidence gates.
+- Brain Continuity core (`src/governance/store.js`, `writer-guard.js`, `durable.js`, `capsule.js`, `observation.js`) — durable canonical Governance under the existing `dataRoot` (`runtime/governance/<namespace>/`) with versioned schema, atomic write + known-good backup, fail-closed load/migration, one canonical Governance writer per namespace, Parent authority generation/fencing (`stale_authority`), bounded semantic re-entry (0/1/>1), bounded Context Capsule, and ephemeral capability observations. Wired as the canonical runtime Governance service in `src/transport/brain-local.js`.
 
 ### Codex executor
 

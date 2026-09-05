@@ -22,7 +22,7 @@ import { AppServerExecutor } from '../executor/app-server-executor.js';
 import { AppServerClient } from '../executor/app-server-client.js';
 import { startMcpServer } from '../mcp/server.js';
 import { createCapabilityRouter } from '../router/capability-router.js';
-import { createGovernanceService } from '../governance/index.js';
+import { createDurableGovernanceService } from '../governance/durable.js';
 import { loadV02Config } from '../config.js';
 import { resolveCodexAppServer } from './codex.js';
 
@@ -35,7 +35,13 @@ export class BrainLocalRuntime {
     this.changeSetService = null;
     this.verifyService = null;
     this.capabilityRouter = createCapabilityRouter();
-    this.governanceService = createGovernanceService();
+    // Brain Continuity core: canonical Governance is durable under the configured
+    // dataRoot/namespace with one canonical writer, authority fencing, bounded
+    // semantic recovery and takeover. A runtime restart restores authoritative state.
+    this.governanceService = createDurableGovernanceService({
+      dataRoot: config.dataRoot,
+      namespace: config.governanceNamespace || 'default',
+    });
     this.appServerExecutor = null;
     this.mcp = null;
     this.tunnelProcess = null;
@@ -173,6 +179,7 @@ export class BrainLocalRuntime {
     if (this.appServerExecutor) { try { await this.appServerExecutor.shutdown(); } catch {} }
     if (this.mcp) { try { await this.mcp.close(); } catch {} }
     if (this.tunnelProcess && this.tunnelProcess.exitCode === null) { try { this.tunnelProcess.kill('SIGTERM'); } catch {} }
+    if (this.governanceService && typeof this.governanceService.close === 'function') { try { this.governanceService.close(); } catch {} }
     this.started = false;
   }
 }
