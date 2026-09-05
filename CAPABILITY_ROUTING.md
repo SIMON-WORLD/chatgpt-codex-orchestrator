@@ -64,12 +64,15 @@ Executor RESULT 不是 Brain truth。能由 Brain 直接取得的 authoritative 
 
 ### ChatGPT Product Capability
 
-由当前 ChatGPT runtime 直接提供或通过已连接 App 提供的 capability，包括但不限于：
+由当前 ChatGPT runtime 直接提供或通过已连接 App 提供的 capability。这里的 Native capability universe **不是固定产品功能清单**；它随 ChatGPT 产品、计划、surface、rollout、connected provider 与当前会话实际 tool surface 变化。
 
-- Built-in Native：Web/Search、Files、PDF/vision、Python/Data Analysis、Images、Artifacts、Tasks 等；
-- Connected Apps：GitHub、Gmail、Calendar、Notion、Figma 以及当前账户未来接入的 Apps。
+当前已知类别包括但不限于：
 
-这些能力不应为了形式统一在本仓库、本地 MCP 或 Codex 中重复实现。
+- Built-in Native：Web/Search、Files/PDF/vision、Python/Data Analysis、Images、Artifacts，以及当前 runtime 暴露的 writing/code blocks、preview/execute、Library、Tasks 等产品能力；
+- Connected Apps：GitHub、Gmail、Calendar、Notion、Figma 以及当前账户未来接入的 Apps；
+- 未来新增但可由当前 ChatGPT runtime 直接、安全、充分执行的产品 capability。
+
+这些能力不应为了形式统一在本仓库、本地 MCP 或 Codex 中重复实现。Router 不应因为历史 inventory 未列出某项能力，就默认把任务下沉到 Local/Codex；必须先以当前 runtime observation 为准。
 
 ### Local Capability Plane
 
@@ -124,18 +127,33 @@ Executor RESULT 不是 Brain truth。能由 Brain 直接取得的 authoritative 
 
 ## 5. Runtime Capability Discovery
 
-Capability availability 是 **runtime fact**，不是静态产品假设。
+Capability availability 是 **runtime fact**，不是静态产品假设。路由前先比较 **required operations** 与当前 runtime 的 **observed executable operations**，而不是按“coding / research / file editing”等任务标签做静态分流。
 
 至少区分：
 
 ```text
-tool exposed?
+product capability observed?
+tool / action exposed in this conversation?
 provider connected?
 resource authorized?
 operation permitted?
+execution constraints sufficient for this task?
 ```
 
-只有当前任务所需的实际 operation 能执行，才视为该 capability `AVAILABLE`。
+可以把当前任务级快照概念化为一个 ephemeral **Native Capability Envelope**：
+
+```text
+NativeCapabilityEnvelope {
+  observedAt,
+  surface,
+  availableOperations,
+  connectedProviders,
+  authorizedResources,
+  executionConstraints
+}
+```
+
+只有当前任务所需的实际 operation 能执行，并且 execution constraints 足以完成任务，才视为该 capability `AVAILABLE`。
 
 真实例子：`create_branch` tool 可以出现在 ChatGPT tool surface 中，但在 GitHub App 未安装到目标 repository owner 时仍会返回 `403 Resource not accessible by integration`。安装并授权 provider 后，同一个 runtime capability 才真正可用。
 
@@ -152,11 +170,14 @@ operation permitted?
 
 使用 ChatGPT 当前 runtime 已直接拥有且足够完成任务的 Product Capability。
 
+`CHATGPT_NATIVE` 的边界由 **当前可执行 operation** 决定，不由固定产品功能清单或任务标签决定。即使任务涉及代码，只要当前 Web/native runtime 已具备所需的生成、编辑、预览、执行或远端 mutation capability，并且不需要真实 local workspace / shell / project dependency / repository test loop，就应优先保留在 Native。
+
 典型：
 
 - Web / GitHub / connected-app investigation；
 - PR / CI 检查与当前 runtime 已授权的远端 bounded action；
 - Files / PDF / Python / Images / Artifacts；
+- 当前 runtime 暴露且足够完成任务的 writing/code blocks、preview/execute 等 native creation / compute surface；
 - 不需要 local workspace 的普通 reasoning / creation。
 
 原则：**Native-first，但不是 Native-only。**
@@ -174,16 +195,20 @@ operation permitted?
 
 ### `CODEX_DELEGATE`
 
-Codex 是 sustained local coding executor。
+Codex 是 **sustained local / repository execution executor**，而不是“凡是涉及代码就默认使用”的 executor。
 
 适合：
 
 - multi-file implementation；
 - unknown-root-cause debugging；
-- refactor；
+- repository-grounded refactor；
 - shell-heavy work；
-- iterative test/build loops；
+- project dependency / lint / test / build；
+- iterative inspect → edit → test → debug → retest loop；
+- git commit / push 等与真实 local workspace 绑定的执行；
 - 长期或多轮 local execution。
+
+如果一个 coding task 只需要当前 ChatGPT native 已拥有的 code generation / edit / preview / Python execution，而不需要真实 local repository execution loop，则不应仅因“这是 coding”就升级到 Codex。
 
 Codex 不拥有 Brain 的项目级 planning / architecture / final acceptance authority。
 
@@ -210,9 +235,31 @@ Local mutation owner 始终由实际 local leg 决定。
 
 > **Brain-native evidence first; native execution when sufficient; Direct Local for bounded local operations; Codex for sustained local execution.**
 
+更具体地说：**Native-first means native-operation-first, not native-task-category-first.**
+
+Router 不应使用以下静态捷径：
+
+```text
+coding -> Codex
+research -> Native
+file editing -> Local
+```
+
+而应执行：
+
+```text
+required operations
+vs
+current runtime observed executable operations
+-> identify capability gap
+-> choose the smallest sufficient route
+```
+
 “需要写文件”不等于“需要 Codex”。例如 GitHub 上的小型治理文档 mutation，如果当前 ChatGPT GitHub provider 已授权，则应由 `CHATGPT_NATIVE` 直接完成。
 
-反过来，multi-file code implementation 即使 ChatGPT 能编辑远端文本，也通常仍应由 Codex 承担完整本地 coding/test loop。
+同样，“需要写代码”也不等于“需要 Codex”。例如当前 ChatGPT runtime 已能完成的小型代码生成、编辑、预览或 Python 执行，应优先 Native。
+
+反过来，multi-file repository implementation 即使 ChatGPT 能编辑远端文本，也通常仍应由 Codex 承担完整 local workspace / shell / dependency / coding / test loop。
 
 ## 8. Evidence and Verification
 
