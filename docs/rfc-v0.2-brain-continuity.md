@@ -3,6 +3,8 @@
 > Status: **ACCEPTED CONTRACT — implementation / real dogfood pending**
 >
 > This RFC records the current best-known design based on M7 dogfood and subsequent Parent Brain review. It is intentionally revisable: new production evidence may trigger `REPLAN`. Acceptance of this contract does not accept any future implementation automatically.
+>
+> 2026-09-05 clarification: project-level Parent authority has one active holder at a time, Parent sessions are replaceable holders of that role, and implementation/research/review conversations are disposable mission sessions rather than current durable Child-Brain authority entities. This clarification does not expand the Brain Continuity Core runtime scope.
 
 ## 1. Problem
 
@@ -58,7 +60,7 @@ A persisted statement that a capability was previously available must never be t
 
 ### 3.4 Delegate outcomes, not keystrokes
 
-The Parent Brain controls goal, scope, constraints, acceptance, routing, and final decision. A sustained executor such as Codex controls local implementation tactics inside its delegated boundary.
+The active Parent controls goal, scope, constraints, acceptance, routing, and final project-level decision. A sustained executor such as Codex controls local implementation tactics inside its delegated boundary.
 
 Governance should use milestone-sized execution authorization rather than forcing the Parent to dispatch each shell/edit/test action individually.
 
@@ -75,11 +77,15 @@ There is no generic `resume most recent task` fallback.
 
 ### 3.6 Parallel work does not imply parallel authority
 
-v0.2 retains one authoritative Parent Brain. Future specialists/Child Brains may operate on bounded workstreams, but they do not gain project-level acceptance authority.
+v0.2 retains one **active project-level Parent authority** at a time.
+
+Separate ChatGPT implementation, research, or review sessions may perform bounded missions and return evidence/critique/execution results, but their existence does not create parallel project-level acceptance authority. They are disposable working/context surfaces unless future evidence justifies a different durable workstream model.
+
+Parent authority may move from Parent Session A to Parent Session B only through bounded takeover/re-entry semantics; it does not multiply because multiple conversations exist.
 
 ### 3.7 Complexity must be earned by evidence
 
-This RFC must not be used as justification to pre-build recursive multi-agent scheduling, a generic DAG engine, shared-authority consensus, or distributed locking.
+This RFC must not be used as justification to pre-build recursive multi-agent scheduling, a generic DAG engine, shared-authority consensus, reviewer consensus, or distributed locking.
 
 ## 4. Authority and state layers
 
@@ -118,7 +124,7 @@ Codex execution identity continues to be owned by the existing JobMap/AppServer 
 
 ### 4.4 Brain Context Capsule — derived working context
 
-A replacement Brain session receives a bounded derived capsule generated from durable state and freshly reacquired evidence. It is not a free-form transcript dump.
+A replacement Parent session receives a bounded derived capsule generated from durable state and freshly reacquired evidence. It is not a free-form transcript dump.
 
 A capsule should contain only what the Parent needs to continue safely, for example:
 
@@ -169,9 +175,11 @@ v0.2 does not need a distributed lock manager, but it must not allow two canonic
 
 This process-level writer boundary is separate from Parent conversation authority generation and from workspace mutation ownership. All three scopes must remain explicit:
 
-- Parent authority: who may issue new Brain controls;
+- Parent authority: which active Parent generation may issue new project-level Brain controls;
 - Governance runtime writer: which local runtime may persist control state;
 - resource mutation owner: who may mutate a workspace/resource.
+
+Implementation/research/review session labels are not a fourth durable locking scope in v0.2.
 
 ## 6. Logical identity and bounded re-entry
 
@@ -190,19 +198,21 @@ If the logical scope resolves to multiple active candidates, the system asks the
 
 ## 7. Parent authority takeover and split-brain fencing
 
-Conversation rollover introduces a new safety risk: Conversation A may still be alive when Conversation B takes over.
+Conversation rollover introduces a new safety risk: Parent Session A may still be alive when Parent Session B takes over.
 
-The continuity contract therefore requires a durable **authority generation/fencing token** for Brain-authored Governance mutations.
+The continuity contract therefore requires a durable **authority generation/fencing token** for project-level Parent-authored Governance mutations.
 
 Semantics:
 
 1. Initial task authority starts at generation `g`.
-2. A bounded re-entry/takeover increments the generation and issues a new opaque fencing token to the new Parent session.
+2. A bounded Parent re-entry/takeover increments the generation and issues a new opaque fencing token to the new Parent session.
 3. After takeover, a mutating Governance request carrying an older generation/token is rejected as `stale_authority`.
 4. The token is an internal Brain/runtime concern; the human never relays it.
 5. Read-only status/recovery discovery may remain available without mutation authority.
 
 Exact API names are implementation details, but the semantic property is mandatory: **old Parent control cannot mutate the task after a newer Parent has taken authority.**
+
+This fencing requirement is intentionally narrow. It does not require reviewer, implementation, or research sessions to receive their own hierarchy of Parent-style generation tokens merely because they exist as separate conversations.
 
 ### 7.1 Takeover does not cancel delegated execution
 
@@ -259,21 +269,25 @@ This is not necessarily a public persisted API shape. The required semantics are
 
 Capability observations may be recorded for diagnostics, but persistence never converts them into timeless truth.
 
-## 10. Child Brain / workstream boundary
+## 10. Mission-session / future-workstream boundary
 
-This RFC does **not** implement multi-Child orchestration.
+This RFC does **not** implement multi-Child orchestration or a permanent Child-Brain authority hierarchy.
 
-Current v0.2 execution remains optimized for one authoritative Parent and the minimum necessary active local work. The persistence model must, however, avoid treating a ChatGPT conversation ID as the durable identity of future delegated work.
+Current v0.2 execution remains optimized for one active authoritative Parent and the minimum necessary bounded work. Separate implementation, research, or review ChatGPT conversations are disposable mission sessions used for context isolation and specialist work; the persistence model must not treat their conversation IDs as durable project/work authority identity.
 
-If real future dogfood demonstrates multiple independent long-lived lines (for example different repositories/resources), the durable entity should be a **workstream** with its own goal/scope/status/evidence/dependency checkpoint. A Child Brain conversation would only be a disposable specialist session attached to that workstream.
+If real future dogfood demonstrates multiple independent long-lived lines (for example different repositories/resources), the durable entity should be a **workstream** with its own goal/scope/status/evidence/dependency checkpoint. A ChatGPT specialist session would be a replaceable interaction surface attached to that workstream, not the durable workstream itself.
 
 For v0.2:
 
 - no recursive Child Brain spawning contract;
+- no permanent Child/Scoped-Brain authority registry;
 - no generic multi-workstream scheduler;
 - no multi-authoritative-Brain model;
+- no reviewer consensus engine / agent council runtime;
 - no concurrency merely because it is technically possible;
 - existing resource-scoped single-writer policy remains authoritative.
+
+Independent reviewers are governance evidence sources, not a new runtime workstream subsystem.
 
 ## 11. Dogfood isolation
 
@@ -309,6 +323,8 @@ At minimum:
 12. Capability availability from a prior session is not trusted as current proof after re-entry.
 13. A second canonical runtime attempting to own the same Governance namespace is rejected or fails closed; two concurrent control-state writers are never accepted.
 14. Loss of a non-authoritative proof-reuse cache can only force conservative re-verification; it cannot create a pass/acceptance that was not durably justified.
+
+No new automated test is required merely to model reviewers as a runtime authority class, because this clarification explicitly does not create that class.
 
 ### 12.2 Real runtime dogfood
 
@@ -349,7 +365,9 @@ This RFC does not require:
 - a distributed lock manager;
 - a multi-agent DAG scheduler;
 - recursive Child Brain orchestration;
-- multi-authoritative-Brain consensus;
+- a permanent Child/Scoped-Brain authority hierarchy;
+- multi-authoritative-Brain voting / consensus;
+- reviewer scheduler / reviewer consensus engine / agent council runtime;
 - Codex Desktop sidebar integration;
 - a rich dashboard/UI;
 - generic automatic recovery of “the most recent” task;
@@ -369,13 +387,16 @@ The implementation should prefer these existing primitives:
 - current mutation-owner and permission contracts;
 - existing MCP tool boundary.
 
-The Parent Brain remains responsible for:
+The active Parent remains responsible for:
 
 - approving the final contract;
-- independent review of implementation diff;
+- optional Independent Review Gate when impact/uncertainty warrants it;
+- independent review of implementation diff/evidence;
 - CI verification;
 - controlled real restart/re-entry dogfood;
 - deciding whether the default-flip blocker is actually closed.
+
+Independent reviewers may challenge the Parent with evidence, but they do not replace the Parent acceptance boundary or create a majority-vote decision model.
 
 ## 15. Decision boundary
 
@@ -388,6 +409,7 @@ It does **not** mean:
 - the first implementation is automatically correct;
 - operational default should automatically flip;
 - M8 has started;
-- future architecture is frozen.
+- future architecture is frozen;
+- reviewer/mission sessions form a new multi-agent authority subsystem.
 
 New evidence may produce `REVISE` or `REPLAN`.
