@@ -10,9 +10,10 @@ Use these documents for current project decisions:
 
 1. [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) — current phase, accepted milestones, active blocker, and next action.
 2. [`../ROADMAP.md`](../ROADMAP.md) — accepted high-level path; future phases are not pre-invented without evidence.
-3. [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md) — normative current capability / route / executor policy.
+3. [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md) — normative current capability / route / executor policy, including the minimal Parent/non-Parent mission boundary.
 4. [`architecture.md`](architecture.md) — current technical architecture and released-vs-candidate boundary.
 5. [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md) — **accepted post-M7 contract**, with implementation / real restart-re-entry dogfood still pending.
+6. [`chatgpt-project-instructions.md`](chatgpt-project-instructions.md) — compact canonical copy/paste source for ChatGPT Project Settings → Instructions after the corresponding change is reviewed and merged.
 
 Implementation truth remains GitHub current code, PRs, CI, and releases. Project Library or narrative handoff material must not silently override newer GitHub evidence.
 
