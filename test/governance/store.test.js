@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { GovernanceStore, GovernanceStoreError, GOVERNANCE_SCHEMA_VERSION, GOVERNANCE_STATE_KIND, makeGovernanceEnvelope } from '../../src/governance/store.js';
+import { GovernanceStore, GovernanceStoreError, GOVERNANCE_SCHEMA_VERSION, GOVERNANCE_STATE_KIND, makeGovernanceEnvelope, governanceNamespaceDir, encodeGovernanceComponent } from '../../src/governance/store.js';
+import { runtimePaths } from '../../src/runtime-paths.js';
 
 function fixture(prefix = 'gstore-') {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -140,4 +141,63 @@ test('scanStrict still fails closed for primary+backup corruption and future sch
   const { tasks, corruptCount } = store.scanStrict();
   assert.equal(corruptCount, 2); // a (primary+backup) and c (future schema)
   assert.deepEqual(tasks.map((t) => t.taskId), ['b']);
+});
+
+test('namespace filesystem containment fails closed for genuinely unsafe values', () => {
+  const { dataRoot } = fixture();
+  const bad = ['..', '.', 'CON', 'NUL', 'con', 'nul.txt', 'COM1', 'PRN', 'CON.foo', 'con.txt', 'trail.', 'trail ', '*', 'a*b'];
+  for (const ns of bad) {
+    assert.throws(() => new GovernanceStore({ dataRoot, namespace: ns }), (e) => e instanceof GovernanceStoreError && e.code === 'invalid_component', 'namespace ' + JSON.stringify(ns));
+    assert.throws(() => governanceNamespaceDir(dataRoot, ns), (e) => e instanceof GovernanceStoreError && e.code === 'invalid_component', 'dir namespace ' + JSON.stringify(ns));
+  }
+});
+
+test('separators/control/leading-space remain one safe encoded component with strict-child containment (historical mapping)', () => {
+  const { dataRoot } = fixture();
+  const root = path.join(runtimePaths(dataRoot).runtime, 'governance');
+  for (const ns of ['a/b', 'a\\b', 'x\ty', '\u0000x', ' lead', 'a:b?c']) {
+    const dir = governanceNamespaceDir(dataRoot, ns);
+    const rel = path.relative(root, dir);
+    assert.ok(rel && rel !== '.' && !path.isAbsolute(rel) && !rel.split(path.sep).includes('..'), 'namespace ' + JSON.stringify(ns) + ' escaped root');
+    const historical = encodeURIComponent(ns).replace(/%20/g, ' ');
+    assert.equal(dir, path.join(root, historical), 'historical byte-for-byte mapping preserved for ' + JSON.stringify(ns));
+  }
+});
+
+test('valid namespaces resolve as strict children of the dedicated runtime/governance root', () => {
+  const { dataRoot } = fixture();
+  const root = path.join(runtimePaths(dataRoot).runtime, 'governance');
+  for (const ns of ['default', 'other-ns', 'research.project', '\u7814\u7a76', 'a b']) {
+    const dir = governanceNamespaceDir(dataRoot, ns);
+    const rel = path.relative(root, dir);
+    assert.ok(rel && rel !== '.' && !path.isAbsolute(rel) && !rel.split(path.sep).includes('..'), 'namespace ' + ns + ' escaped root');
+    const encoded = encodeGovernanceComponent(ns, 'namespace');
+    assert.equal(dir, path.join(root, encoded));
+  }
+});
+
+test('task-id filesystem component safety: unsafe ids fail closed; historical-safe ids round-trip', () => {
+  const { dataRoot, namespace } = fixture();
+  const store = new GovernanceStore({ dataRoot, namespace });
+  const badTaskIds = ['..', '.', 'CON', 'NUL', 'nul.txt', 'trail.', 'trail ', '*', 'task*a'];
+  for (const id of badTaskIds) {
+    assert.throws(() => store.saveTask(id, makeGovernanceEnvelope({ taskId: id, state: state(id) })), (e) => e instanceof GovernanceStoreError && e.code === 'invalid_component', 'taskId ' + JSON.stringify(id));
+  }
+  for (const id of ['t1', 'issue-23-brain-continuity-core', '\u4efb\u52a1-1', 'a/b', 'a\\b']) {
+    store.saveTask(id, makeGovernanceEnvelope({ taskId: id, state: state(id), projectKey: 'p', identity: 'i' }));
+    assert.equal(store.loadTask(id).taskId, id);
+  }
+});
+
+test('compatibility: ordinary spaces keep the historical mapping and existing state loads (no remap/fresh state)', () => {
+  const { dataRoot } = fixture();
+  const store = new GovernanceStore({ dataRoot, namespace: 'research project' });
+  store.saveTask('task one', makeGovernanceEnvelope({ taskId: 'task one', state: state('task one'), projectKey: 'p', identity: 'i' }));
+  const dir = path.join(runtimePaths(dataRoot).runtime, 'governance', 'research project');
+  assert.equal(store.dir, dir);
+  assert.equal(fs.existsSync(path.join(dir, 'task one.json')), true);
+  // A new store instance over the same dataRoot loads the existing state (not fresh).
+  const store2 = new GovernanceStore({ dataRoot, namespace: 'research project' });
+  assert.equal(store2.hasTask('task one'), true);
+  assert.equal(store2.loadTask('task one').taskId, 'task one');
 });

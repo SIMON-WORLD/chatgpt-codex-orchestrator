@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createDurableGovernanceService, GovernanceWriterError, GovernanceWriterGuard } from '../../src/governance/durable.js';
 import { GovernanceStoreError } from '../../src/governance/store.js';
+import { loadV02Config } from '../../src/config.js';
 import { GovernanceError } from '../../src/governance/index.js';
 import { createProofLedger } from '../../src/direct-governance.js';
 
@@ -480,4 +481,19 @@ test('unique semantic recovery resolves a backup-only task when the primary is m
   assert.equal(rec.ok, true);
   assert.equal(rec.taskId, 't1');
   r2.close();
+});
+
+test('governanceNamespace config-file and runtime-override injection fails closed (invalid_component)', () => {
+  const { dataRoot } = fixture();
+  // Runtime-override injection path (loadV02Config override -> durable service).
+  const over = loadV02Config({ dataRoot, governanceNamespace: '..' });
+  assert.equal(over.governanceNamespace, '..');
+  assert.throws(() => createDurableGovernanceService({ dataRoot, namespace: over.governanceNamespace }), (e) => e instanceof GovernanceStoreError && e.code === 'invalid_component');
+  // Config-file injection path.
+  const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'govcfg-'));
+  const cfgPath = path.join(cfgDir, 'config.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({ dataRoot, governanceNamespace: 'CON' }), 'utf8');
+  const fromFile = loadV02Config({}, { configPath: cfgPath });
+  assert.equal(fromFile.governanceNamespace, 'CON');
+  assert.throws(() => createDurableGovernanceService({ dataRoot, namespace: fromFile.governanceNamespace }), (e) => e instanceof GovernanceStoreError && e.code === 'invalid_component');
 });

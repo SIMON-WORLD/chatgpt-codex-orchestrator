@@ -26,19 +26,72 @@ export class GovernanceStoreError extends Error {
   }
 }
 
-export function governanceNamespaceDir(dataRoot, namespace = 'default') {
-  return path.join(runtimePaths(dataRoot).runtime, 'governance', safeComponent(namespace));
+// Windows reserved device-name bases (case-insensitive, extension-independent).
+const WIN_RESERVED_BASE = new Set([
+  'CON', 'PRN', 'AUX', 'NUL',
+  'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+  'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+]);
+
+// Stable, named fail-closed error for an unsafe filesystem component (namespace or
+// task id). Invalid configuration is never silently remapped to another namespace
+// (which could create fresh Governance state).
+function invalidComponentError(value, kind, reason) {
+  return new GovernanceStoreError(
+    `invalid governance ${kind} ${JSON.stringify(String(value == null ? '' : value))}: ${reason}; refusing to map it to a filesystem path`,
+    { code: 'invalid_component' },
+  );
 }
 
-// TaskIds and namespaces are semantic strings that must never escape the namespace
-// directory (no path traversal) and must survive on Windows/posix filesystems.
-export function safeComponent(value) {
+// Validate and deterministically encode ONE semantic component (namespace or taskId)
+// into a single strict filesystem component while PRESERVING the historical
+// byte-for-byte mapping for ordinary components:
+//   - the historical mapping (encodeURIComponent(value).replace(/%20/g, ' ')) is kept,
+//     so ordinary spaces and previously percent-encoded separators/control bytes map
+//     exactly as before (no silent remap that could lose/recreate existing state);
+//   - empty values keep the historical safe '_' component;
+//   - only genuinely unsafe/aliased/collapsing values fail closed: exact '.' / '..',
+//     Windows reserved device names (CON/PRN/AUX/NUL/COMx/LPTx, any case, including
+//     extension aliases such as CON.txt), trailing dot / trailing space, and the
+//     literal '*' character (illegal in Windows filename components and left
+//     unencoded by encodeURIComponent, so it is rejected rather than remapped).
+// Slash/backslash/control bytes remain allowed because they are deterministically
+// percent-encoded into ONE component (regressions prove strict-child containment).
+export function encodeGovernanceComponent(value, kind = 'component') {
   const s = String(value == null ? '' : value);
-  if (!s) return '_';
-  return encodeURIComponent(s).replace(/%20/g, ' ');
+  if (s === '') return '_'; // historical safe single-component mapping
+  if (s === '.' || s === '..') throw invalidComponentError(value, kind, `component '${s}' would collapse the parent path`);
+  if (/[ .]$/.test(s)) throw invalidComponentError(value, kind, 'component must not end with a dot or space (Windows alias)');
+  if (s.includes('*')) throw invalidComponentError(value, kind, "component contains the Windows-illegal '*' character");
+  const base = s.split('.')[0].toUpperCase();
+  if (WIN_RESERVED_BASE.has(base)) throw invalidComponentError(value, kind, `component uses the reserved Windows device name '${base}'`);
+  let encoded;
+  try {
+    encoded = encodeURIComponent(s);
+  } catch {
+    throw invalidComponentError(value, kind, 'component cannot be percent-encoded');
+  }
+  // Historical mapping: percent-encoded spaces map back to literal spaces on disk.
+  encoded = encoded.replace(/%20/g, ' ');
+  if (encoded === '' || encoded === '.' || encoded === '..') throw invalidComponentError(value, kind, 'component encodes to an unsafe path segment');
+  return encoded;
 }
 
-function taskFileName(taskId) { return safeComponent(taskId) + '.json'; }
+// Namespace directory is always a STRICT CHILD of the dedicated runtime/governance
+// root. Invalid namespace configuration fails closed with a named error instead of
+// collapsing/escaping the boundary.
+export function governanceNamespaceDir(dataRoot, namespace = 'default') {
+  const governanceRoot = path.join(runtimePaths(dataRoot).runtime, 'governance');
+  const component = encodeGovernanceComponent(namespace, 'namespace');
+  const dir = path.join(governanceRoot, component);
+  const rel = path.relative(governanceRoot, dir);
+  if (rel === '' || rel === '.' || path.isAbsolute(rel) || rel.split(path.sep).includes('..')) {
+    throw invalidComponentError(namespace, 'namespace', 'resolved directory is not a strict child of the dedicated governance root');
+  }
+  return dir;
+}
+
+function taskFileName(taskId) { return encodeGovernanceComponent(taskId, 'taskId') + '.json'; }
 
 // Atomic write + known-good backup (same proven pattern as src/task-state.js):
 // 1) write temp, 2) copy current primary to .bak, 3) rename temp -> primary,
