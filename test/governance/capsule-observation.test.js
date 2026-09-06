@@ -193,3 +193,28 @@ test('capsule stays bounded on large durable state (cardinality + text caps, cou
   assert.equal(raw.includes(longText), false);
   assert.ok(raw.includes('capability availability is an ephemeral runtime observation'), 'freshness contract remains present');
 });
+
+test('F4: capsule byte bound is enforced in UTF-8 bytes (multilingual/emoji near limit)', () => {
+  const mix = '\u4e2d\u6587'.repeat(800) + '\ud83d\ude00'.repeat(200); // multilingual + emoji, multibyte in UTF-8
+  const state = sampleState({
+    taskId: mix + 'task',
+    control: 'ASK_USER',
+    awaitingUser: true,
+    askUser: { whyBlocked: mix, minimalUserAction: mix, question: mix + '?' },
+    currentStepId: mix + 'step',
+    steps: { [mix + 'step']: {
+      stepId: mix + 'step',
+      acceptance: [{ id: mix + 'acc', required: true, status: mix + 'pass' }],
+      evidence: [{ acceptanceId: mix + 'acc', status: 'pass', kind: 'verify', summary: mix }],
+      changed: [mix + 'file'],
+      executorStatus: 'success',
+      machineGate: 'pass',
+      brainAcceptance: 'pending',
+    } },
+  });
+  const cap = buildContextCapsule(state, { projectKey: mix + 'repo', identity: mix + 'id', taskId: mix + 'task', authority: { generation: 1 }, execution: { route: mix, payload: { text: mix, list: [mix, mix] } } });
+  const bytes = Buffer.byteLength(JSON.stringify(cap), 'utf8');
+  assert.ok(bytes <= CAPSULE_BOUNDS.maxSerializedBytes, 'utf8 bytes must fit: ' + bytes);
+  assert.equal(cap.truncation.serializedBytes, bytes, 'self-size metadata reports UTF-8 bytes');
+  assert.ok(cap.truncation.text.length > 0, 'truncation of multibyte content is reported');
+});

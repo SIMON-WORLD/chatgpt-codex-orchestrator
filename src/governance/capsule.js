@@ -6,7 +6,8 @@
 // Bounding contract: the bound is UNCONDITIONAL for every valid input. All
 // variable-length fields (ids, statuses, summaries, ASK_USER strings, caller-supplied
 // execution) are clamped, collection cardinalities are capped, and the final
-// serialized capsule is deterministically enforced to stay <= maxSerializedBytes.
+// serialized capsule is deterministically enforced to stay <= maxSerializedBytes
+// measured in UTF-8 BYTES (multilingual/emoji safe), not JS string code units.
 // Truncation/count/reference metadata is always attached so a Parent knows the
 // authoritative durable state contains more content. Truncation NEVER fabricates
 // acceptance: statuses and references are only copied from the durable state for the
@@ -117,9 +118,9 @@ function sanitizeExecution(execution, B, marks) {
   }
   let raw = null;
   try { raw = JSON.stringify(execution); } catch { raw = null; }
-  if (raw != null && raw.length > B.maxExecutionBytes) {
+  if (raw != null && utf8Length(raw) > B.maxExecutionBytes) {
     if (!marks.includes('execution')) marks.push('execution');
-    return { truncated: true, reason: 'caller execution object exceeded the capsule execution bound', serializedBytes: raw.length };
+    return { truncated: true, reason: 'caller execution object exceeded the capsule execution bound', serializedBytes: utf8Length(raw) };
   }
   return clampJsonNode(execution, B, marks, 0);
 }
@@ -203,7 +204,11 @@ function buildBoundedCapsule(state, { authority = null, projectKey = null, ident
   return capsule;
 }
 
-function measuredBytes(capsule) { return JSON.stringify(capsule).length; }
+const utf8Encoder = new TextEncoder();
+// maxSerializedBytes is a BYTE bound: measure the serialized capsule in UTF-8 bytes
+// (not JS UTF-16 code units) so multilingual/emoji content cannot exceed the contract.
+function measuredBytes(capsule) { return utf8Encoder.encode(JSON.stringify(capsule)).length; }
+function utf8Length(text) { return utf8Encoder.encode(text).length; }
 
 // Set serializedBytes to the capsule's own serialized length (fixed point so the
 // stored value reflects the JSON that includes the field itself).

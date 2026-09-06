@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createDurableGovernanceService, GovernanceWriterError, GovernanceWriterGuard } from '../../src/governance/durable.js';
-import { GovernanceStoreError } from '../../src/governance/store.js';
+import { GovernanceStore, GovernanceStoreError } from '../../src/governance/store.js';
 import { loadV02Config } from '../../src/config.js';
 import { GovernanceError } from '../../src/governance/index.js';
 import { createProofLedger } from '../../src/direct-governance.js';
@@ -496,4 +496,83 @@ test('governanceNamespace config-file and runtime-override injection fails close
   const fromFile = loadV02Config({}, { configPath: cfgPath });
   assert.equal(fromFile.governanceNamespace, 'CON');
   assert.throws(() => createDurableGovernanceService({ dataRoot, namespace: fromFile.governanceNamespace }), (e) => e instanceof GovernanceStoreError && e.code === 'invalid_component');
+});
+
+test('F1: an already-persisted terminal DONE task cannot be reopened under another task authority', () => {
+  const { dataRoot, namespace } = fixture();
+  const d = createDurableGovernanceService({ dataRoot, namespace });
+  // t1 -> terminal DONE (persisted).
+  const p1 = d.transition({ taskId: 't1', control: 'PLAN' });
+  const tok1 = p1.authorityToken;
+  d.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }], authorityToken: tok1 });
+  d.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }], authorityToken: tok1 });
+  d.transition({ taskId: 't1', stepId: 's1', control: 'DONE', authorityToken: tok1 });
+  const t1file = path.join(d.store.dir, 't1.json');
+  const t1before = fs.readFileSync(t1file, 'utf8');
+  // t2 -> terminal DONE (genuine sequential new task after t1 DONE).
+  const p2 = d.transition({ taskId: 't2', control: 'PLAN' });
+  const tok2 = p2.authorityToken;
+  d.transition({ taskId: 't2', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a2', required: true }], authorityToken: tok2 });
+  d.recordResult({ taskId: 't2', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a2', status: 'pass' }], authorityToken: tok2 });
+  d.transition({ taskId: 't2', stepId: 's1', control: 'DONE', authorityToken: tok2 });
+  const t2stateBefore = JSON.stringify(d.status());
+  // Attempt to reopen persisted terminal t1 under t2's authority at a PLAN boundary.
+  assert.throws(() => d.transition({ taskId: 't1', control: 'PLAN', authorityToken: tok2 }), (e) => e.code === 'task_reopen_rejected' || /already-persisted task/.test(e.message));
+  // Memory unchanged (t2 still terminal DONE, not reset to a fresh t1).
+  assert.equal(JSON.stringify(d.status()), t2stateBefore);
+  // Durable snapshot of t1 unchanged (still terminal DONE).
+  assert.equal(fs.readFileSync(t1file, 'utf8'), t1before);
+  // A genuinely NEW sequential task after DONE(t2) still works.
+  const p3 = d.transition({ taskId: 't3', control: 'PLAN' });
+  assert.equal(p3.ok, true);
+  assert.ok(p3.authorityToken);
+  d.close();
+});
+
+test('F2: failed persistence rolls in-memory state back to the committed snapshot', () => {
+  const { dataRoot, namespace } = fixture();
+  class FailingStore extends GovernanceStore {
+    constructor(...args) { super(...args); this.fail = false; }
+    saveTask(...args) {
+      if (this.fail) { const e = new Error('injected write failure'); e.code = 'inject_fail'; throw e; }
+      return super.saveTask(...args);
+    }
+  }
+  const store = new FailingStore({ dataRoot, namespace });
+  const d = createDurableGovernanceService({ dataRoot, namespace, store });
+  const plan = d.transition({ taskId: 't1', control: 'PLAN' });
+  const tok = plan.authorityToken;
+  d.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }], authorityToken: tok });
+  store.fail = true;
+  assert.throws(() => d.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }], authorityToken: tok }), (e) => e.code === 'inject_fail');
+  store.fail = false;
+  const st = d.status();
+  assert.equal(st.recoveryRequired, false); // rollback from committed snapshot succeeded
+  assert.equal(st.steps.s1.executorStatus, 'unknown'); // uncommitted success not presented
+  assert.equal(st.steps.s1.machineGate, 'pending');
+  assert.equal(d.store.loadTask('t1').state.steps.s1.executorStatus, 'unknown'); // disk unchanged
+  // Mutation works again after rollback and commits durably.
+  const res = d.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }], authorityToken: tok });
+  assert.equal(res.ok, true);
+  assert.equal(d.store.loadTask('t1').state.steps.s1.executorStatus, 'success');
+  d.close();
+});
+
+test('F3: reserved governance internal task stems fail closed and never collide with the writer slot', () => {
+  const { dataRoot, namespace } = fixture();
+  const d = createDurableGovernanceService({ dataRoot, namespace });
+  const slotBefore = fs.readFileSync(path.join(d.store.dir, 'writer.json'), 'utf8');
+  for (const id of ['writer', '.writer', '.writer-task']) {
+    assert.throws(() => d.transition({ taskId: id, control: 'PLAN' }), (e) => e instanceof GovernanceStoreError && e.code === 'invalid_component', 'task ' + id);
+    assert.equal(d.status().taskId, null, 'nothing mutated for ' + id);
+  }
+  // Canonical writer slot file untouched (still the guard record, not a task envelope).
+  const slot = JSON.parse(fs.readFileSync(path.join(d.store.dir, 'writer.json'), 'utf8'));
+  assert.equal(slot.writerId, d.writerId);
+  assert.equal(fs.readFileSync(path.join(d.store.dir, 'writer.json'), 'utf8'), slotBefore);
+  // Ordinary valid task is accepted, persisted, and recoverable via semantic scan.
+  const p = d.transition({ taskId: 'issue-23-brain-continuity-core', control: 'PLAN', projectKey: 'repo/x', identity: 'id-ok' });
+  assert.equal(p.ok, true);
+  assert.equal(d.recoverSemantic({ taskId: 'issue-23-brain-continuity-core' }).ok, true);
+  d.close();
 });

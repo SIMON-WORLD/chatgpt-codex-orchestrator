@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { GovernanceStore, GovernanceStoreError, GOVERNANCE_SCHEMA_VERSION, GOVERNANCE_STATE_KIND, makeGovernanceEnvelope, governanceNamespaceDir, encodeGovernanceComponent } from '../../src/governance/store.js';
+import { GovernanceStore, GovernanceStoreError, GOVERNANCE_SCHEMA_VERSION, GOVERNANCE_STATE_KIND, makeGovernanceEnvelope, governanceNamespaceDir, encodeGovernanceComponent, atomicWriteJsonWithBackup } from '../../src/governance/store.js';
 import { runtimePaths } from '../../src/runtime-paths.js';
 
 function fixture(prefix = 'gstore-') {
@@ -179,7 +179,7 @@ test('valid namespaces resolve as strict children of the dedicated runtime/gover
 test('task-id filesystem component safety: unsafe ids fail closed; historical-safe ids round-trip', () => {
   const { dataRoot, namespace } = fixture();
   const store = new GovernanceStore({ dataRoot, namespace });
-  const badTaskIds = ['..', '.', 'CON', 'NUL', 'nul.txt', 'trail.', 'trail ', '*', 'task*a'];
+  const badTaskIds = ['..', '.', 'CON', 'NUL', 'nul.txt', 'trail.', 'trail ', '*', 'task*a', 'writer', '.writer', '.writer-task'];
   for (const id of badTaskIds) {
     assert.throws(() => store.saveTask(id, makeGovernanceEnvelope({ taskId: id, state: state(id) })), (e) => e instanceof GovernanceStoreError && e.code === 'invalid_component', 'taskId ' + JSON.stringify(id));
   }
@@ -200,4 +200,21 @@ test('compatibility: ordinary spaces keep the historical mapping and existing st
   const store2 = new GovernanceStore({ dataRoot, namespace: 'research project' });
   assert.equal(store2.hasTask('task one'), true);
   assert.equal(store2.loadTask('task one').taskId, 'task one');
+});
+
+test('F2: known-good backup survives a failed commit; corrupt primary is never promoted to backup', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatomic-'));
+  const file = path.join(dir, 'state.json');
+  atomicWriteJsonWithBackup(file, { schemaVersion: 1, taskId: 'a' });
+  const goodBak = fs.readFileSync(file + '.bak', 'utf8');
+  fs.writeFileSync(file, 'CORRUPT{{', 'utf8'); // primary corrupt, .bak valid (recovered state)
+  // Commit rename fails after tmp write: the last known-good backup is untouched.
+  assert.throws(() => atomicWriteJsonWithBackup(file, { schemaVersion: 1, taskId: 'b' }, { rename: () => { throw new Error('rename failed'); } }), /rename failed/);
+  assert.equal(fs.readFileSync(file + '.bak', 'utf8'), goodBak);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'CORRUPT{{');
+  // Successful commit over a corrupt primary: corrupt is never copied to .bak; the
+  // freshly committed snapshot is mirrored to .bak afterwards.
+  atomicWriteJsonWithBackup(file, { schemaVersion: 1, taskId: 'c' });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).taskId, 'c');
+  assert.equal(JSON.parse(fs.readFileSync(file + '.bak', 'utf8')).taskId, 'c');
 });

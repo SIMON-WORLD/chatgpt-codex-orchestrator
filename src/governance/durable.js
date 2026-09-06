@@ -24,7 +24,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { GovernanceService, GovernanceError } from './index.js';
-import { GovernanceStore, GovernanceStoreError, GOVERNANCE_SCHEMA_VERSION } from './store.js';
+import { GovernanceStore, GovernanceStoreError, GOVERNANCE_SCHEMA_VERSION, encodeGovernanceComponent } from './store.js';
 import { GovernanceWriterGuard, GovernanceWriterError } from './writer-guard.js';
 import { buildContextCapsule, buildExecutionSummary } from './capsule.js';
 import { createProofLedger, createDirectMetrics } from '../direct-governance.js';
@@ -55,13 +55,14 @@ function scopeMatches(env, { taskId = null, projectKey = null, identity = null }
 }
 
 export class DurableGovernanceService {
-  constructor({ dataRoot, namespace = 'default', writerId = null, proofLedger = null, metrics = null, allowPublish = true, now = null, heartbeatMs = 5 * 60 * 1000, pidAlive = null, autoWriter = true } = {}) {
+  constructor({ dataRoot, namespace = 'default', writerId = null, proofLedger = null, metrics = null, allowPublish = true, now = null, heartbeatMs = 5 * 60 * 1000, pidAlive = null, autoWriter = true, store = null } = {}) {
     if (!dataRoot) throw new GovernanceError('durable governance requires a dataRoot');
     const clock = now || (() => Date.now());
     this.dataRoot = path.resolve(dataRoot);
     this.namespace = String(namespace);
     this.writerId = writerId || `governance-${process.pid}-${crypto.randomUUID()}`;
-    this.store = new GovernanceStore({ dataRoot: this.dataRoot, namespace: this.namespace });
+    // store may be injected (same dataRoot/namespace) for deterministic failure tests.
+    this.store = store || new GovernanceStore({ dataRoot: this.dataRoot, namespace: this.namespace });
     this.guard = new GovernanceWriterGuard({ dataRoot: this.dataRoot, namespace: this.namespace, writerId: this.writerId, staleMs: heartbeatMs, now: clock, pidAlive: pidAlive || null });
     this.svc = new GovernanceService({
       proofLedger: proofLedger || createProofLedger(),
@@ -71,6 +72,7 @@ export class DurableGovernanceService {
     this._clock = clock;
     this._meta = null; // { taskId, projectKey, identity, authority }
     this._closed = false;
+    this._recoveryRequired = false; // set when a persistence failure left no known committed snapshot in memory
     if (autoWriter) this.guard.acquire();
   }
 
@@ -87,6 +89,34 @@ export class DurableGovernanceService {
 
   _ensureOpen() {
     if (this._closed) throw new GovernanceError('durable governance runtime is closed');
+  }
+
+  // After a persistence failure that could not be rolled back to a committed
+  // snapshot, the runtime is fail-closed until the committed snapshot is reloaded.
+  _ensureRecoverable() {
+    if (this._recoveryRequired) {
+      throw governanceError('durable governance is in a recovery-required state after a persistence failure; reload the committed snapshot (loadTask) before mutating', 'recovery_required');
+    }
+  }
+
+  // Restore in-memory state to the last committed durable snapshot after a failed
+  // write, so status() never presents an uncommitted transition as canonical truth.
+  _restoreCommitted(taskId) {
+    try {
+      const env = this.store.loadTask(taskId);
+      this.svc.state = structuredClone(env.state);
+      this._meta = {
+        taskId: env.taskId,
+        projectKey: env.projectKey ?? null,
+        identity: env.identity ?? null,
+        authority: env.authority && typeof env.authority === 'object' ? { ...env.authority } : null,
+      };
+      this._recoveryRequired = false;
+    } catch {
+      // The committed snapshot itself is unreadable: fail closed (do not present the
+      // uncommitted in-memory state as canonical).
+      this._recoveryRequired = true;
+    }
   }
 
   // Hydrate the in-memory GovernanceService from the durable envelope for a task.
@@ -132,12 +162,22 @@ export class DurableGovernanceService {
   // swallowed, so a concurrently lost slot surfaces as an error on the mutation.
   _persist(taskId, meta) {
     this.guard.assertOwned();
-    this.store.saveTask(taskId, {
-      state: this.svc.state,
-      projectKey: meta ? meta.projectKey : null,
-      identity: meta ? meta.identity : null,
-      authority: meta && meta.authority ? { ...meta.authority } : null,
-    });
+    try {
+      this.store.saveTask(taskId, {
+        state: this.svc.state,
+        projectKey: meta ? meta.projectKey : null,
+        identity: meta ? meta.identity : null,
+        authority: meta && meta.authority ? { ...meta.authority } : null,
+      });
+    } catch (e) {
+      // The write did not commit: roll the in-memory lifecycle back to the last
+      // committed durable snapshot so an uncommitted transition is never canonical.
+      this._restoreCommitted(taskId);
+      throw e;
+    }
+    // refresh() re-asserts ownership after the commit and is never swallowed. If it
+    // throws, the snapshot is already committed (authoritative) - do NOT roll back a
+    // write that may have atomically committed.
     this.guard.refresh();
   }
 
@@ -183,23 +223,35 @@ export class DurableGovernanceService {
 
   transition(args = {}) {
     this._ensureOpen();
+    this._ensureRecoverable();
     this.guard.assertOwned(); // fail closed before ANY control mutation
     const normalized = { ...args };
+    if (normalized.taskId != null) encodeGovernanceComponent(normalized.taskId, 'taskId'); // fail closed on unsafe ids before any mutation
+    const activeTaskId = this.svc.state.taskId;
+    // F1: an already-persisted durable task must never be reopened under another
+    // task's authority (or silently reset as if fresh). Switching to a persisted
+    // target while a different task is bound is rejected before any mutation; both
+    // in-memory state and the durable snapshot stay unchanged. Only a genuinely NEW
+    // (not yet persisted) taskId may start at a terminal DONE + PLAN boundary.
+    if (activeTaskId != null && normalized.taskId != null && normalized.taskId !== activeTaskId && this.store.hasTask(normalized.taskId)) {
+      throw governanceError(`cannot switch to already-persisted task ${normalized.taskId} while task ${activeTaskId} is active; a durable task cannot be reopened under another task's authority`, 'task_reopen_rejected');
+    }
     // Restart continuation: no active task in memory, but the requested taskId already
-    // exists durably -> hydrate it before applying the control.
-    if (this.svc.state.taskId == null && normalized.taskId != null && this.store.hasTask(normalized.taskId)) {
+    // exists durably -> hydrate it before applying the control (authority then binds to
+    // the target task).
+    if (activeTaskId == null && normalized.taskId != null && this.store.hasTask(normalized.taskId)) {
       this._hydrateTask(normalized.taskId);
     }
     const freshStart = this._isFreshTaskStart(normalized);
     if (!freshStart) this._checkAuthority(normalized);
     const result = this.svc.transition(normalized);
-    const activeTaskId = this.svc.state.taskId;
-    if (!activeTaskId) return result;
-    const meta = this._metaFor(activeTaskId, normalized);
+    const newActiveTaskId = this.svc.state.taskId;
+    if (!newActiveTaskId) return result;
+    const meta = this._metaFor(newActiveTaskId, normalized);
     const minted = !meta.authority || meta.authority.token == null;
     if (minted) meta.authority = newAuthority(this._clock);
     this._meta = meta;
-    this._persist(activeTaskId, meta);
+    this._persist(newActiveTaskId, meta);
     const out = { ...result, durable: true, authority: this._authorityPublic(meta) };
     if (minted) out.authorityToken = meta.authority.token;
     return out;
@@ -207,8 +259,10 @@ export class DurableGovernanceService {
 
   recordResult(args = {}) {
     this._ensureOpen();
+    this._ensureRecoverable();
     this.guard.assertOwned(); // fail closed before ANY RESULT mutation
     const normalized = { ...args };
+    if (normalized.taskId != null) encodeGovernanceComponent(normalized.taskId, 'taskId'); // fail closed on unsafe ids before any mutation
     if (this.svc.state.taskId == null && normalized.taskId != null && this.store.hasTask(normalized.taskId)) {
       this._hydrateTask(normalized.taskId);
     }
@@ -229,6 +283,7 @@ export class DurableGovernanceService {
       durable: true,
       namespace: this.namespace,
       schemaVersion: GOVERNANCE_SCHEMA_VERSION,
+      recoveryRequired: this._recoveryRequired,
       authority: this._authorityPublic(this._meta),
     };
   }
@@ -282,6 +337,7 @@ export class DurableGovernanceService {
     this._ensureOpen();
     if (!taskId) throw governanceError('loadTask requires a taskId', 'bad_request');
     const env = this._hydrateTask(taskId);
+    this._recoveryRequired = false; // successful reload of the committed snapshot
     return {
       ok: true,
       taskId: env.taskId,
@@ -299,7 +355,9 @@ export class DurableGovernanceService {
   // Takeover NEVER touches delegated execution; reconcile that through the executor.
   takeover({ taskId = null, projectKey = null, identity = null, authorityToken = null } = {}) {
     this._ensureOpen();
+    this._ensureRecoverable();
     this.guard.assertOwned(); // fail closed before a takeover can persist new authority
+    if (taskId != null) encodeGovernanceComponent(taskId, 'taskId'); // fail closed on unsafe ids
     const rec = this.resolveSemantic({ taskId, projectKey, identity });
     if (!rec.ok) throw governanceError(`${rec.error}: ${rec.reason}`, rec.error);
     const env = this.store.loadTask(rec.taskId);

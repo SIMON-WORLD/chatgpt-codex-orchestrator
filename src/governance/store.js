@@ -52,9 +52,11 @@ function invalidComponentError(value, kind, reason) {
 //   - empty values keep the historical safe '_' component;
 //   - only genuinely unsafe/aliased/collapsing values fail closed: exact '.' / '..',
 //     Windows reserved device names (CON/PRN/AUX/NUL/COMx/LPTx, any case, including
-//     extension aliases such as CON.txt), trailing dot / trailing space, and the
-//     literal '*' character (illegal in Windows filename components and left
-//     unencoded by encodeURIComponent, so it is rejected rather than remapped).
+//     extension aliases such as CON.txt), trailing dot / trailing space, the literal
+//     '*' character (illegal in Windows filename components and left unencoded by
+//     encodeURIComponent, so it is rejected rather than remapped), and - for task ids
+//     only - reserved governance internal filename stems ('writer' / '.writer*' that
+//     would collide with the canonical writer slot or scan-excluded internal files).
 // Slash/backslash/control bytes remain allowed because they are deterministically
 // percent-encoded into ONE component (regressions prove strict-child containment).
 export function encodeGovernanceComponent(value, kind = 'component') {
@@ -74,6 +76,11 @@ export function encodeGovernanceComponent(value, kind = 'component') {
   // Historical mapping: percent-encoded spaces map back to literal spaces on disk.
   encoded = encoded.replace(/%20/g, ' ');
   if (encoded === '' || encoded === '.' || encoded === '..') throw invalidComponentError(value, kind, 'component encodes to an unsafe path segment');
+  if (kind === 'taskId' && (encoded === 'writer' || encoded.startsWith('.writer'))) {
+    // Collides with internal governance filenames: writer.json (canonical writer
+    // slot), writer.json.elect / *.tmp, and '.writer*' internal/scan-excluded files.
+    throw invalidComponentError(value, kind, `task id maps to reserved governance internal filename stem '${encoded}'`);
+  }
   return encoded;
 }
 
@@ -93,15 +100,19 @@ export function governanceNamespaceDir(dataRoot, namespace = 'default') {
 
 function taskFileName(taskId) { return encodeGovernanceComponent(taskId, 'taskId') + '.json'; }
 
-// Atomic write + known-good backup (same proven pattern as src/task-state.js):
-// 1) write temp, 2) copy current primary to .bak, 3) rename temp -> primary,
-// 4) mirror the fresh primary into .bak so the backup always equals the last good state.
-export function atomicWriteJsonWithBackup(file, obj) {
+// Atomic write + known-good backup:
+// 1) write temp JSON;
+// 2) atomically rename temp -> primary (the single commit point);
+// 3) mirror the freshly committed primary into `.bak` so the backup always equals the
+//    last good state.
+// A corrupt/unvalidated primary is NEVER copied over the last known-good backup
+// before commit: if the commit rename fails, the previous committed snapshot (primary
+// or `.bak`) is preserved and the store remains recoverable/fail-closed.
+export function atomicWriteJsonWithBackup(file, obj, { rename = fs.renameSync } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
-  if (fs.existsSync(file)) { try { fs.copyFileSync(file, file + '.bak'); } catch {} }
-  fs.renameSync(tmp, file);
+  rename(tmp, file);
   try { fs.copyFileSync(file, file + '.bak'); } catch {}
 }
 
