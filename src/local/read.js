@@ -4,6 +4,7 @@
 
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { WorkspaceError } from './workspace.js';
 import { isSensitivePath } from './sensitive.js';
 import { redactSecrets } from '../safety.js';
@@ -25,13 +26,21 @@ export function readFile({ workspaceId, path: relPath, maxBytes = DEFAULT_MAX_BY
   if (!Number.isInteger(maxBytes) || maxBytes <= 0 || maxBytes > HARD_MAX_BYTES) {
     throw new WorkspaceError(`maxBytes must be a positive integer <= ${HARD_MAX_BYTES}`);
   }
-  const { workspace, absolute } = registry.resolve(workspaceId, relPath);
+  const { workspace, absolute, canonical } = registry.resolve(workspaceId, relPath);
   if (!fs.existsSync(absolute)) throw new WorkspaceError(`file not found: ${relPath}`);
   const st = fs.statSync(absolute);
   if (!st.isFile()) throw new WorkspaceError(`not a regular file: ${relPath}`);
-  if (isSensitivePath(relPath)) throw new WorkspaceError(`sensitive path blocked: ${relPath}`);
+  // Evaluate read policy on BOTH the caller-visible path and the canonical
+  // target (an internal symlink/junction alias must not hide a sensitive file).
+  const canonicalRel = path.relative(workspace.root, canonical);
+  if (isSensitivePath(relPath) || (canonicalRel && isSensitivePath(canonicalRel))) {
+    throw new WorkspaceError(`sensitive path blocked: ${relPath}`);
+  }
+  // Read the canonical file that was policy-checked so a late alias retarget
+  // cannot swap in a sensitive target after the check.
+  const target = canonical;
 
-  const fd = fs.openSync(absolute, 'r');
+  const fd = fs.openSync(target, 'r');
   try {
     const probe = Buffer.alloc(Math.min(st.size, PROBE_BYTES));
     const nprobe = fs.readSync(fd, probe, 0, probe.length, 0);
