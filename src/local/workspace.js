@@ -32,6 +32,29 @@ function realpathOrNull(p) {
   try { return fs.realpathSync.native(p); } catch { return null; }
 }
 
+// Effective canonical path where an operation would actually land. For an
+// existing target the entire chain (symlink/junction final components included)
+// is canonicalized. For a planned create (non-existent target) the nearest
+// existing ancestor is canonicalized and the unresolved suffix is appended, so
+// containment and path policy are evaluated on the path that would really be
+// reached, not just the caller-visible alias path.
+function effectiveRealPath(root, target) {
+  const real = realpathOrNull(target);
+  if (real) return real;
+  const unresolved = [];
+  let probe = target;
+  for (;;) {
+    const parent = path.dirname(probe);
+    if (parent === probe) break;
+    unresolved.unshift(path.basename(probe));
+    probe = parent;
+    const r = realpathOrNull(probe);
+    if (r) return path.join(r, ...unresolved);
+  }
+  const rootReal = realpathOrNull(root) || root;
+  return path.join(rootReal, ...unresolved);
+}
+
 export class WorkspaceRegistry {
   constructor({ allowedRoots = null } = {}) {
     this.allowedRoots = (allowedRoots && allowedRoots.length ? allowedRoots : [process.cwd()])
@@ -76,9 +99,9 @@ export class WorkspaceRegistry {
     if (!relPath) throw new WorkspaceError('resolve requires a path');
     const target = path.resolve(ws.root, relPath);
     if (!isWithin(ws.root, target)) throw new WorkspaceError(`path escapes workspace: ${relPath}`);
-    const real = realpathOrNull(target);
-    if (real && !isWithin(ws.root, real)) throw new WorkspaceError(`symlink escapes workspace: ${relPath}`);
-    return { workspace: ws, absolute: target };
+    const canonical = effectiveRealPath(ws.root, target);
+    if (!isWithin(ws.root, canonical)) throw new WorkspaceError(`symlink escapes workspace: ${relPath}`);
+    return { workspace: ws, absolute: target, canonical };
   }
 
   // Write-safe resolution: for an EXISTING target, canonicalize the resolved path
@@ -90,10 +113,9 @@ export class WorkspaceRegistry {
     if (path.isAbsolute(relPath)) throw new WorkspaceError(`absolute path not allowed: ${relPath}`);
     const target = path.resolve(ws.root, relPath);
     if (!isWithin(ws.root, target)) throw new WorkspaceError(`path escapes workspace: ${relPath}`);
-    const probe = forCreate ? (fs.existsSync(target) ? target : path.dirname(target)) : target;
-    const real = realpathOrNull(probe);
-    if (real && !isWithin(ws.root, real)) throw new WorkspaceError(`symlink/junction escapes workspace: ${relPath}`);
-    return { workspace: ws, absolute: target, exists: fs.existsSync(target) };
+    const canonical = effectiveRealPath(ws.root, target);
+    if (!isWithin(ws.root, canonical)) throw new WorkspaceError(`symlink/junction escapes workspace: ${relPath}`);
+    return { workspace: ws, absolute: target, exists: fs.existsSync(target), canonical };
   }
 
   getWorkspace(workspaceId) { return this.get(workspaceId); }

@@ -38,6 +38,17 @@ export class ChangeSetService {
   }
   _requireOwner() { if (!this.owner) throw new WorkspaceError('shared mutation owner is required for Direct Local mutation'); }
 
+  // Blocked/mutation policy is evaluated on BOTH the caller-visible path and
+  // the effective canonical target (an internal symlink/junction alias must not
+  // hide a blocked/sensitive destination).
+  _assertWritableTarget(workspace, absolute, canonical, relPath) {
+    const requestedRel = path.relative(workspace.root, absolute);
+    const canonicalRel = path.relative(workspace.root, canonical);
+    if (isBlockedMutationPath(requestedRel) || isBlockedMutationPath(canonicalRel)) {
+      throw new WorkspaceError(`edit blocked: high-risk/internal/generated path: ${relPath}`);
+    }
+  }
+
   _computePlanForPreview(change, absolute, exists) {
     const { path: relPath, baseHash = null, replacements = [], createContent = null } = change;
     const forCreate = createContent !== null;
@@ -90,8 +101,8 @@ export class ChangeSetService {
     const relPath = change.path;
     const createProvided = change.createContent !== undefined && change.createContent !== null;
     const writeResolved = this.registry.resolveWritable(workspaceId, relPath, { forCreate: createProvided });
-    const { workspace, absolute, exists } = writeResolved;
-    if (isBlockedMutationPath(path.relative(workspace.root, absolute))) throw new WorkspaceError('edit blocked: high-risk/internal/generated path');
+    const { workspace, absolute, exists, canonical } = writeResolved;
+    this._assertWritableTarget(workspace, absolute, canonical, relPath);
     const plan = this._computePlanForPreview(change, absolute, exists);
     const proposedHash = sha256(plan.proposed);
     const changeSetId = crypto.randomUUID();
@@ -110,8 +121,9 @@ export class ChangeSetService {
     if (!op) throw new WorkspaceError(`unknown changeSetId: ${changeSetId}`);
     if (op.status !== 'previewed') {
       if (op.status === 'applied') {
-        const { workspace, absolute } = this.registry.resolveWritable(workspaceId, op.path, { forCreate: op.createContent !== null });
+        const { workspace, absolute, canonical } = this.registry.resolveWritable(workspaceId, op.path, { forCreate: op.createContent !== null });
         if (op.workspaceRoot && workspace.root !== op.workspaceRoot) throw new WorkspaceError('workspace changed since preview');
+        this._assertWritableTarget(workspace, absolute, canonical, op.path);
         const cur = fs.existsSync(absolute) ? fs.readFileSync(absolute) : null;
         if (cur && sha256(cur) === op.proposedHash) return { changeSetId, status: 'applied', path: op.path, resultHash: op.proposedHash, idempotentReplay: true, diff: op.diff || null };
         this.ops.update(changeSetId, { status: 'recovery_required', updatedAt: Date.now() });
@@ -119,8 +131,11 @@ export class ChangeSetService {
       }
       throw new WorkspaceError('recovery_required changeSet cannot be reapplied; re-preview first');
     }
-    const { workspace, absolute, exists } = this.registry.resolveWritable(workspaceId, op.path, { forCreate: op.createContent !== null });
+    const { workspace, absolute, exists, canonical } = this.registry.resolveWritable(workspaceId, op.path, { forCreate: op.createContent !== null });
     if (op.workspaceRoot && workspace.root !== op.workspaceRoot) throw new WorkspaceError('workspace changed since preview');
+    // Re-canonicalize and revalidate the mutation target at apply time so a
+    // preview-to-apply symlink/junction retarget fails closed (TOCTOU).
+    this._assertWritableTarget(workspace, absolute, canonical, op.path);
 
     let mutationStarted = false;
     let tempFile = null;

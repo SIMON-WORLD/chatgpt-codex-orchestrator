@@ -225,3 +225,74 @@ test('existing-file executable bit is preserved on apply (POSIX only)', async (t
   assert.ok(mode & 0o100, 'executable bit should be preserved');
   assert.equal(fs.readFileSync(file, 'utf8'), '#!/bin/sh\necho bye\n');
 });
+
+// --- Issue #27: blocked/mutation policy must be evaluated on the canonical ---
+// --- target, and revalidated at apply time (preview->apply retarget TOCTOU). ---
+
+function tryDirLink(target, link) {
+  try { fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir'); return true; }
+  catch { return false; }
+}
+function tryFileLink(target, link) {
+  try { fs.symlinkSync(target, link, 'file'); return true; }
+  catch { return false; }
+}
+
+test('Issue #27: internal directory alias to a blocked target is rejected (new-file create; junction on Windows)', async (t) => {
+  const { root, ws, cs } = setup();
+  fs.mkdirSync(path.join(root, 'secrets'));
+  const link = path.join(root, 'shared');
+  if (!tryDirLink(path.join(root, 'secrets'), link)) { t.skip('link creation not permitted in this environment'); return; }
+  await assert.rejects(() => cs.preview({ workspaceId: ws.workspaceId, change: { path: 'shared/leak.txt', createContent: 'x' } }), /edit blocked/);
+  // Nested create: canonicalize the nearest existing ancestor (the junction) and append the unresolved suffix.
+  await assert.rejects(() => cs.preview({ workspaceId: ws.workspaceId, change: { path: 'shared/nested/deep.txt', createContent: 'x' } }), /edit blocked/);
+  assert.equal(fs.existsSync(path.join(root, 'secrets', 'leak.txt')), false);
+  assert.equal(fs.existsSync(path.join(root, 'secrets', 'nested', 'deep.txt')), false);
+});
+
+test('Issue #27: file alias to a blocked mutation target is rejected where file symlinks are permitted', async (t) => {
+  const { root, ws, cs } = setup();
+  fs.writeFileSync(path.join(root, '.env'), 'API_KEY=x', 'utf8');
+  const alias = path.join(root, 'env-link');
+  if (!tryFileLink(path.join(root, '.env'), alias)) { t.skip('file symlink creation not permitted in this environment'); return; }
+  const base = computeSha256(fs.readFileSync(path.join(root, '.env')));
+  await assert.rejects(() => cs.preview({ workspaceId: ws.workspaceId, change: { path: 'env-link', baseHash: base, replacements: [{ oldText: 'x', newText: 'y', expectedOccurrences: 1 }] } }), /edit blocked/);
+});
+
+test('Issue #27: preview-to-apply junction/symlink retarget fails closed (TOCTOU)', async (t) => {
+  const { root, ws, cs, owner, ops } = setup();
+  fs.mkdirSync(path.join(root, 'safe'));
+  fs.mkdirSync(path.join(root, 'secrets'));
+  const link = path.join(root, 'alias');
+  if (!tryDirLink(path.join(root, 'safe'), link)) { t.skip('link creation not permitted in this environment'); return; }
+  const p = await cs.preview({ workspaceId: ws.workspaceId, change: { path: 'alias/created.txt', baseHash: null, createContent: 'hello' } });
+  // Retarget the alias from safe/ to the blocked secrets/ between preview and apply.
+  try { fs.rmSync(link); } catch { t.skip('could not remove link for retarget'); return; }
+  if (!tryDirLink(path.join(root, 'secrets'), link)) { t.skip('link re-creation not permitted in this environment'); return; }
+  await assert.rejects(() => cs.apply({ workspaceId: ws.workspaceId, changeSetId: p.changeSetId }), /edit blocked/);
+  assert.equal(fs.existsSync(path.join(root, 'secrets', 'created.txt')), false);
+  assert.equal(fs.existsSync(path.join(root, 'safe', 'created.txt')), false);
+  // Failed closed BEFORE mutation: ownership is reconciled and the op stays previewed.
+  assert.equal(owner.owner, 'none');
+  assert.equal(owner.unitState, null);
+  assert.equal(ops.load(p.changeSetId).status, 'previewed');
+});
+
+test('Issue #27: safe internal directory link remains usable (create + edit through alias)', async (t) => {
+  const { root, ws, cs } = setup();
+  fs.mkdirSync(path.join(root, 'data'));
+  fs.writeFileSync(path.join(root, 'data', 'notes.txt'), 'original', 'utf8');
+  const link = path.join(root, 'data-alias');
+  if (!tryDirLink(path.join(root, 'data'), link)) { t.skip('link creation not permitted in this environment'); return; }
+  // Create through the alias lands in the real (canonical) directory.
+  const c = await cs.preview({ workspaceId: ws.workspaceId, change: { path: 'data-alias/created.txt', baseHash: null, createContent: 'fresh' } });
+  const ca = await cs.apply({ workspaceId: ws.workspaceId, changeSetId: c.changeSetId });
+  assert.equal(ca.status, 'applied');
+  assert.equal(fs.readFileSync(path.join(root, 'data', 'created.txt'), 'utf8'), 'fresh');
+  // Edit an existing file through the alias lands in the real file and the link survives.
+  const e = await cs.preview({ workspaceId: ws.workspaceId, change: { path: 'data-alias/notes.txt', baseHash: computeSha256(fs.readFileSync(path.join(root, 'data', 'notes.txt'))), replacements: [{ oldText: 'original', newText: 'updated' }] } });
+  const ea = await cs.apply({ workspaceId: ws.workspaceId, changeSetId: e.changeSetId });
+  assert.equal(ea.status, 'applied');
+  assert.equal(fs.readFileSync(path.join(root, 'data', 'notes.txt'), 'utf8'), 'updated');
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'alias remains a link after use');
+});
