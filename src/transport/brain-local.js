@@ -25,6 +25,7 @@ import { createCapabilityRouter } from '../router/capability-router.js';
 import { createDurableGovernanceService } from '../governance/durable.js';
 import { loadV02Config } from '../config.js';
 import { resolveCodexAppServer } from './codex.js';
+import { WorktreeService } from '../local/worktree.js';
 
 export class BrainLocalRuntime {
   constructor({ config = loadV02Config() } = {}) {
@@ -42,6 +43,9 @@ export class BrainLocalRuntime {
       dataRoot: config.dataRoot,
       namespace: config.governanceNamespace || 'default',
     });
+    this.worktreeService = (config.worktree && config.worktree.poolRoot && Array.isArray(config.worktree.trustedRepos) && config.worktree.trustedRepos.length > 0)
+      ? new WorktreeService({ poolRoot: config.worktree.poolRoot, trustedRepos: config.worktree.trustedRepos })
+      : null;
     this.appServerExecutor = null;
     this.mcp = null;
     this.tunnelProcess = null;
@@ -84,12 +88,13 @@ export class BrainLocalRuntime {
       verifyChecks: c.verify || {},
       capabilityRouter: this.capabilityRouter,
       governanceService: this.governanceService,
+      worktreeService: this.worktreeService,
       host: c.host,
       port: c.port,
       allowedRoots,
     });
     this.started = true;
-    if (this._tunnelExecutablePresent()) await this._startTunnel();
+    if (this._tunnelExecutablePresent() && this.config.tunnel.external !== true) await this._startTunnel();
     return this;
   }
 
@@ -162,6 +167,7 @@ export class BrainLocalRuntime {
       appServer: { configured: !!this.appServerExecutor, live: appLive },
       tunnel: {
         present: tunnelPresent,
+        external: c.tunnel.external === true,
         processAlive: tunnelProcessAlive,
         ready: tunnelReady,
         profile: c.tunnel.profile || c.tunnel.profileFile || null,
@@ -178,7 +184,7 @@ export class BrainLocalRuntime {
   async close() {
     if (this.appServerExecutor) { try { await this.appServerExecutor.shutdown(); } catch {} }
     if (this.mcp) { try { await this.mcp.close(); } catch {} }
-    if (this.tunnelProcess && this.tunnelProcess.exitCode === null) { try { this.tunnelProcess.kill('SIGTERM'); } catch {} }
+    if (this.config.tunnel.external !== true && this.tunnelProcess && this.tunnelProcess.exitCode === null) { try { this.tunnelProcess.kill('SIGTERM'); } catch {} }
     if (this.governanceService && typeof this.governanceService.close === 'function') { try { this.governanceService.close(); } catch {} }
     this.started = false;
   }

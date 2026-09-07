@@ -219,50 +219,62 @@ test('future schema fails closed with a named error and no fallback to backup', 
 
 test('bounded semantic recovery: not_found / unique / ambiguous, never most-recent', () => {
   const { dataRoot, namespace } = fixture();
+  // Terminal DONE task in project b is created first (namespace empty) and is not a
+  // continuation candidate, but stays readable after restart.
+  const r0 = createDurableGovernanceService({ dataRoot, namespace });
+  const planT3 = r0.transition({ taskId: 't3', control: 'PLAN', projectKey: 'repo/b', identity: 'task-three' });
+  const tok3 = planT3.authorityToken;
+  r0.transition({ taskId: 't3', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1' }], authorityToken: tok3 });
+  r0.recordResult({ taskId: 't3', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }], authorityToken: tok3 });
+  r0.transition({ taskId: 't3', stepId: 's1', control: 'DONE', authorityToken: tok3 });
+  const storeDir = r0.store.dir;
+  r0.close();
+
   // t1 created by runtime A (stays active).
   const r1 = createDurableGovernanceService({ dataRoot, namespace });
   r1.transition({ taskId: 't1', control: 'PLAN', projectKey: 'repo/a', identity: 'task-one' });
+  const t1File = path.join(storeDir, 't1.json');
   r1.close();
 
-  // not_found
+  // Issue #29 admission gate now REJECTS a genuinely new PLAN while t1 is active
+  // (1 non-terminal task -> recovery_required), so the historical ambiguous namespace
+  // state is seeded directly at the store level (same semantics as legacy multi-task
+  // durable state) to keep the bounded ambiguous-discovery regression.
+  const rSeed = createDurableGovernanceService({ dataRoot, namespace });
+  rSeed.store.saveTask('t2', {
+    taskId: 't2',
+    projectKey: 'repo/a',
+    identity: 'task-two',
+    state: { taskId: 't2', control: 'PLAN', steps: {}, history: [] },
+  });
+  rSeed.close();
+  assert.ok(fs.existsSync(t1File));
+
+  // Fresh runtime over the ambiguous namespace: bounded discovery only (no guessing).
   const r2 = createDurableGovernanceService({ dataRoot, namespace });
   assert.equal(r2.recoverSemantic({ projectKey: 'repo/nope' }).error, 'not_found');
-  const uniq = r2.recoverSemantic({ projectKey: 'repo/a', identity: 'task-one' });
-  assert.equal(uniq.ok, true);
-  assert.equal(uniq.taskId, 't1');
-  r2.close();
-
-  // t2 created by runtime B in the same project (also active) -> ambiguous on projectKey.
-  const r3 = createDurableGovernanceService({ dataRoot, namespace });
-  r3.transition({ taskId: 't2', control: 'PLAN', projectKey: 'repo/a', identity: 'task-two' });
-  const amb = r3.recoverSemantic({ projectKey: 'repo/a' });
+  const amb = r2.recoverSemantic({ projectKey: 'repo/a' });
   assert.equal(amb.ok, false);
   assert.equal(amb.error, 'ambiguous');
   assert.equal(amb.matchCount, 2);
   assert.equal('taskId' in amb, false); // never guesses
-  const dis = r3.recoverSemantic({ projectKey: 'repo/a', identity: 'task-two' });
+  const dis = r2.recoverSemantic({ projectKey: 'repo/a', identity: 'task-two' });
   assert.equal(dis.ok, true);
   assert.equal(dis.taskId, 't2');
-  r3.close();
-
-  // Terminal DONE task in project b is not a continuation candidate, but is readable.
-  const r4 = createDurableGovernanceService({ dataRoot, namespace });
-  const planT3 = r4.transition({ taskId: 't3', control: 'PLAN', projectKey: 'repo/b', identity: 'task-three' });
-  const tok3 = planT3.authorityToken;
-  r4.transition({ taskId: 't3', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1' }], authorityToken: tok3 });
-  r4.recordResult({ taskId: 't3', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }], authorityToken: tok3 });
-  r4.transition({ taskId: 't3', stepId: 's1', control: 'DONE', authorityToken: tok3 });
-  const term = r4.recoverSemantic({ projectKey: 'repo/b', identity: 'task-three' });
+  const uniqT1 = r2.recoverSemantic({ projectKey: 'repo/a', identity: 'task-one' });
+  assert.equal(uniqT1.ok, true);
+  assert.equal(uniqT1.taskId, 't1');
+  // Terminal DONE task in project b: not a continuation candidate, but readable.
+  const term = r2.recoverSemantic({ projectKey: 'repo/b', identity: 'task-three' });
   assert.equal(term.ok, false);
   assert.equal(term.error, 'not_found');
   assert.equal(term.terminalMatches, 1);
-  const resolved = r4.resolveSemantic({ projectKey: 'repo/b', identity: 'task-three' });
+  const resolved = r2.resolveSemantic({ projectKey: 'repo/b', identity: 'task-three' });
   assert.equal(resolved.ok, true);
   assert.equal(resolved.terminal, true);
   assert.equal(resolved.taskId, 't3');
-  r4.close();
+  r2.close();
 });
-
 test('stale Parent fencing: takeover increments generation; old tokens are stale_authority', () => {
   const { dataRoot, namespace } = fixture();
   const r1 = createDurableGovernanceService({ dataRoot, namespace });
@@ -575,4 +587,133 @@ test('F3: reserved governance internal task stems fail closed and never collide 
   assert.equal(p.ok, true);
   assert.equal(d.recoverSemantic({ taskId: 'issue-23-brain-continuity-core' }).ok, true);
   d.close();
+});
+
+test('Issue #29 admission: fresh restart with one active durable task rejects a genuinely new PLAN (recovery_required)', () => {
+  const { dataRoot, namespace } = fixture();
+  const r1 = createDurableGovernanceService({ dataRoot, namespace });
+  r1.transition({ taskId: 't1', control: 'PLAN', projectKey: 'repo/one', identity: 'task-one' });
+  r1.close();
+
+  const r2 = createDurableGovernanceService({ dataRoot, namespace });
+  assert.throws(() => r2.transition({ taskId: 't9', control: 'PLAN', projectKey: 'repo/other', identity: 'other' }),
+    (e) => e instanceof GovernanceError && e.code === 'recovery_required');
+  assert.equal(r2.status().taskId, null); // no partial admission mutation
+  const rec = r2.recoverSemantic({ projectKey: 'repo/one' });
+  assert.equal(rec.ok, true);
+  assert.equal(rec.taskId, 't1');
+  r2.close();
+});
+
+test('Issue #29 admission: fresh restart with >1 active durable tasks fails ambiguous for a genuinely new PLAN', () => {
+  const { dataRoot, namespace } = fixture();
+  const r1 = createDurableGovernanceService({ dataRoot, namespace });
+  r1.transition({ taskId: 't1', control: 'PLAN', projectKey: 'repo/a', identity: 'task-one' });
+  const storeDir = r1.store.dir;
+  r1.close();
+  const rSeed = createDurableGovernanceService({ dataRoot, namespace });
+  rSeed.store.saveTask('t2', { taskId: 't2', projectKey: 'repo/a', identity: 'task-two', state: { taskId: 't2', control: 'PLAN', steps: {}, history: [] } });
+  rSeed.close();
+
+  const r2 = createDurableGovernanceService({ dataRoot, namespace });
+  assert.throws(() => r2.transition({ taskId: 't9', control: 'PLAN', projectKey: 'repo/a', identity: 'task-nine' }),
+    (e) => e instanceof GovernanceError && e.code === 'ambiguous');
+  assert.equal(r2.status().taskId, null);
+  const amb = r2.recoverSemantic({ projectKey: 'repo/a' });
+  assert.equal(amb.ok, false);
+  assert.equal(amb.error, 'ambiguous');
+  assert.equal(amb.matchCount, 2);
+  r2.close();
+});
+
+test('Issue #29 admission: terminal DONE -> genuinely new PLAN stays valid; terminal tasks are never counted', () => {
+  const { dataRoot, namespace } = fixture();
+  const r1 = createDurableGovernanceService({ dataRoot, namespace });
+  const p1 = r1.transition({ taskId: 't1', control: 'PLAN', projectKey: 'repo/one', identity: 'task-one' });
+  const tok1 = p1.authorityToken;
+  r1.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }], authorityToken: tok1 });
+  r1.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }], authorityToken: tok1 });
+  r1.transition({ taskId: 't1', stepId: 's1', control: 'DONE', authorityToken: tok1 });
+  r1.close();
+  // Fresh runtime: only terminal DONE task(s) durably -> genuinely new PLAN allowed.
+  const r2 = createDurableGovernanceService({ dataRoot, namespace });
+  const p2 = r2.transition({ taskId: 't2', control: 'PLAN', projectKey: 'repo/two', identity: 'task-two' });
+  assert.equal(p2.ok, true);
+  assert.ok(p2.authorityToken);
+  r2.transition({ taskId: 't2', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }], authorityToken: p2.authorityToken });
+  r2.recordResult({ taskId: 't2', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }], authorityToken: p2.authorityToken });
+  const done2 = r2.transition({ taskId: 't2', stepId: 's1', control: 'DONE', authorityToken: p2.authorityToken });
+  assert.equal(done2.ok, true);
+  // In-process DONE -> new PLAN on the same runtime is also valid (DONE never counted).
+  const p3 = r2.transition({ taskId: 't3', control: 'PLAN' });
+  assert.equal(p3.ok, true);
+  assert.ok(p3.authorityToken);
+  r2.close();
+});
+test('Issue #29: tasks bind a canonical workspaceRoot at PLAN and takeover; mutation authorization requires task+root+token', () => {
+  const { dataRoot, namespace } = fixture();
+  const ws = path.join(dataRoot, 'repo');
+  fs.mkdirSync(ws, { recursive: true });
+  const r1 = createDurableGovernanceService({ dataRoot, namespace });
+  const plan = r1.transition({ taskId: 't1', control: 'PLAN', projectKey: 'repo/x', identity: 'issue-29', workspaceRoot: ws });
+  const tokenA = plan.authorityToken;
+  assert.equal(plan.workspaceRoot, path.resolve(ws));
+  assert.equal(r1.status().workspaceRoot, path.resolve(ws));
+  r1.transition({ taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }], route: 'CODEX_DELEGATE', authorityToken: tokenA, workspaceRoot: ws });
+
+  // Authorized mutation passes and returns the active taskId.
+  const ok = r1.authorizeMutation({ taskId: 't1', authorityToken: tokenA, workspaceRoot: ws });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.taskId, 't1');
+  // Missing / stale token, wrong task, wrong root, and terminal-DONE all fail closed.
+  assert.throws(() => r1.authorizeMutation({ taskId: 't1', authorityToken: 'bogus', workspaceRoot: ws }), (e) => e.code === 'stale_authority');
+  assert.throws(() => r1.authorizeMutation({ taskId: 't1', workspaceRoot: ws }), (e) => e.code === 'stale_authority');
+  assert.throws(() => r1.authorizeMutation({ taskId: 'other', authorityToken: tokenA, workspaceRoot: ws }), (e) => e.code === 'task_mismatch');
+  assert.throws(() => r1.authorizeMutation({ taskId: 't1', authorityToken: tokenA, workspaceRoot: path.join(ws, '..', 'elsewhere') }), (e) => e.code === 'workspace_mismatch');
+  // Re-binding an already bound task to a different root fails BEFORE any mutation.
+  assert.throws(() => r1.transition({ taskId: 't1', stepId: 's1', control: 'REVISE', authorityToken: tokenA, workspaceRoot: path.join(dataRoot, 'other') }), (e) => e.code === 'workspace_mismatch');
+
+  // DONE terminal: no new mutation authorization.
+  const res = r1.recordResult({ taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }], authorityToken: tokenA });
+  assert.equal(res.ok, true);
+  r1.transition({ taskId: 't1', stepId: 's1', control: 'DONE', authorityToken: tokenA });
+  assert.throws(() => r1.authorizeMutation({ taskId: 't1', authorityToken: tokenA, workspaceRoot: ws }), (e) => e.code === 'no_active_task');
+  const doneStatus = r1.status();
+  assert.equal(doneStatus.workspaceRoot, path.resolve(ws));
+  const ld = r1.loadTask('t1');
+  assert.equal(ld.workspaceRoot, path.resolve(ws));
+  r1.close();
+
+  // Restart with refreshed (equivalent) workspace handle: takeover binds + preserves the
+  // canonical root; the same canonical root authorizes with the NEW token.
+  const r2 = createDurableGovernanceService({ dataRoot, namespace });
+  const to = r2.takeover({ taskId: 't1', workspaceRoot: ws });
+  assert.equal(to.ok, true);
+  assert.equal(to.workspaceRoot, path.resolve(ws));
+  const tokenB = to.authority.token;
+  // DONE terminal task still cannot authorize mutations (no reopen).
+  assert.throws(() => r2.authorizeMutation({ taskId: 't1', authorityToken: tokenB, workspaceRoot: ws }), (e) => e.code === 'no_active_task');
+  // Cross-root takeover of the same task is rejected (workspace_mismatch).
+  assert.throws(() => r2.takeover({ taskId: 't1', workspaceRoot: path.join(dataRoot, 'elsewhere') }), (e) => e.code === 'workspace_mismatch');
+  r2.close();
+});
+
+test('Issue #29: a task without a canonical workspaceRoot cannot authorize a mutation (workspace_unbound)', () => {
+  const { dataRoot, namespace } = fixture();
+  const ws = path.join(dataRoot, 'repo');
+  fs.mkdirSync(ws, { recursive: true });
+  const r1 = createDurableGovernanceService({ dataRoot, namespace });
+  const plan = r1.transition({ taskId: 't1', control: 'PLAN', projectKey: 'repo/x', identity: 'issue-29-unbound' });
+  const tokenA = plan.authorityToken;
+  assert.equal(r1.status().workspaceRoot, null);
+  assert.throws(() => r1.authorizeMutation({ taskId: 't1', authorityToken: tokenA, workspaceRoot: ws }), (e) => e.code === 'workspace_unbound');
+  // Takeover with a workspace handle binds the canonical root durably.
+  r1.close();
+  const r2 = createDurableGovernanceService({ dataRoot, namespace });
+  const to = r2.takeover({ taskId: 't1', workspaceRoot: ws });
+  assert.equal(to.ok, true);
+  assert.equal(to.workspaceRoot, path.resolve(ws));
+  const tokenB = to.authority.token;
+  assert.equal(r2.authorizeMutation({ taskId: 't1', authorityToken: tokenB, workspaceRoot: ws }).ok, true);
+  r2.close();
 });

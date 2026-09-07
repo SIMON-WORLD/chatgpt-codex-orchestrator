@@ -188,7 +188,7 @@ function defaultAuthorityMeta() {
   return { generation: 0, token: null, createdAt: null, lastTakeoverAt: null };
 }
 
-export function makeGovernanceEnvelope({ state, projectKey = null, identity = null, authority = null, taskId = null, savedAt = null }) {
+export function makeGovernanceEnvelope({ state, projectKey = null, identity = null, authority = null, taskId = null, workspaceRoot = null, savedAt = null }) {
   const tid = taskId || (state && state.taskId) || null;
   if (!tid) throw new GovernanceStoreError('cannot persist governance state without a taskId', { code: 'bad_request' });
   return {
@@ -197,6 +197,7 @@ export function makeGovernanceEnvelope({ state, projectKey = null, identity = nu
     taskId: tid,
     projectKey: projectKey ?? null,
     identity: identity ?? null,
+    workspaceRoot: workspaceRoot ?? null,
     authority: authority && typeof authority === 'object' ? { ...defaultAuthorityMeta(), ...authority } : null,
     state,
     savedAt: savedAt || new Date().toISOString(),

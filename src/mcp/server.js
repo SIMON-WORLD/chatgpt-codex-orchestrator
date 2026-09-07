@@ -25,12 +25,12 @@ function sendJson(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
-export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null } = {}) {
+export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null } = {}) {
   // Router + Governance are session-scoped (shared across all requests) so governance
   // state persists across route_decide / governance_transition / governance_status.
   const router = capabilityRouter || createCapabilityRouter();
   const gov = governanceService || createGovernanceService();
-  const factory = () => createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, verifyService, verifyChecks, capabilityRouter: router, governanceService: gov });
+  const factory = () => createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, verifyService, verifyChecks, capabilityRouter: router, governanceService: gov, worktreeService });
   const handler = createMcpHandler(factory);
   const nodeHandler = toNodeHandler(handler);
   const validateHost = localhostHostValidation();

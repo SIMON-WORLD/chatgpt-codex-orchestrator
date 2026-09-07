@@ -41,7 +41,20 @@ function assertSameWorkspace(registry, workspaceId, job) {
   return ws.root;
 }
 
-export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, verifyService = null, operationState = null, verifyChecks = {}, capabilityRouter = null, governanceService = null } = {}) {
+// Task-scoped mutation authorization (Issue #29, durable Governance only). workspaceId/
+// jobId/changeSetId are lookup selectors, never mission authority. A NEW mutation unit
+// must be authorized against the CURRENT durable Governance task + its canonical
+// workspace root + the CURRENT Parent authority token. Returns the authorized taskId so
+// new Codex turns are durably bound to that governance task.
+function requireTaskMutationAuth(governance, workspaceRegistry, { workspaceId = null, taskId = null, authorityToken = null } = {}) {
+  if (!governance || typeof governance.authorizeMutation !== 'function') return taskId || null;
+  if (!workspaceId) throw new WorkspaceError('workspaceId is required for an authorized mutation');
+  const ws = workspaceRegistry.get(workspaceId);
+  const res = governance.authorizeMutation({ taskId: taskId || null, authorityToken: authorityToken || null, workspaceRoot: ws.root });
+  return res.taskId;
+}
+
+export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, verifyService = null, operationState = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null } = {}) {
   // Shared mutation-ownership authority: when a Codex executor is present, Direct
   // Local mutation MUST use the SAME owner instance.
   let owner = mutationOwner;
@@ -78,6 +91,19 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   server.registerTool('git_diff', { description: 'Read-only git diff (worktree|staged).', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, mode: z.enum(['worktree', 'staged']).optional() }) },
     async ({ workspaceId, mode }) => { try { return text(await gitDiff({ workspaceId, mode }, workspaceRegistry)); } catch (e) { return errText(e.message); } });
 
+  // ---- Narrow bounded worktree bootstrap (Issue #29) ------------------------
+  // Registered only when a dedicated worktree service (trust pool + trusted repos) is
+  // explicitly configured. No arbitrary shell / pool manager / scheduler / GC.
+  if (worktreeService && typeof worktreeService.create === 'function') {
+    server.registerTool('worktree_create', {
+      description: 'Narrow bounded worktree bootstrap: git worktree add of an explicitly trusted repo into the dedicated worktree trust pool. Strict trust-root containment: rejects existing targets, ambiguous/unsafe branch or ref, untrusted repo, and any pool escape. Returns the exact canonical created path. No generic shell or repo manager.',
+      annotations: M,
+      inputSchema: z.object({ repo: z.string(), targetPath: z.string(), branch: z.string(), startPoint: z.string() }),
+    }, async ({ repo, targetPath, branch, startPoint }) => {
+      try { return text(await worktreeService.create({ repo, targetPath, branch, startPoint })); } catch (e) { return errText(e.message); }
+    });
+  }
+
   // ---- Direct Local bounded edit (M3) -------------------------------------
   if (changeSet) {
     server.registerTool('edit', {
@@ -88,11 +114,13 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         mode: z.enum(['preview', 'apply']),
         changeSetId: z.string().optional(),
         change: z.object({ path: z.string(), baseHash: z.string().nullable().optional(), replacements: z.array(z.object({ oldText: z.string(), newText: z.string(), expectedOccurrences: z.number().int().positive().optional() })).optional(), createContent: z.string().nullable().optional() }).optional(),
+        taskId: z.string().optional(),
+        authorityToken: z.string().optional(),
       }),
-    }, async ({ workspaceId, mode, changeSetId, change }) => {
+    }, async ({ workspaceId, mode, changeSetId, change, taskId, authorityToken }) => {
       try {
         if (mode === 'preview') return text(await changeSet.preview({ workspaceId, change }));
-        if (mode === 'apply') return text(await changeSet.apply({ workspaceId, changeSetId }));
+        if (mode === 'apply') { requireTaskMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken }); return text(await changeSet.apply({ workspaceId, changeSetId })); }
         return errText('unsupported edit mode');
       } catch (e) { return errText(e.message); }
     });
@@ -103,9 +131,9 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     server.registerTool('verify', {
       description: 'Run a server-configured allowlisted verification check (read_only or workspace_effect). Caller supplies only check name.',
       annotations: M,
-      inputSchema: z.object({ workspaceId: workspaceIdSchema, check: z.string() }),
-    }, async ({ workspaceId, check }) => {
-      try { return text(await verify.run({ workspaceId, check })); } catch (e) { return errText(e.message); }
+      inputSchema: z.object({ workspaceId: workspaceIdSchema, check: z.string(), taskId: z.string().optional(), authorityToken: z.string().optional() }),
+    }, async ({ workspaceId, check, taskId, authorityToken }) => {
+      try { const spec = verifyChecks[check]; if (spec && spec.effect === 'workspace_effect') requireTaskMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken }); return text(await verify.run({ workspaceId, check })); } catch (e) { return errText(e.message); }
     });
   }
 
@@ -143,6 +171,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         projectKey: z.string().optional(),
         identity: z.string().optional(),
         authorityToken: z.string().optional(),
+        workspaceId: workspaceIdSchema.optional(),
         stepId: z.string().optional(),
         control: z.enum(['PLAN', 'TASK', 'REVISE', 'REPLAN', 'ASK_USER', 'PUBLISH', 'DONE']),
         route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
@@ -154,7 +183,14 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         question: z.string().optional(),
       }).strict(),
     }, async (args) => {
-      try { return text(governance.transition(args)); } catch (e) { return errText(e.message); }
+      try {
+        const txArgs = { ...args };
+        if (txArgs.workspaceId) {
+          if (governance && typeof governance.authorizeMutation === 'function') txArgs.workspaceRoot = workspaceRegistry.get(txArgs.workspaceId).root;
+          delete txArgs.workspaceId;
+        }
+        return text(governance.transition(txArgs));
+      } catch (e) { return errText(e.message); }
     });
 
     server.registerTool('governance_record_result', {
@@ -217,7 +253,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     }, async ({ taskId, projectKey, identity, authorityToken, workspaceId }) => {
       try {
         let root = null;
-        if (workspaceId && appServerExecutor) root = assertSameWorkspace(workspaceRegistry, workspaceId, null);
+        if (workspaceId) root = workspaceRegistry.get(workspaceId).root;
         const scope = { taskId, projectKey, identity, authorityToken };
         return text(await performContinuityTakeover({ service: governance, executor: appServerExecutor, workspaceId: workspaceId || null, workspaceRoot: root, scope }));
       } catch (e) { return errText(e.message); }
@@ -256,12 +292,12 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       }
     });
 
-    server.registerTool('codex_start', { description: 'Start a Codex App Server thread + turn in a workspace. accessMode is required (read_only | workspace_write); a mutation delegation must not silently default to read-only. networkAccess is an optional minimal job-level flag (default false) for operations like git push, and is never granted to every job.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, prompt: z.string(), accessMode: z.enum(['read_only', 'workspace_write']), networkAccess: z.boolean().optional(), taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }) },
-      async ({ workspaceId, prompt, accessMode, networkAccess = false, taskId, stepId, identity }) => { try { const root = assertSameWorkspace(workspaceRegistry, workspaceId, null); return text(await appServerExecutor.start({ prompt, cwd: root, accessMode, workspaceRoot: root, workspaceId, networkAccess, taskId, stepId, identity })); } catch (e) { return errText(e.message); } });
+    server.registerTool('codex_start', { description: 'Start a Codex App Server thread + turn in a workspace. accessMode is required (read_only | workspace_write); a mutation delegation must not silently default to read-only. networkAccess is an optional minimal job-level flag (default false) for operations like git push, and is never granted to every job. New turns are authorized against the current durable Governance task + canonical workspace root + current Parent authority token when a durable governance runtime is configured.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, prompt: z.string(), accessMode: z.enum(['read_only', 'workspace_write']), networkAccess: z.boolean().optional(), taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional(), authorityToken: z.string().optional() }) },
+      async ({ workspaceId, prompt, accessMode, networkAccess = false, taskId, stepId, identity, authorityToken }) => { try { const root = assertSameWorkspace(workspaceRegistry, workspaceId, null); const authTaskId = requireTaskMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken }); return text(await appServerExecutor.start({ prompt, cwd: root, accessMode, workspaceRoot: root, workspaceId, networkAccess, taskId: taskId || authTaskId, stepId, identity })); } catch (e) { return errText(e.message); } });
     server.registerTool('codex_get', { description: 'Read structured state + bounded result + pending approvals for a Codex job.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string() }) },
       async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.get({ jobId })); } catch (e) { return errText(e.message); } });
-    server.registerTool('codex_continue', { description: 'Continue the same Codex thread.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string(), instruction: z.string(), taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }) },
-      async ({ workspaceId, jobId, instruction, taskId, stepId, identity }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.continue({ jobId, instruction, taskId, stepId, identity })); } catch (e) { return errText(e.message); } });
+    server.registerTool('codex_continue', { description: 'Continue the same Codex thread. New turns are authorized against the current durable Governance task + canonical workspace root + current Parent authority token when a durable governance runtime is configured.', annotations: M, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string(), instruction: z.string(), taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional(), authorityToken: z.string().optional() }) },
+      async ({ workspaceId, jobId, instruction, taskId, stepId, identity, authorityToken }) => { try { const job = appServerExecutor.load(jobId); const root = assertSameWorkspace(workspaceRegistry, workspaceId, job); const authTaskId = requireTaskMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken }); if (authTaskId && job.taskId && job.taskId !== authTaskId) throw new WorkspaceError(`job ${jobId} is bound to governance task ${job.taskId}, not the active task ${authTaskId}; refusing a cross-task continue`); return text(await appServerExecutor.continue({ jobId, instruction, taskId: taskId || authTaskId, stepId, identity })); } catch (e) { return errText(e.message); } });
     server.registerTool('codex_interrupt', { description: 'Interrupt a running Codex turn.', annotations: { readOnlyHint: false, destructiveHint: false }, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: z.string() }) },
       async ({ workspaceId, jobId }) => { try { const job = appServerExecutor.load(jobId); assertSameWorkspace(workspaceRegistry, workspaceId, job); return text(await appServerExecutor.interrupt({ jobId })); } catch (e) { return errText(e.message); } });
 
