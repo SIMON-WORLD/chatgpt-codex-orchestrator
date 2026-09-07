@@ -40,6 +40,7 @@ export const DEFAULT_V02_CONFIG = {
   host: '127.0.0.1',
   port: 8745,
   dataRoot: DEFAULT_DATA_ROOT,
+  governanceNamespace: 'default', // Brain Continuity governance namespace under the dataRoot
   workspaceRoot: null,          // a single workspace root (allowedRoots derived)
   workspaceRoots: [],           // explicit allowlist
   codex: {

@@ -15,6 +15,7 @@ import { OperationState } from '../state/operation-state.js';
 import { VerifyService } from '../local/verify.js';
 import { createCapabilityRouter } from '../router/capability-router.js';
 import { createGovernanceService } from '../governance/index.js';
+import { performContinuityTakeover } from '../governance/durable.js';
 
 const R = { readOnlyHint: true };
 const M = { readOnlyHint: false, destructiveHint: true };
@@ -139,6 +140,9 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       annotations: M,
       inputSchema: z.object({
         taskId: z.string().optional(),
+        projectKey: z.string().optional(),
+        identity: z.string().optional(),
+        authorityToken: z.string().optional(),
         stepId: z.string().optional(),
         control: z.enum(['PLAN', 'TASK', 'REVISE', 'REPLAN', 'ASK_USER', 'PUBLISH', 'DONE']),
         route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
@@ -158,6 +162,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       annotations: M,
       inputSchema: z.object({
         taskId: z.string().optional(),
+        authorityToken: z.string().optional(),
         stepId: z.string(),
         executorStatus: z.enum(['success', 'failure', 'unknown']),
         evidence: z.array(z.object({ acceptanceId: z.string(), status: z.string().optional(), evidenceLevel: z.string().optional(), kind: z.string().optional(), summary: z.string().optional() })).optional(),
@@ -174,6 +179,48 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       inputSchema: z.object({}),
     }, async () => {
       try { return text(governance.status()); } catch (e) { return errText(e.message); }
+    });
+  }
+
+  // ---- Brain Continuity (durable Governance re-entry) -------------------------
+  // Registered only when the governance service is durable (namespace-scoped store +
+  // authority fencing + takeover). Read-only recovery discovery stays available
+  // without mutation authority; takeover is the bounded Parent re-entry operation.
+  const durableGovernance = governance && typeof governance.recoverSemantic === 'function' && typeof governance.takeover === 'function';
+  if (durableGovernance) {
+    server.registerTool('governance_recover', {
+      description: 'Read-only bounded semantic governance recovery discovery (Brain Continuity). 0 -> not_found, 1 -> unique in-progress task, >1 -> ambiguous/fail closed. Never guesses most recent and never returns internal authority tokens.',
+      annotations: R,
+      inputSchema: z.object({
+        taskId: z.string().optional(),
+        projectKey: z.string().optional(),
+        identity: z.string().optional(),
+      }),
+    }, async ({ taskId, projectKey, identity }) => {
+      try {
+        const result = governance.recoverSemantic({ taskId, projectKey, identity });
+        if (!result.ok) return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: true };
+        return text(result);
+      } catch (e) { return errText(e.message); }
+    });
+
+    server.registerTool('governance_takeover', {
+      description: 'Bounded Parent re-entry/takeover for one uniquely resolved governance task: increments durable authority generation, mints a new opaque fencing token, and returns a bounded Context Capsule. Reconciles any still-valid delegated Codex execution through the existing recover path only (never start/continue/interrupt/duplicate). Stale-authority takeover attempts fail closed.',
+      annotations: M,
+      inputSchema: z.object({
+        taskId: z.string().optional(),
+        projectKey: z.string().optional(),
+        identity: z.string().optional(),
+        authorityToken: z.string().optional(),
+        workspaceId: workspaceIdSchema.optional(),
+      }),
+    }, async ({ taskId, projectKey, identity, authorityToken, workspaceId }) => {
+      try {
+        let root = null;
+        if (workspaceId && appServerExecutor) root = assertSameWorkspace(workspaceRegistry, workspaceId, null);
+        const scope = { taskId, projectKey, identity, authorityToken };
+        return text(await performContinuityTakeover({ service: governance, executor: appServerExecutor, workspaceId: workspaceId || null, workspaceRoot: root, scope }));
+      } catch (e) { return errText(e.message); }
     });
   }
 

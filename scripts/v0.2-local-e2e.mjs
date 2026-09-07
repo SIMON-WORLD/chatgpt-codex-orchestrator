@@ -60,8 +60,12 @@ async function main() {
     const route = await call('route_decide', { requiresLocal: true, mutationRequired: true, boundedChange: true, exactChangeKnown: true });
     if (route.route !== 'CHATGPT_DIRECT_LOCAL') throw new Error('route_decide expected DIRECT_LOCAL, got ' + route.route);
 
-    await call('governance_transition', { taskId: 't1', control: 'PLAN' });
-    await call('governance_transition', { taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }], route: 'CHATGPT_DIRECT_LOCAL' });
+    // Brain Continuity durable flow: PLAN binds the semantic identity and mints the
+    // authority token; every later governance mutation carries the current token.
+    const plan = await call('governance_transition', { taskId: 't1', control: 'PLAN', projectKey: 'v02-local-e2e', identity: 'v02-local-e2e' });
+    const tok = plan.authorityToken;
+    if (!tok) throw new Error('PLAN did not return an authorityToken (durable governance expected)');
+    await call('governance_transition', { taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1', required: true }], route: 'CHATGPT_DIRECT_LOCAL', authorityToken: tok });
     const ws = await call('workspace_open', { path: workspace });
     const rd = await call('read', { workspaceId: ws.workspaceId, path: 'a.txt' });
     if (!rd.sha256) throw new Error('read did not return sha256');
@@ -70,10 +74,10 @@ async function main() {
     if (a.status !== 'applied') throw new Error('edit apply failed');
     const v = await call('verify', { workspaceId: ws.workspaceId, check: 'syntax' });
     if (v.passed !== true) throw new Error('verify did not pass');
-    await call('governance_record_result', { taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }] });
+    await call('governance_record_result', { taskId: 't1', stepId: 's1', executorStatus: 'success', evidence: [{ acceptanceId: 'a1', status: 'pass' }], authorityToken: tok });
 
     // Advance to the Codex step.
-    await call('governance_transition', { taskId: 't1', stepId: 's2', control: 'TASK', acceptance: [{ id: 'a2', required: true }], route: 'CODEX_DELEGATE' });
+    await call('governance_transition', { taskId: 't1', stepId: 's2', control: 'TASK', acceptance: [{ id: 'a2', required: true }], route: 'CODEX_DELEGATE', authorityToken: tok });
     const started = await call('codex_start', { workspaceId: ws.workspaceId, prompt: useReal ? 'Reply with exactly REAL_CODEX_E2E_OK' : 'do it', accessMode: useReal ? 'workspace_write' : 'workspace_write' });
     if (!started.jobId) throw new Error('codex_start did not return jobId');
     let got = null;
@@ -84,8 +88,8 @@ async function main() {
       await sleep(useReal ? 300 : 20);
     }
     if (!got || !(useReal ? got.includes('REAL_CODEX_E2E_OK') : (got.includes('TASK_DONE_MARKER') || got.includes('ASSISTANT_OUTPUT_TEXT_MARKER')))) throw new Error('codex_get did not return the expected assistant result');
-    await call('governance_record_result', { taskId: 't1', stepId: 's2', executorStatus: 'success', evidence: [{ acceptanceId: 'a2', status: 'pass' }] });
-    const done = await call('governance_transition', { taskId: 't1', stepId: 's2', control: 'DONE' });
+    await call('governance_record_result', { taskId: 't1', stepId: 's2', executorStatus: 'success', evidence: [{ acceptanceId: 'a2', status: 'pass' }], authorityToken: tok });
+    const done = await call('governance_transition', { taskId: 't1', stepId: 's2', control: 'DONE', authorityToken: tok });
     if (done.blocked) throw new Error('DONE blocked: ' + done.reason);
 
     process.stdout.write((useReal ? 'PRODUCTION_REAL_CODEX_E2E=PASS' : 'PRODUCTION_LOCAL_E2E=PASS') + '\n');
