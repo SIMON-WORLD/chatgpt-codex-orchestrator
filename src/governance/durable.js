@@ -11,9 +11,11 @@
 // Durable semantics added here:
 //   - every successful mutation persists (atomic + known-good backup) under the dataRoot
 //   - restart = new DurableGovernanceService over the same dataRoot/namespace
-//   - mutations on an established task require the current opaque authority token;
-//     a stale/missing token after takeover is rejected as stale_authority
-//   - takeover increments the authority generation and mints a new token for the new
+//   - mutations on an established task require the current opaque Parent authority token,
+//     except for the narrower Issue #34 execution-continuation claim described below
+//   - bounded execution claims are independently fenced and authorize only the already-
+//     approved current CHATGPT_DIRECT_LOCAL step; they never confer Parent control authority
+//   - takeover increments the Parent authority generation and mints a new token for the new
 //     Parent session; it NEVER cancels/restarts/duplicates delegated Codex execution
 //     (execution reconciliation is delegated to the existing executor.recover path)
 //   - bounded semantic recovery: 0 -> not_found, 1 -> unique, >1 -> ambiguous; never
@@ -36,7 +38,28 @@ export { GovernanceWriterGuard, WRITER_STALE_MS_DEFAULT } from './writer-guard.j
 export function makeAuthorityToken() { return crypto.randomUUID(); }
 
 function newAuthority(now) {
-  return { generation: 0, token: makeAuthorityToken(), createdAt: now(), lastTakeoverAt: null };
+  return { generation: 0, token: makeAuthorityToken(), createdAt: now(), lastTakeoverAt: null, executionClaim: null };
+}
+
+function executionClaimGeneration(authority) {
+  const claim = authority && authority.executionClaim;
+  return claim && Number.isInteger(claim.generation) && claim.generation >= 0 ? claim.generation : 0;
+}
+
+function fenceExecutionClaimValue(authority, now) {
+  const claim = authority && authority.executionClaim;
+  if (!claim) return null;
+  if (claim.token == null) return { ...claim, token: null };
+  return {
+    generation: executionClaimGeneration(authority) + 1,
+    token: null,
+    taskId: claim.taskId ?? null,
+    stepId: claim.stepId ?? null,
+    workspaceRoot: claim.workspaceRoot ?? null,
+    parentGeneration: claim.parentGeneration ?? null,
+    claimedAt: claim.claimedAt ?? null,
+    fencedAt: now(),
+  };
 }
 
 export function governanceError(message, code) {
@@ -126,7 +149,7 @@ export class DurableGovernanceService {
         projectKey: env.projectKey ?? null,
         identity: env.identity ?? null,
         workspaceRoot: env.workspaceRoot ?? null,
-        authority: env.authority && typeof env.authority === 'object' ? { ...env.authority } : null,
+        authority: env.authority && typeof env.authority === 'object' ? structuredClone(env.authority) : null,
       };
       this._recoveryRequired = false;
     } catch {
@@ -145,7 +168,7 @@ export class DurableGovernanceService {
       projectKey: env.projectKey ?? null,
       identity: env.identity ?? null,
       workspaceRoot: env.workspaceRoot ?? null,
-      authority: env.authority && typeof env.authority === 'object' ? { ...env.authority } : null,
+      authority: env.authority && typeof env.authority === 'object' ? structuredClone(env.authority) : null,
     };
     return env;
   }
@@ -164,7 +187,7 @@ export class DurableGovernanceService {
         projectKey: env.projectKey ?? null,
         identity: env.identity ?? null,
         workspaceRoot: env.workspaceRoot ?? null,
-        authority: env.authority && typeof env.authority === 'object' ? { ...env.authority } : null,
+        authority: env.authority && typeof env.authority === 'object' ? structuredClone(env.authority) : null,
       };
     }
     return {
@@ -188,7 +211,7 @@ export class DurableGovernanceService {
         projectKey: meta ? meta.projectKey : null,
         identity: meta ? meta.identity : null,
         workspaceRoot: meta ? (meta.workspaceRoot ?? null) : null,
-        authority: meta && meta.authority ? { ...meta.authority } : null,
+        authority: meta && meta.authority ? structuredClone(meta.authority) : null,
       });
     } catch (e) {
       // The write did not commit: roll the in-memory lifecycle back to the last
@@ -212,8 +235,28 @@ export class DurableGovernanceService {
     };
   }
 
-  // Fencing: once a task has an authority token, every mutation must present the
-  // current token. A stale/missing token is stale_authority (fail closed).
+  _executionClaimPublic(meta) {
+    const claim = meta && meta.authority && meta.authority.executionClaim;
+    if (!claim) return null;
+    return {
+      generation: executionClaimGeneration(meta.authority),
+      active: claim.token != null,
+      taskId: claim.taskId ?? null,
+      stepId: claim.stepId ?? null,
+      workspaceRoot: claim.workspaceRoot ?? null,
+      parentGeneration: claim.parentGeneration ?? null,
+      claimedAt: claim.claimedAt ?? null,
+      fencedAt: claim.fencedAt ?? null,
+    };
+  }
+
+  _fenceExecutionClaim(meta) {
+    if (!meta || !meta.authority || !meta.authority.executionClaim) return;
+    meta.authority.executionClaim = fenceExecutionClaimValue(meta.authority, this._clock);
+  }
+
+  // Fencing: once a task has a Parent authority token, every Parent-authorized mutation
+  // must present the current token. Execution claims never pass this gate.
   _checkAuthority(args) {
     const meta = this._meta;
     if (!meta) return;
@@ -230,6 +273,58 @@ export class DurableGovernanceService {
         'stale_authority',
       );
     }
+  }
+
+  _assertExecutionClaimable(stepId) {
+    const state = this.svc.state;
+    if (!state || !state.taskId) throw governanceError('no active durable governance task is loaded', 'no_active_task');
+    if (state.control === 'DONE') throw governanceError(`task ${state.taskId} is terminal DONE and cannot be claimed for execution`, 'execution_not_claimable');
+    if (state.awaitingUser || state.control === 'ASK_USER') throw governanceError(`task ${state.taskId} is awaiting user input and is not executable`, 'execution_not_claimable');
+    if (state.control !== 'TASK' && state.control !== 'REVISE') {
+      throw governanceError(`task ${state.taskId} control ${String(state.control)} is not an executable TASK/REVISE step`, 'execution_not_claimable');
+    }
+    if (!stepId || state.currentStepId !== stepId) {
+      throw governanceError(`step_mismatch: execution claim must target current step ${String(state.currentStepId)}, got ${String(stepId)}`, 'step_mismatch');
+    }
+    const directLocal = state.route === 'CHATGPT_DIRECT_LOCAL' || (state.route === 'HYBRID' && state.localRoute === 'CHATGPT_DIRECT_LOCAL');
+    if (!directLocal) {
+      throw governanceError(`route_mismatch: current step route ${String(state.route)} / localRoute ${String(state.localRoute)} is not CHATGPT_DIRECT_LOCAL`, 'route_mismatch');
+    }
+    const step = state.steps && state.steps[stepId];
+    if (!step || step.executorStatus !== 'unknown' || step.machineGate !== 'pending') {
+      throw governanceError(`current step ${stepId} is not in an executable pending state`, 'execution_not_claimable');
+    }
+  }
+
+  _checkExecutionClaim({ taskId = null, stepId = null, executionToken = null, workspaceRoot = null, requireWorkspace = false } = {}) {
+    const meta = this._meta;
+    if (!meta || !meta.taskId || !this.svc.state || !this.svc.state.taskId) {
+      throw governanceError('no active durable governance task is loaded for execution authorization', 'no_active_task');
+    }
+    if (taskId != null && String(taskId) !== String(meta.taskId)) {
+      throw governanceError(`task_mismatch: execution taskId ${taskId} does not match active task ${meta.taskId}`, 'task_mismatch');
+    }
+    const claim = meta.authority && meta.authority.executionClaim;
+    if (stepId != null && claim && String(stepId) !== String(claim.stepId)) {
+      throw governanceError(`step_mismatch: execution RESULT step ${stepId} does not match claimed step ${claim.stepId}`, 'step_mismatch');
+    }
+    if (!claim || claim.token == null || executionToken == null || String(executionToken) !== String(claim.token)) {
+      throw governanceError(`stale_execution_claim: task ${meta.taskId} has no matching active execution claim`, 'stale_execution_claim');
+    }
+    if (claim.taskId !== meta.taskId || claim.stepId !== this.svc.state.currentStepId || !eqRoots(claim.workspaceRoot, meta.workspaceRoot)) {
+      throw governanceError(`stale_execution_claim: execution claim no longer matches the current task/step/workspace`, 'stale_execution_claim');
+    }
+    if (!meta.authority || claim.parentGeneration !== meta.authority.generation) {
+      throw governanceError(`stale_execution_claim: Parent authority changed after execution claim generation ${claim.generation}`, 'stale_execution_claim');
+    }
+    if (requireWorkspace) {
+      const root = this._resolveWorkspaceRoot(workspaceRoot);
+      if (!root || !eqRoots(root, meta.workspaceRoot) || !eqRoots(root, claim.workspaceRoot)) {
+        throw governanceError(`workspace_mismatch: execution workspace ${root || '(none)'} does not match claimed canonical workspace ${claim.workspaceRoot}`, 'workspace_mismatch');
+      }
+    }
+    this._assertExecutionClaimable(claim.stepId);
+    return claim;
   }
 
   // Is this transition starting a genuinely NEW task (fresh authority, no token yet)?
@@ -274,10 +369,11 @@ export class DurableGovernanceService {
     const meta = this._metaFor(newActiveTaskId, normalized);
     const minted = !meta.authority || meta.authority.token == null;
     if (minted) meta.authority = newAuthority(this._clock);
+    else this._fenceExecutionClaim(meta); // any later Parent control fences prior bounded execution authority
     if (normalizedRoot && !meta.workspaceRoot) meta.workspaceRoot = normalizedRoot;
     this._meta = meta;
     this._persist(newActiveTaskId, meta);
-    const out = { ...result, durable: true, workspaceRoot: meta.workspaceRoot ?? null, authority: this._authorityPublic(meta) };
+    const out = { ...result, durable: true, workspaceRoot: meta.workspaceRoot ?? null, authority: this._authorityPublic(meta), executionClaim: this._executionClaimPublic(meta) };
     if (minted) out.authorityToken = meta.authority.token;
     return out;
   }
@@ -291,14 +387,22 @@ export class DurableGovernanceService {
     if (this.svc.state.taskId == null && normalized.taskId != null && this.store.hasTask(normalized.taskId)) {
       this._hydrateTask(normalized.taskId);
     }
-    this._checkAuthority(normalized);
+    if (normalized.authorityToken != null && normalized.executionToken != null) {
+      throw governanceError('RESULT must use either Parent authorityToken or bounded executionToken, not both', 'bad_request');
+    }
+    if (normalized.executionToken != null) {
+      this._checkExecutionClaim({ taskId: normalized.taskId, stepId: normalized.stepId, executionToken: normalized.executionToken });
+    } else {
+      this._checkAuthority(normalized);
+    }
     const result = this.svc.recordResult(normalized);
     const activeTaskId = this.svc.state.taskId;
     if (!activeTaskId) return result;
     const meta = this._meta || { taskId: activeTaskId, projectKey: null, identity: null, authority: null };
+    this._fenceExecutionClaim(meta); // RESULT completes the claimed execution unit
     this._meta = meta;
     this._persist(activeTaskId, meta);
-    return { ...result, durable: true, authority: this._authorityPublic(meta) };
+    return { ...result, durable: true, authority: this._authorityPublic(meta), executionClaim: this._executionClaimPublic(meta) };
   }
 
   status() {
@@ -311,6 +415,7 @@ export class DurableGovernanceService {
       recoveryRequired: this._recoveryRequired,
       workspaceRoot: this._meta ? (this._meta.workspaceRoot ?? null) : null,
       authority: this._authorityPublic(this._meta),
+      executionClaim: this._executionClaimPublic(this._meta),
     };
   }
 
@@ -373,6 +478,7 @@ export class DurableGovernanceService {
       terminal: !!(env.state && env.state.control === 'DONE'),
       workspaceRoot: env.workspaceRoot ?? null,
       authority: this._authorityPublic(this._meta),
+      executionClaim: this._executionClaimPublic(this._meta),
     };
   }
 
@@ -402,6 +508,7 @@ export class DurableGovernanceService {
       token: makeAuthorityToken(),
       createdAt: env.authority && env.authority.createdAt ? env.authority.createdAt : this._clock(),
       lastTakeoverAt: this._clock(),
+      executionClaim: fenceExecutionClaimValue(env.authority, this._clock),
     };
     this.svc.state = structuredClone(env.state);
     this._meta = {
@@ -419,16 +526,96 @@ export class DurableGovernanceService {
       taskId: env.taskId,
       workspaceRoot: this._meta.workspaceRoot ?? null,
       authority: { generation: authority.generation, token: authority.token },
+      executionClaim: this._executionClaimPublic(this._meta),
       capsule,
       execution,
     };
   }
 
-  // ---- Task-scoped mutation authorization (Issue #29) --------------------------
+  // ---- Bounded implementation-session execution continuation (Issue #34) -------
+  // Claiming does NOT acquire Parent authority. It resolves one active semantic task,
+  // binds exact current step + canonical workspace + Direct Local route, increments an
+  // independent execution generation, and mints an opaque execution token. Re-claim
+  // fences the prior execution token while preserving Parent generation/token exactly.
+  claimExecution({ taskId = null, projectKey = null, identity = null, stepId = null, workspaceRoot = null } = {}) {
+    this._ensureOpen();
+    this._ensureRecoverable();
+    this.guard.assertOwned();
+    if (taskId != null) encodeGovernanceComponent(taskId, 'taskId');
+    if (taskId == null && projectKey == null && identity == null) {
+      throw governanceError('execution claim requires bounded semantic task identity', 'bad_request');
+    }
+    if (!stepId) throw governanceError('execution claim requires the exact current stepId', 'bad_request');
+    const rec = this.recoverSemantic({ taskId, projectKey, identity });
+    if (!rec.ok) {
+      const code = rec.error === 'not_found' && rec.terminalMatches ? 'execution_not_claimable' : rec.error;
+      throw governanceError(`${code}: ${rec.reason}`, code);
+    }
+    if (this.svc.state.taskId != null && this.svc.state.taskId !== rec.taskId) {
+      throw governanceError(`task_mismatch: runtime is already bound to task ${this.svc.state.taskId}, not claim target ${rec.taskId}`, 'task_mismatch');
+    }
+    const env = this.store.loadTask(rec.taskId);
+    const root = this._resolveWorkspaceRoot(workspaceRoot);
+    if (!env.workspaceRoot) throw governanceError(`task ${env.taskId} has no canonical workspace root and cannot be claimed`, 'workspace_unbound');
+    if (!root || !eqRoots(root, env.workspaceRoot)) {
+      throw governanceError(`workspace_mismatch: claim workspace ${root || '(none)'} does not match task ${env.taskId} canonical workspace ${env.workspaceRoot}`, 'workspace_mismatch');
+    }
+    this.svc.state = structuredClone(env.state);
+    this._meta = {
+      taskId: env.taskId,
+      projectKey: env.projectKey ?? null,
+      identity: env.identity ?? null,
+      workspaceRoot: env.workspaceRoot,
+      authority: env.authority && typeof env.authority === 'object' ? structuredClone(env.authority) : null,
+    };
+    if (!this._meta.authority || this._meta.authority.token == null) {
+      throw governanceError(`task ${env.taskId} has no active Parent authorization to continue`, 'stale_authority');
+    }
+    this._assertExecutionClaimable(stepId);
+    const generation = executionClaimGeneration(this._meta.authority) + 1;
+    const token = makeAuthorityToken();
+    this._meta.authority.executionClaim = {
+      generation,
+      token,
+      taskId: env.taskId,
+      stepId,
+      workspaceRoot: env.workspaceRoot,
+      parentGeneration: this._meta.authority.generation,
+      claimedAt: this._clock(),
+      fencedAt: null,
+    };
+    this._persist(env.taskId, this._meta);
+    return {
+      ok: true,
+      taskId: env.taskId,
+      stepId,
+      workspaceRoot: env.workspaceRoot,
+      authority: this._authorityPublic(this._meta),
+      executionClaim: this._executionClaimPublic(this._meta),
+      executionToken: token,
+    };
+  }
+
+  // Narrow claim authorization used ONLY by Direct Local apply/workspace-effect verify.
+  // Parent-token authorizeMutation remains unchanged for Codex and compatibility paths.
+  authorizeExecution({ taskId = null, executionToken = null, workspaceRoot = null } = {}) {
+    this._ensureOpen();
+    this._ensureRecoverable();
+    const claim = this._checkExecutionClaim({ taskId, executionToken, workspaceRoot, requireWorkspace: true });
+    return {
+      ok: true,
+      taskId: this._meta.taskId,
+      stepId: claim.stepId,
+      workspaceRoot: this._meta.workspaceRoot,
+      executionClaim: { generation: claim.generation, parentGeneration: claim.parentGeneration },
+    };
+  }
+
+  // ---- Task-scoped Parent mutation authorization (Issue #29) -------------------
   // workspaceId/jobId/changeSetId are lookup selectors, not mission authority. A NEW
-  // mutation unit is authorized only against the CURRENT durable Governance task + its
-  // canonical workspace root + the CURRENT Parent authority token (same token family as
-  // governance transitions/takeover - no second token system).
+  // mutation unit is authorized against the CURRENT durable Governance task + its
+  // canonical workspace root + CURRENT Parent token. This path remains the only path
+  // for new Codex turns and all other Parent-authorized mutation categories.
   authorizeMutation({ taskId = null, authorityToken = null, workspaceRoot = null } = {}) {
     this._ensureOpen();
     this._ensureRecoverable();
