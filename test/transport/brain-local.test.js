@@ -72,3 +72,29 @@ test('with real tunnel readiness: readyForLocalMcp=true, readyForTunnel=true, re
     if (prior === undefined) delete process.env.FAKE_TUNNEL_HEALTH_ADDR; else process.env.FAKE_TUNNEL_HEALTH_ADDR = prior;
   }
 });
+
+test('externally managed tunnel lifecycle: runtime never spawns/kills the tunnel-client; readiness uses the external health URL', async () => {
+  const http = await import('node:http');
+  const external = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"status":"ok"}'); });
+  await new Promise((resolve) => external.listen(0, '127.0.0.1', resolve));
+  const port = external.address().port;
+  const healthUrl = 'http://127.0.0.1:' + port + '/readyz';
+  const runtime = makeRuntime({
+    tunnel: { clientExecutable: process.execPath, spawnArgs: [FAKE_TUNNEL], external: true, healthUrl },
+  });
+  try {
+    await runtime.start();
+    assert.equal(runtime.tunnelProcess, null, 'external tunnel mode must not spawn tunnel-client');
+    const st = await runtime.status();
+    assert.equal(st.tunnel.external, true);
+    assert.equal(st.readyForTunnel, true);
+    assert.equal(st.readyForChatGPT, true);
+    // close() must NOT kill an externally owned tunnel (the health server keeps serving).
+    await runtime.close();
+    const probe = await fetch(healthUrl);
+    assert.equal(probe.ok, true);
+  } finally {
+    try { await runtime.close(); } catch {}
+    await new Promise((resolve) => external.close(resolve));
+  }
+});

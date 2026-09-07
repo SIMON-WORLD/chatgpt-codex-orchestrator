@@ -43,6 +43,10 @@ export const DEFAULT_V02_CONFIG = {
   governanceNamespace: 'default', // Brain Continuity governance namespace under the dataRoot
   workspaceRoot: null,          // a single workspace root (allowedRoots derived)
   workspaceRoots: [],           // explicit allowlist
+  worktree: {
+    poolRoot: null,             // dedicated worktree trust pool root (canonical layout: E:\src\chatgpt-codex-orchestrator-wt)
+    trustedRepos: [],           // explicit canonical repos allowed as `repo` for worktree_create (e.g. the main clone)
+  },
   codex: {
     bin: 'codex',               // codex executable (or node + codex.js via !spawnArgs)
     listen: 'stdio://',
@@ -62,6 +66,7 @@ export const DEFAULT_V02_CONFIG = {
     localMcpUrl: null,          // local MCP URL the tunnel forwards (e.g. http://127.0.0.1:8745/mcp)
     spawnArgs: null,           // override tunnel-client argv after the executable (for tests)
     healthUrl: null,           // full tunnel health /readyz URL used to probe real readiness
+    external: false,          // externally managed Secure Tunnel lifecycle: never spawn/kill tunnel-client here; readiness via healthUrl only
   },
 };
 
@@ -100,6 +105,13 @@ export function loadV02Config(overrides = {}, { configPath = null } = {}) {
   if (process.env.TUNNEL_LOCAL_MCP_URL) cfg.tunnel.localMcpUrl = process.env.TUNNEL_LOCAL_MCP_URL;
   if (process.env.TUNNEL_HEALTH_URL) cfg.tunnel.healthUrl = process.env.TUNNEL_HEALTH_URL;
   cfg.workspaceRoots = normalizeRoots(cfg.workspaceRoots, cfg.workspaceRoot);
+  if (cfg.worktree && typeof cfg.worktree === 'object') {
+    cfg.worktree = {
+      poolRoot: cfg.worktree.poolRoot ? path.resolve(String(cfg.worktree.poolRoot)) : null,
+      trustedRepos: (Array.isArray(cfg.worktree.trustedRepos) ? cfg.worktree.trustedRepos : []).filter((r) => r).map((r) => path.resolve(String(r))),
+    };
+  }
+  cfg.tunnel.external = cfg.tunnel.external === true;
   cfg.paths = runtimePaths(cfg.dataRoot);
   return cfg;
 }

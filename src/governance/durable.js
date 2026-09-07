@@ -54,6 +54,22 @@ function scopeMatches(env, { taskId = null, projectKey = null, identity = null }
   return true;
 }
 
+// Canonical workspace-root helpers for task-scoped mutation authorization. The stored
+// root is the resolved absolute path; comparisons are case-insensitive on Windows and
+// ignore trailing separators so a refreshed workspaceId for the SAME canonical root is
+// always recognized (no process-local workspaceId persistence).
+function canonicalWorkspaceRoot(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string') throw governanceError('workspaceRoot must be a path string', 'bad_request');
+  return path.resolve(String(value));
+}
+function eqRoots(a, b) {
+  if (!a || !b) return false;
+  const x = path.resolve(String(a).replace(/[\\/]+$/, ''));
+  const y = path.resolve(String(b).replace(/[\\/]+$/, ''));
+  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
+}
+
 export class DurableGovernanceService {
   constructor({ dataRoot, namespace = 'default', writerId = null, proofLedger = null, metrics = null, allowPublish = true, now = null, heartbeatMs = 5 * 60 * 1000, pidAlive = null, autoWriter = true, store = null } = {}) {
     if (!dataRoot) throw new GovernanceError('durable governance requires a dataRoot');
@@ -70,7 +86,7 @@ export class DurableGovernanceService {
       allowPublish,
     });
     this._clock = clock;
-    this._meta = null; // { taskId, projectKey, identity, authority }
+    this._meta = null; // { taskId, projectKey, identity, authority, workspaceRoot }
     this._closed = false;
     this._recoveryRequired = false; // set when a persistence failure left no known committed snapshot in memory
     if (autoWriter) this.guard.acquire();
@@ -109,6 +125,7 @@ export class DurableGovernanceService {
         taskId: env.taskId,
         projectKey: env.projectKey ?? null,
         identity: env.identity ?? null,
+        workspaceRoot: env.workspaceRoot ?? null,
         authority: env.authority && typeof env.authority === 'object' ? { ...env.authority } : null,
       };
       this._recoveryRequired = false;
@@ -127,6 +144,7 @@ export class DurableGovernanceService {
       taskId: env.taskId,
       projectKey: env.projectKey ?? null,
       identity: env.identity ?? null,
+      workspaceRoot: env.workspaceRoot ?? null,
       authority: env.authority && typeof env.authority === 'object' ? { ...env.authority } : null,
     };
     return env;
@@ -145,6 +163,7 @@ export class DurableGovernanceService {
         taskId: env.taskId,
         projectKey: env.projectKey ?? null,
         identity: env.identity ?? null,
+        workspaceRoot: env.workspaceRoot ?? null,
         authority: env.authority && typeof env.authority === 'object' ? { ...env.authority } : null,
       };
     }
@@ -152,6 +171,7 @@ export class DurableGovernanceService {
       taskId: activeTaskId,
       projectKey: normalized.projectKey ?? null,
       identity: normalized.identity ?? null,
+      workspaceRoot: normalized.workspaceRoot ?? null,
       authority: null,
     };
   }
@@ -167,6 +187,7 @@ export class DurableGovernanceService {
         state: this.svc.state,
         projectKey: meta ? meta.projectKey : null,
         identity: meta ? meta.identity : null,
+        workspaceRoot: meta ? (meta.workspaceRoot ?? null) : null,
         authority: meta && meta.authority ? { ...meta.authority } : null,
       });
     } catch (e) {
@@ -242,7 +263,10 @@ export class DurableGovernanceService {
     if (activeTaskId == null && normalized.taskId != null && this.store.hasTask(normalized.taskId)) {
       this._hydrateTask(normalized.taskId);
     }
+    const normalizedRoot = this._resolveWorkspaceRoot(normalized.workspaceRoot);
+    this._assertRootCompatible(normalized.taskId || this.svc.state.taskId, normalizedRoot);
     const freshStart = this._isFreshTaskStart(normalized);
+    if (freshStart) this._assertNewTaskAdmission();
     if (!freshStart) this._checkAuthority(normalized);
     const result = this.svc.transition(normalized);
     const newActiveTaskId = this.svc.state.taskId;
@@ -250,9 +274,10 @@ export class DurableGovernanceService {
     const meta = this._metaFor(newActiveTaskId, normalized);
     const minted = !meta.authority || meta.authority.token == null;
     if (minted) meta.authority = newAuthority(this._clock);
+    if (normalizedRoot && !meta.workspaceRoot) meta.workspaceRoot = normalizedRoot;
     this._meta = meta;
     this._persist(newActiveTaskId, meta);
-    const out = { ...result, durable: true, authority: this._authorityPublic(meta) };
+    const out = { ...result, durable: true, workspaceRoot: meta.workspaceRoot ?? null, authority: this._authorityPublic(meta) };
     if (minted) out.authorityToken = meta.authority.token;
     return out;
   }
@@ -284,6 +309,7 @@ export class DurableGovernanceService {
       namespace: this.namespace,
       schemaVersion: GOVERNANCE_SCHEMA_VERSION,
       recoveryRequired: this._recoveryRequired,
+      workspaceRoot: this._meta ? (this._meta.workspaceRoot ?? null) : null,
       authority: this._authorityPublic(this._meta),
     };
   }
@@ -345,6 +371,7 @@ export class DurableGovernanceService {
       identity: env.identity ?? null,
       control: env.state ? env.state.control : null,
       terminal: !!(env.state && env.state.control === 'DONE'),
+      workspaceRoot: env.workspaceRoot ?? null,
       authority: this._authorityPublic(this._meta),
     };
   }
@@ -353,7 +380,7 @@ export class DurableGovernanceService {
   // generation, and mint a new opaque fencing token for the new Parent session. A
   // takeover attempted with a stale (non-current) token is rejected as stale_authority.
   // Takeover NEVER touches delegated execution; reconcile that through the executor.
-  takeover({ taskId = null, projectKey = null, identity = null, authorityToken = null } = {}) {
+  takeover({ taskId = null, projectKey = null, identity = null, authorityToken = null, workspaceRoot = null } = {}) {
     this._ensureOpen();
     this._ensureRecoverable();
     this.guard.assertOwned(); // fail closed before a takeover can persist new authority
@@ -361,6 +388,10 @@ export class DurableGovernanceService {
     const rec = this.resolveSemantic({ taskId, projectKey, identity });
     if (!rec.ok) throw governanceError(`${rec.error}: ${rec.reason}`, rec.error);
     const env = this.store.loadTask(rec.taskId);
+    const canonicalRoot = this._resolveWorkspaceRoot(workspaceRoot);
+    if (canonicalRoot && env.workspaceRoot && !eqRoots(canonicalRoot, env.workspaceRoot)) {
+      throw governanceError(`workspace_mismatch: task ${env.taskId} is bound to canonical workspace ${env.workspaceRoot}; takeover under ${canonicalRoot} rejected`, 'workspace_mismatch');
+    }
     const current = env.authority && env.authority.token ? env.authority : null;
     if (current && authorityToken != null && authorityToken !== current.token) {
       throw governanceError(`stale_authority: cannot take over task ${env.taskId} with a stale authority token (current generation ${current.generation})`, 'stale_authority');
@@ -377,6 +408,7 @@ export class DurableGovernanceService {
       taskId: env.taskId,
       projectKey: env.projectKey ?? null,
       identity: env.identity ?? null,
+      workspaceRoot: canonicalRoot || env.workspaceRoot || null,
       authority,
     };
     this._persist(env.taskId, this._meta);
@@ -385,10 +417,79 @@ export class DurableGovernanceService {
     return {
       ok: true,
       taskId: env.taskId,
+      workspaceRoot: this._meta.workspaceRoot ?? null,
       authority: { generation: authority.generation, token: authority.token },
       capsule,
       execution,
     };
+  }
+
+  // ---- Task-scoped mutation authorization (Issue #29) --------------------------
+  // workspaceId/jobId/changeSetId are lookup selectors, not mission authority. A NEW
+  // mutation unit is authorized only against the CURRENT durable Governance task + its
+  // canonical workspace root + the CURRENT Parent authority token (same token family as
+  // governance transitions/takeover - no second token system).
+  authorizeMutation({ taskId = null, authorityToken = null, workspaceRoot = null } = {}) {
+    this._ensureOpen();
+    this._ensureRecoverable();
+    const meta = this._meta;
+    if (!meta || !meta.taskId || !this.svc.state || !this.svc.state.taskId) {
+      throw governanceError('no active durable governance task in this runtime; recover/takeover the existing task before authorizing a new mutation', 'no_active_task');
+    }
+    if (this.svc.state.control === 'DONE') {
+      throw governanceError(`active task ${meta.taskId} is terminal DONE and cannot authorize a new mutation; a genuinely new PLAN is required`, 'no_active_task');
+    }
+    if (taskId != null && String(taskId) !== String(meta.taskId)) {
+      throw governanceError(`task_mismatch: mutation taskId ${taskId} does not match the active durable governance task ${meta.taskId}`, 'task_mismatch');
+    }
+    if (!meta.authority || meta.authority.token == null) {
+      throw governanceError(`task ${meta.taskId} has no active authority token; perform a bounded takeover before mutating`, 'stale_authority');
+    }
+    if (authorityToken == null || String(authorityToken) !== String(meta.authority.token)) {
+      throw governanceError(`stale_authority: task ${meta.taskId} authority generation ${meta.authority.generation} is fenced; present the current authority token`, 'stale_authority');
+    }
+    if (meta.workspaceRoot == null) {
+      throw governanceError(`task ${meta.taskId} is not bound to a canonical workspace root; bind it via takeover/PLAN with a workspace handle before authorizing a mutation`, 'workspace_unbound');
+    }
+    const root = this._resolveWorkspaceRoot(workspaceRoot);
+    if (!root || !eqRoots(root, meta.workspaceRoot)) {
+      throw governanceError(`workspace_mismatch: mutation workspace ${root || '(none)'} does not match task ${meta.taskId} canonical workspace ${meta.workspaceRoot}`, 'workspace_mismatch');
+    }
+    return { ok: true, taskId: meta.taskId, workspaceRoot: meta.workspaceRoot, authority: { generation: meta.authority.generation } };
+  }
+
+  // ---- Durable new-task admission gate (Issue #29) -----------------------------
+  // A genuinely NEW PLAN on a fresh/restarted runtime scans the durable namespace
+  // before admission: 0 non-terminal tasks allow a genuinely new task; 1 rejects with
+  // bounded recovery-required semantics; >1 fails ambiguous. Terminal DONE tasks are
+  // never counted (in-process DONE -> new PLAN stays valid) and are never reopened
+  // under another task's authority.
+  _assertNewTaskAdmission() {
+    const scan = this.store.scanStrict();
+    if (scan.corruptCount > 0) {
+      throw governanceError(`cannot admit a new task: ${scan.corruptCount} durable governance task file(s) are unreadable; refusing to infer absence`, 'corrupt');
+    }
+    const active = scan.tasks.filter((e) => !e.state || e.state.control !== 'DONE');
+    if (active.length === 0) return;
+    if (active.length === 1) {
+      throw governanceError(`recovery_required: an in-progress durable governance task (${active[0].taskId}) exists; recover/takeover it before admitting a genuinely new PLAN`, 'recovery_required');
+    }
+    throw governanceError(`ambiguous: ${active.length} in-progress durable governance tasks exist; refusing to admit a genuinely new PLAN (no most-recent guessing)`, 'ambiguous');
+  }
+
+  _resolveWorkspaceRoot(value) {
+    return canonicalWorkspaceRoot(value);
+  }
+
+  // Reject re-binding an already persisted task to a different canonical workspace root
+  // BEFORE any in-memory lifecycle mutation can diverge from the durable snapshot.
+  _assertRootCompatible(taskId, canonicalRoot) {
+    if (canonicalRoot == null || taskId == null) return;
+    if (!this.store.hasTask(taskId)) return;
+    const env = this.store.loadTask(taskId);
+    if (env.workspaceRoot && !eqRoots(env.workspaceRoot, canonicalRoot)) {
+      throw governanceError(`workspace_mismatch: task ${env.taskId} is bound to canonical workspace ${env.workspaceRoot}; refusing to re-bind under ${canonicalRoot}`, 'workspace_mismatch');
+    }
   }
 
   capsule({ execution = null } = {}) {
@@ -423,7 +524,9 @@ export async function reconcileDelegatedExecution({ executor = null, workspaceId
 
 export async function performContinuityTakeover({ service, executor = null, workspaceId = null, workspaceRoot = null, scope = {} }) {
   if (!service || typeof service.takeover !== 'function') throw governanceError('continuity takeover requires a durable governance service', 'bad_request');
-  const takeoverResult = service.takeover(scope);
+  const takeoverScope = { ...scope };
+  if (workspaceRoot) takeoverScope.workspaceRoot = workspaceRoot;
+  const takeoverResult = service.takeover(takeoverScope);
   let execution = { attempted: false, ...takeoverResult.execution };
   if (executor && takeoverResult.execution && takeoverResult.execution.binding) {
     try {
