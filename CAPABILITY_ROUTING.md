@@ -29,6 +29,36 @@ Material architecture change 必须有新的 authoritative / dogfood evidence，
 
 未来是否引入 multi-Brain / shared-authority model 是独立架构问题，不在 v0.2 预先实现。
 
+### Thin Parent / Strong Mission
+
+当前项目 operating model 采用：
+
+`Thin Parent / Strong Mission / exception-based escalation`
+
+Project-level Parent 负责 North Star / architecture、project policy、mission outcome 与 authoritative acceptance contract、material `REPLAN`、cross-resource / authority conflict、milestone independent acceptance，以及 operational default / release 决策。Parent 不进入 routine implementation hot path。
+
+当 outcome、authorized scope、acceptance、escalation boundary 与所需 capability 已明确时，bounded non-Parent mission session 应在合同内持续推进：
+
+`inspect → diagnose → implement → test → debug/retry → commit/push → PR → exact-head verification`
+
+conversation turn 结束、单次 tool call 结束、普通 implementation bug 或可在授权 route 内安全修复的 transient capability friction，本身都不是升级 Parent 的理由。只有以下 material condition 才升级：
+
+- scope / acceptance 需要改变；
+- authority / ownership 冲突；
+- material architecture change；
+- destructive / irreversible / high-risk policy；
+- capability gap 无法在既定 route 内安全闭合；
+- material security / permission / long-term cost / breaking semantics；
+- project-level default / release decision。
+
+Pointer-not-payload：GitHub Issue / PR / CI / current code 是 implementation/project truth；durable Local Governance 是 live local control truth。Mission session 把 material checkpoint、candidate SHA、PR、CI 与 residual **material** risk 写入 durable surface。用户不承担 conversation message-bus 职责，也不需要复制 `RESULT`、普通错误报告、`workspaceId/jobId/taskId/stepId/threadId/turnId`、authority/execution token 或 routine shell/git/test 输出。
+
+Issue body + Parent durable decision 定义 authoritative mandatory acceptance。普通 mission prompt 不得静默增加新的 mandatory gate。Dogfood friction 先分类：P0 correctness/authority/safety 为 blocking；P1 operability 仅在实质阻止正常使用时 blocking；P2 UX/optional capability 默认 non-blocking。不要把每个 friction 自动升级为新的 Governance feature。
+
+Bounded implementation-session continuity 使用 execution claim 时，该 claim 只授权已经 Parent-approved 的 current task/step/workspace Direct Local execution；它不授予 Parent generation，也不能发起 `PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE`、Parent takeover、scope/acceptance 变化或 project-level final decision。
+
+Session naming：project Parent 使用 `① chatgpt-codex-orchestrator | 总控`；其他 session 统一使用 `chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>`，其中 `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`。普通 bug 不新建 logical mission；replacement 仅发生在 context/capability/natural checkpoint 边界，并继续 SAME mission。
+
 ## 2. Operating Loop
 
 当前核心范式：
