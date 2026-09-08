@@ -21,6 +21,7 @@ function parseArgs(argv) {
     else if (a === '--workspace-root') out.workspaceRoot = argv[++i];
     else if (a === '--status') out.status = true;
     else if (a === '--oneshot') out.oneshot = true;
+    else if (a === '--activation-preflight') out.activationPreflight = true;
     else if (a === '--codex-bin') out.codexBin = argv[++i];
     else if (a === '--runtime-profile') out.runtimeProfile = argv[++i];
   }
@@ -52,7 +53,12 @@ if (!config.workspaceRoots.length) {
   process.exit(2);
 }
 
-const runtime = createBrainLocalRuntime(config);
+if (args.activationPreflight && config.port !== 0) {
+  process.stderr.write('v0.2 activation preflight requires V02_PORT=0 / ephemeral local MCP port\n');
+  process.exit(2);
+}
+
+const runtime = createBrainLocalRuntime(config, { mode: args.activationPreflight ? 'activation-preflight' : 'serving' });
 
 async function main() {
   await runtime.start();
@@ -60,6 +66,7 @@ async function main() {
   const st = await runtime.status();
   // Compute health/ready from the runtime (NO secrets, NO credentials).
   const report = {
+    mode: args.activationPreflight ? 'activation-preflight' : 'serving',
     mcp: st.localMcp.url,
     localMcp: st.localMcp,
     appServer: st.appServer,
@@ -70,7 +77,7 @@ async function main() {
     readyForChatGPT: st.readyForChatGPT,
   };
   process.stdout.write('V02_RUNTIME ' + JSON.stringify(report) + '\n');
-  if (args.status || args.oneshot) {
+  if (args.activationPreflight || args.status || args.oneshot) {
     await runtime.close();
     process.exit(0);
   }
