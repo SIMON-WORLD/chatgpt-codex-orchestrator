@@ -4,7 +4,7 @@ Thanks for your interest in contributing to `chatgpt-codex-orchestrator`.
 
 The project builds a **Capability Orchestrator with ChatGPT as the authoritative Brain**. ChatGPT owns investigation, architecture, routing, governance, independent verification, and final acceptance; Native capabilities, Direct Local, Codex, and future specialist executors perform bounded work.
 
-The latest formal release is **`v0.1.0-alpha.3`**. The capability-first **v0.2** architecture has completed M0–M7 real-project dogfood, but it has **not** been operationally default-flipped or released. The current post-M7 gate is Brain Continuity / Governance durability; see [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
+The latest formal release is **`v0.1.0-alpha.3`**. The repository operational contract is now capability-first **v0.2**; this does **not** itself create a new tag/version/release. M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the explicit default-policy review are complete/accepted. Issue #33 materializes that authorized default policy in code/Skill/docs; M8/release remains separate. See [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
 
 Before you start, read:
 
@@ -17,7 +17,7 @@ Before you start, read:
 ## Before you start
 
 - The project is Alpha; behavior can change between releases.
-- Issues and PRs must distinguish the **released Alpha.3 fallback** from the **canonical v0.2 candidate architecture**.
+- Issues and PRs must distinguish the latest tagged **Alpha.3 compatibility boundary** from the current **capability-first v0.2 operational contract**.
 - Historical RFCs are design evidence; do not assume their original “proposed/no implementation” status describes current `main`.
 - New architecture should be driven by real evidence and dogfood, not by abstraction for its own sake.
 - Prefer existing ChatGPT/OpenAI capabilities over reimplementing them locally.
@@ -65,11 +65,11 @@ PLAN / TASK / RESULT / REVISE / REPLAN / ASK_USER / PUBLISH / DONE
 
 If your change touches persistence/recovery, also review [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md). Current continuity requirements include fail-closed persistence, bounded semantic recovery, stale Parent fencing, single canonical Governance writer, no manual internal-ID relay, and isolated fault-injection dogfood.
 
-## Released Alpha.3 fallback
+## Alpha.3 release / compatibility boundary
 
-The feature-frozen IAB Direct Brain Loop remains the current released/default operational path until an explicit default-policy decision changes it.
+The latest tagged release remains `v0.1.0-alpha.3`, but its feature-frozen IAB Direct Brain Loop is now an **explicit compatibility/fallback path only**. The repository operational default is capability-first v0.2, and capability/provider failure must never silently enter Alpha.3.
 
-Legacy browser/worker code under `src/legacy/`, its tests, and the released `brain-command` instructions are intentionally retained for compatibility. Do not delete or silently reactivate legacy code as the v0.2 canonical path without an explicit accepted architecture decision.
+Legacy browser/worker code under `src/legacy/`, its tests, and Alpha.3 instructions are intentionally retained for compatibility. Do not delete them, and do not reactivate them as the normal path through an implicit fallback.
 
 ## Tests
 
@@ -98,7 +98,7 @@ Update the relevant docs when behavior changes:
 - `docs/architecture.md` for current architecture/runtime boundary changes.
 - `docs/rfc-*` for evidence-backed design contracts/decisions; do not rewrite historical RFCs as though they were always current.
 - `CHANGELOG.md` for release-relevant or meaningful unreleased changes.
-- `SKILL.md` / `skills/brain-command/SKILL.md` when released operational instructions/status change.
+- `SKILL.md` / `skills/brain-command/SKILL.md` when operational-default or release/compatibility boundaries change.
 
 See [`docs/README.md`](docs/README.md) before modifying historical design documents.
 
@@ -118,11 +118,11 @@ No signed commits, DCO, CLA, conventional-commit format, issue-number linkage, o
 
 ## Bug reports and feature requests
 
-Use the GitHub issue templates under `.github/ISSUE_TEMPLATE/` where possible. Include the relevant runtime path/route and repository commit/version, because Alpha.3 legacy and v0.2 candidate behavior are intentionally different.
+Use the GitHub issue templates under `.github/ISSUE_TEMPLATE/` where possible. Include the relevant runtime path/route and repository commit/version, because explicit Alpha.3 compatibility behavior and the v0.2 operational path are intentionally different.
 
 ## Security and sensitive information
 
-Do not include credentials, bearer tokens, API keys, cookies, private repository data, private conversation contents, or local runtime secrets in issues or PRs. Redact sensitive logs before sharing.
+Do not include credentials, API keys, cookies, private repository data, private conversation contents, or local runtime secrets in issues or PRs. Redact sensitive logs before sharing.
 
 There is currently no dedicated private vulnerability reporting channel. If you report a security concern through a public issue, describe the problem without posting secrets or exploit-sensitive private data.
 
