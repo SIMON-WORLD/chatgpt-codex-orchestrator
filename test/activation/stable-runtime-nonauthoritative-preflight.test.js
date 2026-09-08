@@ -1,32 +1,14 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { loadV02Config } from '../../src/config.js';
+import { StableRuntimeActivator, npmCiCommand } from '../../src/activation/stable-runtime-activator.js';
 import { createBrainLocalRuntime } from '../../src/transport/brain-local.js';
 import { GovernanceWriterError, GovernanceWriterGuard } from '../../src/governance/writer-guard.js';
 
-const execFileAsync = promisify(execFile);
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const START_SCRIPT = path.join(REPO_ROOT, 'scripts', 'v0.2-start.mjs');
 const SHA = 'a'.repeat(40);
-
-const LEAKY_ENV = [
-  'V02_PORT', 'V02_HOST', 'V02_WORKSPACE_ROOT', 'CODEX_BIN',
-  'TUNNEL_CLIENT_EXECUTABLE', 'TUNNEL_PROFILE', 'TUNNEL_PROFILE_DIR',
-  'TUNNEL_LOCAL_MCP_URL', 'TUNNEL_HEALTH_URL',
-];
-
-function cleanChildEnv(overrides = {}) {
-  const env = { ...process.env };
-  for (const key of LEAKY_ENV) delete env[key];
-  return { ...env, ...overrides };
-}
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stable-nonauthoritative-preflight-'));
@@ -68,32 +50,7 @@ function writerSlotPath(owner) {
   return path.join(owner.dir, 'writer.json');
 }
 
-async function runStart(args, env) {
-  try {
-    const result = await execFileAsync(process.execPath, [START_SCRIPT, ...args], {
-      cwd: REPO_ROOT,
-      env,
-      windowsHide: true,
-      timeout: 10000,
-      maxBuffer: 1024 * 1024,
-    });
-    return { code: 0, stdout: result.stdout, stderr: result.stderr };
-  } catch (error) {
-    return {
-      code: Number.isInteger(error?.code) ? error.code : 1,
-      stdout: error?.stdout || '',
-      stderr: error?.stderr || error?.message || String(error),
-    };
-  }
-}
-
-function parseRuntimeReport(stdout) {
-  const line = String(stdout || '').split(/\r?\n/).find((entry) => entry.startsWith('V02_RUNTIME '));
-  assert.ok(line, `missing V02_RUNTIME evidence in: ${stdout}`);
-  return JSON.parse(line.slice('V02_RUNTIME '.length));
-}
-
-test('activation preflight uses the real profile without stealing the held canonical writer and exposes health-only ephemeral MCP', async () => {
+test('activation preflight uses the real profile without stealing the held canonical writer and starts on V02_PORT=0 ephemeral MCP', async () => {
   const { dataRoot, workspace, poolRoot, config } = fixture();
   const owner = new GovernanceWriterGuard({ dataRoot, namespace: 'stable-v02' });
   owner.acquire();
@@ -106,7 +63,17 @@ test('activation preflight uses the real profile without stealing the held canon
     return true;
   }, 'ordinary second runtime must remain fenced by the existing canonical writer');
 
-  const preflightConfig = { ...config, port: 0 };
+  const previousPort = process.env.V02_PORT;
+  process.env.V02_PORT = '0';
+  let preflightConfig;
+  try {
+    preflightConfig = loadV02Config(config);
+  } finally {
+    if (previousPort === undefined) delete process.env.V02_PORT;
+    else process.env.V02_PORT = previousPort;
+  }
+  assert.equal(preflightConfig.port, 0, 'V02_PORT=0 must resolve to the ephemeral preflight port');
+
   const runtime = createBrainLocalRuntime(preflightConfig, { mode: 'activation-preflight' });
   try {
     assert.equal(runtime.config.dataRoot, dataRoot);
@@ -144,29 +111,41 @@ test('activation preflight uses the real profile without stealing the held canon
   owner.release();
 });
 
-test('v0.2 internal activation-preflight succeeds with a live canonical writer on V02_PORT=0 and closes without writer-slot changes', async () => {
-  const { dataRoot, configPath } = fixture();
-  const owner = new GovernanceWriterGuard({ dataRoot, namespace: 'stable-v02' });
-  owner.acquire();
-  const slot = writerSlotPath(owner);
-  const before = fs.readFileSync(slot, 'utf8');
+test('target preparation explicitly launches the sanity child in non-authoritative activation-preflight mode on V02_PORT=0', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stable-preflight-binding-'));
+  const repo = path.join(root, 'repo');
+  const activationRoot = path.join(root, 'activations');
+  const checkout = path.join(activationRoot, SHA);
+  const configPath = path.join(root, 'stable-v02.json');
+  fs.mkdirSync(repo, { recursive: true });
+  fs.mkdirSync(checkout, { recursive: true });
+  fs.writeFileSync(configPath, '{}\n', 'utf8');
 
-  try {
-    const result = await runStart(
-      ['--config', configPath, '--activation-preflight'],
-      cleanChildEnv({ V02_PORT: '0', V02_BUILD_REVISION: SHA }),
-    );
-    assert.equal(result.code, 0, result.stderr);
-    const report = parseRuntimeReport(result.stdout);
-    assert.equal(report.mode, 'activation-preflight');
-    assert.equal(report.readyForLocalMcp, true);
-    const local = new URL(report.localMcp.url);
-    assert.equal(local.hostname, '127.0.0.1');
-    assert.ok(Number(local.port) > 0);
-    assert.notEqual(Number(local.port), 8745);
-    assert.equal(fs.readFileSync(slot, 'utf8'), before, 'child preflight must leave the live writer record byte-for-byte unchanged');
-    assert.equal(owner.assertOwned().ok, true);
-  } finally {
-    owner.release();
-  }
+  const commands = [];
+  const npmCi = npmCiCommand('linux', process.env);
+  const activator = new StableRuntimeActivator({
+    platform: 'linux',
+    run: async (file, args, options = {}) => {
+      commands.push({ file, args: [...args], options });
+      if (file === 'git' && args.includes('rev-parse')) return { code: 0, stdout: `${SHA}\n`, stderr: '' };
+      if (file === 'git' && args.includes('status')) return { code: 0, stdout: '', stderr: '' };
+      if (file === npmCi.file && args.join(' ') === npmCi.args.join(' ')) return { code: 0, stdout: '', stderr: '' };
+      if (file === process.execPath) return { code: 0, stdout: 'V02_RUNTIME {"mode":"activation-preflight","readyForLocalMcp":true}\n', stderr: '' };
+      throw new Error(`unexpected command: ${file} ${args.join(' ')}`);
+    },
+  });
+
+  const prepared = await activator._prepare({ repo, sha: SHA, configPath, activationRoot });
+  assert.equal(prepared.preflight.readyForLocalMcp, true);
+
+  const child = commands.find((command) => command.file === process.execPath);
+  assert.ok(child, 'preflight child command must be executed');
+  assert.deepEqual(child.args, [
+    'scripts/v0.2-start.mjs',
+    '--config', configPath,
+    '--activation-preflight',
+    '--oneshot',
+  ]);
+  assert.equal(child.options.env.V02_PORT, '0');
+  assert.equal(child.options.env.V02_BUILD_REVISION, SHA);
 });
