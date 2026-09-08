@@ -1,0 +1,172 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadV02Config } from '../../src/config.js';
+import { createBrainLocalRuntime } from '../../src/transport/brain-local.js';
+import { GovernanceWriterError, GovernanceWriterGuard } from '../../src/governance/writer-guard.js';
+
+const execFileAsync = promisify(execFile);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const START_SCRIPT = path.join(REPO_ROOT, 'scripts', 'v0.2-start.mjs');
+const SHA = 'a'.repeat(40);
+
+const LEAKY_ENV = [
+  'V02_PORT', 'V02_HOST', 'V02_WORKSPACE_ROOT', 'CODEX_BIN',
+  'TUNNEL_CLIENT_EXECUTABLE', 'TUNNEL_PROFILE', 'TUNNEL_PROFILE_DIR',
+  'TUNNEL_LOCAL_MCP_URL', 'TUNNEL_HEALTH_URL',
+];
+
+function cleanChildEnv(overrides = {}) {
+  const env = { ...process.env };
+  for (const key of LEAKY_ENV) delete env[key];
+  return { ...env, ...overrides };
+}
+
+function fixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stable-nonauthoritative-preflight-'));
+  const dataRoot = path.join(root, 'data');
+  const workspace = path.join(root, 'workspace');
+  const poolRoot = path.join(root, 'worktrees');
+  const codexProfile = path.join(root, 'codex-profile');
+  const tunnelProfileDir = path.join(root, 'tunnel-profile');
+  for (const dir of [dataRoot, workspace, poolRoot, codexProfile, tunnelProfileDir]) fs.mkdirSync(dir, { recursive: true });
+
+  const configPath = path.join(root, 'stable-v02.json');
+  const rawConfig = {
+    host: '127.0.0.1',
+    port: 8745,
+    dataRoot,
+    governanceNamespace: 'stable-v02',
+    workspaceRoots: [workspace],
+    worktree: { poolRoot, trustedRepos: [workspace] },
+    codex: {
+      bin: 'codex', listen: 'stdio://', cwd: null, runtimeProfile: codexProfile,
+      caBundle: null, sslCertFile: null, spawnArgs: null, extraArgs: [],
+    },
+    tunnel: {
+      external: true,
+      clientExecutable: null,
+      profile: 'stable-v02',
+      profileFile: null,
+      profileDir: tunnelProfileDir,
+      localMcpUrl: 'http://127.0.0.1:8745/mcp',
+      healthUrl: 'http://127.0.0.1:1/readyz',
+    },
+  };
+  fs.writeFileSync(configPath, `${JSON.stringify(rawConfig, null, 2)}\n`, 'utf8');
+  const config = loadV02Config(rawConfig);
+  return { root, dataRoot, workspace, poolRoot, configPath, config };
+}
+
+function writerSlotPath(owner) {
+  return path.join(owner.dir, 'writer.json');
+}
+
+async function runStart(args, env) {
+  try {
+    const result = await execFileAsync(process.execPath, [START_SCRIPT, ...args], {
+      cwd: REPO_ROOT,
+      env,
+      windowsHide: true,
+      timeout: 10000,
+      maxBuffer: 1024 * 1024,
+    });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    return {
+      code: Number.isInteger(error?.code) ? error.code : 1,
+      stdout: error?.stdout || '',
+      stderr: error?.stderr || error?.message || String(error),
+    };
+  }
+}
+
+function parseRuntimeReport(stdout) {
+  const line = String(stdout || '').split(/\r?\n/).find((entry) => entry.startsWith('V02_RUNTIME '));
+  assert.ok(line, `missing V02_RUNTIME evidence in: ${stdout}`);
+  return JSON.parse(line.slice('V02_RUNTIME '.length));
+}
+
+test('activation preflight uses the real profile without stealing the held canonical writer and exposes health-only ephemeral MCP', async () => {
+  const { dataRoot, workspace, poolRoot, config } = fixture();
+  const owner = new GovernanceWriterGuard({ dataRoot, namespace: 'stable-v02' });
+  owner.acquire();
+  const slot = writerSlotPath(owner);
+  const before = fs.readFileSync(slot, 'utf8');
+
+  assert.throws(() => createBrainLocalRuntime({ ...config, port: 0 }), (error) => {
+    assert.ok(error instanceof GovernanceWriterError);
+    assert.equal(error.code, 'writer_conflict');
+    return true;
+  }, 'ordinary second runtime must remain fenced by the existing canonical writer');
+
+  const preflightConfig = { ...config, port: 0 };
+  const runtime = createBrainLocalRuntime(preflightConfig, { mode: 'activation-preflight' });
+  try {
+    assert.equal(runtime.config.dataRoot, dataRoot);
+    assert.equal(runtime.config.governanceNamespace, 'stable-v02');
+    assert.deepEqual(runtime.config.workspaceRoots, [workspace]);
+    assert.equal(runtime.config.worktree.poolRoot, poolRoot);
+    assert.equal(runtime.config.codex.runtimeProfile, config.codex.runtimeProfile);
+    assert.equal(runtime.config.tunnel.external, true);
+    assert.equal(runtime.governanceService.guard.held, false, 'preflight must never acquire the canonical writer');
+
+    await runtime.start();
+    assert.equal(runtime.appServerExecutor, null, 'preflight must not construct an executable Codex surface');
+    assert.equal(runtime.worktreeService, null, 'preflight must not construct a worktree mutation surface');
+    assert.ok(runtime.mcp.port > 0);
+    assert.notEqual(runtime.mcp.port, 8745);
+
+    const ready = await fetch(`http://127.0.0.1:${runtime.mcp.port}/readyz`);
+    assert.equal(ready.status, 200);
+    const readyBody = await ready.json();
+    assert.equal(readyBody.activationPreflight, true);
+
+    const mcp = await fetch(`http://127.0.0.1:${runtime.mcp.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(mcp.status, 403);
+    assert.deepEqual(await mcp.json(), { error: 'activation_preflight_mcp_disabled' });
+  } finally {
+    await runtime.close();
+  }
+
+  assert.equal(fs.readFileSync(slot, 'utf8'), before, 'preflight start/close must not modify or delete the existing writer slot');
+  assert.equal(owner.assertOwned().ok, true, 'original writer remains canonical after preflight close');
+  owner.release();
+});
+
+test('v0.2 internal activation-preflight succeeds with a live canonical writer on V02_PORT=0 and closes without writer-slot changes', async () => {
+  const { dataRoot, configPath } = fixture();
+  const owner = new GovernanceWriterGuard({ dataRoot, namespace: 'stable-v02' });
+  owner.acquire();
+  const slot = writerSlotPath(owner);
+  const before = fs.readFileSync(slot, 'utf8');
+
+  try {
+    const result = await runStart(
+      ['--config', configPath, '--activation-preflight'],
+      cleanChildEnv({ V02_PORT: '0', V02_BUILD_REVISION: SHA }),
+    );
+    assert.equal(result.code, 0, result.stderr);
+    const report = parseRuntimeReport(result.stdout);
+    assert.equal(report.mode, 'activation-preflight');
+    assert.equal(report.readyForLocalMcp, true);
+    const local = new URL(report.localMcp.url);
+    assert.equal(local.hostname, '127.0.0.1');
+    assert.ok(Number(local.port) > 0);
+    assert.notEqual(Number(local.port), 8745);
+    assert.equal(fs.readFileSync(slot, 'utf8'), before, 'child preflight must leave the live writer record byte-for-byte unchanged');
+    assert.equal(owner.assertOwned().ok, true);
+  } finally {
+    owner.release();
+  }
+});
