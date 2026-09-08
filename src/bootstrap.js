@@ -14,6 +14,7 @@ export class BrainCommandConfigError extends Error {
   constructor(msg) { super(msg); this.name = 'BrainCommandConfigError'; }
 }
 
+// $CODEX_HOME defaults to ~/.codex when not configured.
 export function codexHome(env = getEnv(), homeDir = getHomeDir()) {
   return env.CODEX_HOME || path.join(homeDir, '.codex');
 }
@@ -22,13 +23,19 @@ export function brainCommandConfigPath(ch = codexHome()) {
   return path.join(ch, 'brain-command', 'config.json');
 }
 
+// Operational default runtime family (Issue #33, v0.2 operational default flip):
+// the normal brain-command entry is capability-first v0.2 / Stable Runtime.
+// Alpha.3 legacy IAB is an explicit opt-in compatibility fallback ONLY
+// (config.defaultRuntime='alpha3' and/or BRAIN_COMMAND_LEGACY=1 / legacyOptIn).
 export const DEFAULT_RUNTIME_FAMILY = 'v0.2';
 export const RUNTIME_FAMILIES = ['v0.2', 'alpha3'];
 
+// Effective runtime family of a brain-command config. Absent => v0.2 (the
+// operational default). `alpha3` is the explicit legacy IAB value; any other
+// explicit value is rejected at validation (fail closed, never silent).
 export function effectiveRuntimeFamily(config = {}) {
   return config && RUNTIME_FAMILIES.includes(config.defaultRuntime) ? config.defaultRuntime : DEFAULT_RUNTIME_FAMILY;
 }
-
 export const DEFAULT_BRAIN_COMMAND_CONFIG = {
   orchestratorRoot: '',
   dataRoot: '',
@@ -36,7 +43,7 @@ export const DEFAULT_BRAIN_COMMAND_CONFIG = {
   defaultBrain: 'chatgpt',
   defaultExecutor: 'codex',
   defaultConversationMode: 'new',
-  defaultRuntime: DEFAULT_RUNTIME_FAMILY,
+  defaultRuntime: DEFAULT_RUNTIME_FAMILY, // capability-first v0.2 / Stable Runtime (Issue #33)
 };
 
 export function defaultBrainCommandConfig(overrides = {}) {
@@ -52,10 +59,15 @@ export function validateBrainCommandConfig(cfg) {
   if (!['chatgpt'].includes(cfg.defaultBrain)) errors.push(`unsupported defaultBrain: ${cfg.defaultBrain}`);
   if (!['codex'].includes(cfg.defaultExecutor)) errors.push(`unsupported defaultExecutor: ${cfg.defaultExecutor}`);
   if (!['new', 'current'].includes(cfg.defaultConversationMode)) errors.push(`unsupported defaultConversationMode: ${cfg.defaultConversationMode}`);
+  // Optional defaultRuntime: absent => v0.2 (operational default). Only explicit
+  // 'v0.2' / 'alpha3' accepted; any other explicit value fails closed (never
+  // silently maps to legacy Alpha.3).
   if (cfg.defaultRuntime !== undefined && !RUNTIME_FAMILIES.includes(cfg.defaultRuntime)) errors.push(`unsupported defaultRuntime: ${cfg.defaultRuntime} (expected ${RUNTIME_FAMILIES.join(' | ')})`);
   return { ok: errors.length === 0, errors };
 }
 
+// Read + validate the user-scoped bootstrap config. Absent/invalid config FAILS
+// FAST into setup / full-doctor guidance — no broad discovery.
 export function loadBrainCommandConfig({ codexHome: ch = codexHome() } = {}) {
   const file = brainCommandConfigPath(ch);
   if (!fs.existsSync(file)) {
@@ -69,6 +81,7 @@ export function loadBrainCommandConfig({ codexHome: ch = codexHome() } = {}) {
   return raw;
 }
 
+// Setup/installation path: create or update the user-scoped config once.
 export function writeBrainCommandConfig(config, { codexHome: ch = codexHome() } = {}) {
   const dir = path.join(ch, 'brain-command');
   fs.mkdirSync(dir, { recursive: true });
@@ -80,33 +93,45 @@ export function writeBrainCommandConfig(config, { codexHome: ch = codexHome() } 
 export function isInsideRepo(dir) {
   const abs = path.resolve(dir || '.');
   if (!fs.existsSync(abs)) return false;
-  return fs.existsSync(path.join(abs, '.git'));
+  return fs.existsSync(path.join(abs, '.git')) || fs.existsSync(path.join(abs, '.git'));
 }
 
+// --- brain-command installation / discovery (RFC §2, §5) -----------------------
 export function inferRepoRoot(metaUrl = import.meta.url) {
   return path.resolve(path.dirname(fileURLToPath(metaUrl)), '..');
 }
 
+// --- brain-command user skill install location (canonical) ---------------------
+// Codex's current canonical user-installed Skill root is $HOME/.agents/skills.
+// $CODEX_HOME/skills is the deprecated compatibility location. The brain-command
+// machine config stays at $CODEX_HOME/brain-command/config.json.
+
+// Resolve the user home without hard-coding a platform-specific absolute path.
 export function userHome(env = getEnv(), homeDir = getHomeDir()) {
   return env.HOME || env.USERPROFILE || homeDir;
 }
 
+// Source skill path inside the orchestrator repository (the distributable copy).
 export function sourceBrainCommandSkillPath({ skillSourceDir = null } = {}) {
   return path.join(skillSourceDir || path.join(inferRepoRoot(), 'skills', 'brain-command'), 'SKILL.md');
 }
 
+// Canonical installed user skill path: $HOME/.agents/skills/brain-command/SKILL.md.
 export function installedBrainCommandSkillPath({ home = userHome() } = {}) {
   return path.join(home, '.agents', 'skills', 'brain-command', 'SKILL.md');
 }
 
+// Legacy / deprecated compatibility location: $CODEX_HOME/skills/brain-command/SKILL.md.
 export function legacyBrainCommandSkillPath({ codexHome: ch = codexHome() } = {}) {
   return path.join(ch, 'skills', 'brain-command', 'SKILL.md');
 }
 
-export function brainCommandInstalled({ home = userHome(), codexHome: ch = codexHome() } = {}) {
-  return fs.existsSync(installedBrainCommandSkillPath({ home })) || fs.existsSync(legacyBrainCommandSkillPath({ codexHome: ch }));
+export function brainCommandInstalled({ home = userHome(), codexHome = codexHome() } = {}) {
+  return fs.existsSync(installedBrainCommandSkillPath({ home })) || fs.existsSync(legacyBrainCommandSkillPath({ codexHome }));
 }
 
+// Install/update the launcher Skill into the canonical user Skill root. Does NOT
+// perform broad filesystem discovery. Returns the installed user skill path.
 export function installBrainCommandSkill({ home = userHome(), skillSourceDir = null } = {}) {
   const srcFile = sourceBrainCommandSkillPath({ skillSourceDir });
   if (!fs.existsSync(srcFile)) throw new BrainCommandConfigError('brain-command skill source not found: ' + srcFile);
@@ -117,11 +142,15 @@ export function installBrainCommandSkill({ home = userHome(), skillSourceDir = n
   return dest;
 }
 
+// One-time setup: install the launcher Skill into the canonical user Skill root and
+// create/update the user-scoped bootstrap config at $CODEX_HOME/brain-command/config.json,
+// preserving machine-local paths. Normal task execution does NOT call this; it only
+// reads the config via loadBrainCommandConfig.
 export function setupBrainCommand({ codexHome: ch = codexHome(), home = userHome(), config = null, orchestratorRoot = null, skillSourceDir = null, dataRoot = null, workspaceRoot = null, defaultBrain = 'chatgpt', defaultExecutor = 'codex', defaultConversationMode = 'new', defaultRuntime = DEFAULT_RUNTIME_FAMILY } = {}) {
   const skillPath = installBrainCommandSkill({ home, skillSourceDir });
   let existing = null;
   const cfgFile = brainCommandConfigPath(ch);
-  if (fs.existsSync(cfgFile)) { try { existing = JSON.parse(fs.readFileSync(cfgFile, 'utf8')); } catch {} }
+  if (fs.existsSync(cfgFile)) { try { existing = JSON.parse(fs.readFileSync(cfgFile, 'utf8')); } catch (e) {} }
   const inferredRoot = orchestratorRoot || (existing && existing.orchestratorRoot) || inferRepoRoot();
   const merged = {
     ...defaultBrainCommandConfig(existing),
@@ -132,12 +161,21 @@ export function setupBrainCommand({ codexHome: ch = codexHome(), home = userHome
     defaultBrain: (config && config.defaultBrain) || (existing && existing.defaultBrain) || defaultBrain,
     defaultExecutor: (config && config.defaultExecutor) || (existing && existing.defaultExecutor) || defaultExecutor,
     defaultConversationMode: (config && config.defaultConversationMode) || (existing && existing.defaultConversationMode) || defaultConversationMode,
+    // Runtime family: explicit config wins, then preserved machine setting, then
+    // the v0.2 operational default. An existing explicit 'alpha3' is preserved on
+    // re-run (setup never silently forces legacy off or on).
     defaultRuntime: (config && config.defaultRuntime) || (existing && existing.defaultRuntime) || defaultRuntime,
   };
   const configPath = writeBrainCommandConfig(merged, { codexHome: ch });
   return { skillPath, configPath, config: merged };
 }
 
+// --- brain-command read-only status check (Alpha.2) ----------------------------
+// A deterministic, read-only self-check used by the `status:brain-command` CLI and
+// by library callers. It NEVER writes, NEVER echoes the raw config, and NEVER
+// exposes any secret/token field -- only the known safe config fields plus
+// per-check diagnostics. Config missing/invalid yields a clear FAIL and a non-zero
+// exit code; a healthy install yields PASS and exit code 0.
 export function brainCommandStatus({ codexHome: ch = codexHome(), home = userHome() } = {}) {
   const status = {
     ok: false,
@@ -147,6 +185,8 @@ export function brainCommandStatus({ codexHome: ch = codexHome(), home = userHom
     checks: [],
     exitCode: 1,
   };
+
+  // 1) user-level launcher Skill discoverable (canonical, with legacy fallback).
   const canonical = installedBrainCommandSkillPath({ home });
   const legacy = legacyBrainCommandSkillPath({ codexHome: ch });
   const canonicalOk = fs.existsSync(canonical);
@@ -159,6 +199,8 @@ export function brainCommandStatus({ codexHome: ch = codexHome(), home = userHom
     reason: canonicalOk ? 'canonical skill present' : (legacyOk ? 'legacy skill present (deprecated); run setup to migrate' : 'no brain-command skill found'),
   };
   status.checks.push({ check: 'brain-command-skill', status: status.skill.status, reason: status.skill.reason });
+
+  // 2) user-scoped config exists + parseable + valid.
   const cfgFile = brainCommandConfigPath(ch);
   status.config.file = cfgFile;
   status.config.exists = fs.existsSync(cfgFile);
@@ -171,6 +213,9 @@ export function brainCommandStatus({ codexHome: ch = codexHome(), home = userHom
       status.config.status = 'PASS';
       status.config.parseable = true;
       status.config.reason = 'config present and parseable';
+      // Only the known safe fields are surfaced (including the effective
+      // operational runtime family). The raw config object is never returned or
+      // printed, so any extra/secret field is intentionally excluded.
       status.fields = {
         orchestratorRoot: cfg.orchestratorRoot,
         dataRoot: cfg.dataRoot,
@@ -188,6 +233,7 @@ export function brainCommandStatus({ codexHome: ch = codexHome(), home = userHom
       status.checks.push({ check: 'brain-command-config', status: 'FAIL', reason: status.config.reason });
     }
   }
+
   status.ok = status.skill.discoverable && status.config.status === 'PASS';
   status.exitCode = status.ok ? 0 : 1;
   return status;
@@ -197,7 +243,9 @@ export function formatBrainCommandStatus(status) {
   const lines = [];
   lines.push('brain-command status');
   lines.push('--------------------');
-  for (const c of (status && status.checks) || []) lines.push(String(c.status).padEnd(5) + ' ' + c.check + ' :: ' + c.reason);
+  for (const c of (status && status.checks) || []) {
+    lines.push(String(c.status).padEnd(5) + ' ' + c.check + ' :: ' + c.reason);
+  }
   if (status && status.config && status.config.status === 'PASS' && status.fields) {
     lines.push('');
     lines.push('configuration:');
@@ -210,12 +258,21 @@ export function formatBrainCommandStatus(status) {
     lines.push('  defaultRuntime: ' + status.fields.defaultRuntime + (status.fields.defaultRuntime === 'alpha3' ? '  (explicit Alpha.3 legacy IAB opt-in)' : '  (capability-first v0.2 / Stable Runtime)'));
   }
   lines.push('');
-  lines.push(status && status.ok ? 'OK: brain-command is installed and configured.' : 'NOT OK: see diagnostics above; run `npm run setup:brain-command` (or full doctor) to fix.');
+  lines.push(status && status.ok
+    ? 'OK: brain-command is installed and configured.'
+    : 'NOT OK: see diagnostics above; run `npm run setup:brain-command` (or full doctor) to fix.');
   return lines.join('\n');
 }
 
-export function markBroadDiscovery(metrics = {}) { return { ...metrics, broadDiscoveryOccurred: true }; }
+// --- Broad-discovery telemetry (RFC §17 / §I) ----------------------------------
+// The fast path must contain no broad filesystem search. If any explicit fallback /
+// setup discovery path is used, it marks broadDiscoveryOccurred = true.
+export function markBroadDiscovery(metrics = {}) {
+  return { ...metrics, broadDiscoveryOccurred: true };
+}
 
+// Explicit fallback/setup discovery ONLY. Bounded BFS over candidate roots; this is
+// not part of the normal fast path and always marks that broad discovery occurred.
 export function discoverBroadRepoDir({ roots = [], config = null, maxDepth = 3 } = {}) {
   const metrics = { broadDiscoveryOccurred: true };
   const queue = (roots || []).map((r) => ({ dir: r, depth: 0 }));
@@ -228,8 +285,10 @@ export function discoverBroadRepoDir({ roots = [], config = null, maxDepth = 3 }
     if (isInsideRepo(dir)) { repoDir = dir; break; }
     if (depth < maxDepth) {
       let entries = [];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-      for (const e of entries) if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.git')) queue.push({ dir: path.join(dir, e.name), depth: depth + 1 });
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { continue; }
+      for (const e of entries) {
+        if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.git')) queue.push({ dir: path.join(dir, e.name), depth: depth + 1 });
+      }
     }
   }
   if (!repoDir && config && config.workspaceRoot) repoDir = config.workspaceRoot;
@@ -242,67 +301,120 @@ function isInsideWorkspace(cwd, wroot) {
   return c === w || c.startsWith(w + path.sep);
 }
 
+// Deterministic repository resolution (RFC §6). Order: invoked inside target repo
+// (cwd), explicit local path, explicit GitHub repo via configured workspace policy,
+// config.workspaceRoot. Broad recursive search is never part of normal startup.
 export function resolveRepoDir({ cwd = null, explicitRepoPath = null, explicitGitHubRepo = null, config = null, workspaceRoot = null } = {}) {
   const metrics = { broadDiscoveryOccurred: false };
   const wroot = workspaceRoot || (config && config.workspaceRoot) || null;
+  // 1. invoked inside the target repo -> prefer cwd
   if (cwd && wroot && isInsideWorkspace(cwd, wroot)) return { repoDir: path.resolve(cwd), source: 'cwd', ...metrics };
+  // 2. explicit local repo path
   if (explicitRepoPath) return { repoDir: path.resolve(explicitRepoPath), source: 'explicit', ...metrics };
+  // 3. explicit GitHub repo -> resolve through configured workspace/clone policy
   if (explicitGitHubRepo && wroot) return { repoDir: wroot, source: 'github-config', ...metrics };
+  // 4. config workspaceRoot
   if (wroot) return { repoDir: wroot, source: 'config', ...metrics };
+  // 5. cwd if it is a repo (fallback; still deterministic, not a discovery scan)
   if (cwd && isInsideRepo(cwd)) return { repoDir: path.resolve(cwd), source: 'cwd', ...metrics };
   return { repoDir: null, source: 'unresolved', ...metrics };
 }
 
+// Resolve the orchestrator installation root deterministically.
 export function resolveOrchestratorRoot({ cwd = null, explicitRoot = null, config = null } = {}) {
-  if (config && config.orchestratorRoot) return { orchestratorRoot: config.orchestratorRoot, source: 'config', broadDiscoveryOccurred: false };
-  if (explicitRoot) return { orchestratorRoot: path.resolve(explicitRoot), source: 'explicit', broadDiscoveryOccurred: false };
-  if (cwd && fs.existsSync(path.join(path.resolve(cwd), 'src', 'protocol.js'))) return { orchestratorRoot: path.resolve(cwd), source: 'cwd-self', broadDiscoveryOccurred: false };
+  if (config && config.orchestratorRoot) return { orchestratorRoot: config.orchestratorRoot, source: 'config', ...{ broadDiscoveryOccurred: false } };
+  if (explicitRoot) return { orchestratorRoot: path.resolve(explicitRoot), source: 'explicit', ...{ broadDiscoveryOccurred: false } };
+  // self-identify: if cwd contains this orchestrator's source, use it.
+  if (cwd && fs.existsSync(path.join(path.resolve(cwd), 'src', 'protocol.js'))) {
+    return { orchestratorRoot: path.resolve(cwd), source: 'cwd-self', ...{ broadDiscoveryOccurred: false } };
+  }
   return { orchestratorRoot: null, source: 'unresolved', broadDiscoveryOccurred: false };
 }
 
+// Fast preflight (RFC §7): runs on every task; must not require full doctor.
 export function fastPreflight({ config = null, probes = {} } = {}) {
   const cfg = config || {};
   const checks = [];
   const add = (name, ok, reason) => checks.push({ check: name, status: ok ? 'PASS' : 'FAIL', reason });
-  if (cfg.orchestratorRoot) add('orchestrator-install', probes.orchestratorRoot != null ? !!probes.orchestratorRoot : fs.existsSync(cfg.orchestratorRoot), cfg.orchestratorRoot);
-  else add('orchestrator-install', false, 'no orchestratorRoot');
+
+  // orchestrator installation/config resolvable
+  if (cfg.orchestratorRoot) {
+    const ok = probes.orchestratorRoot != null ? !!probes.orchestratorRoot : fs.existsSync(cfg.orchestratorRoot);
+    add('orchestrator-install', ok, cfg.orchestratorRoot);
+  } else add('orchestrator-install', false, 'no orchestratorRoot');
+
+  // repo resolvable + exists
   const r = resolveRepoDir({ cwd: probes.cwd, explicitRepoPath: probes.explicitRepoPath, config: cfg, workspaceRoot: cfg.workspaceRoot });
   add('repo-resolvable', !!r.repoDir, r.repoDir || r.source);
-  if (r.repoDir) add('repo-exists', probes.repoExists != null ? !!probes.repoExists : fs.existsSync(r.repoDir), r.repoDir);
+  if (r.repoDir) {
+    const ok = probes.repoExists != null ? !!probes.repoExists : fs.existsSync(r.repoDir);
+    add('repo-exists', ok, r.repoDir);
+  }
+
+  // codex executable available
   {
     const codexJs = cfg.codexJs || DEFAULT_CODEX_JS;
-    add('codex-executable', probes.codexAvailable != null ? !!probes.codexAvailable : !!codexJs && fs.existsSync(codexJs), codexJs || 'no codexJs configured');
+    const ok = probes.codexAvailable != null ? !!probes.codexAvailable : !!codexJs && fs.existsSync(codexJs);
+    add('codex-executable', ok, codexJs || 'no codexJs configured');
   }
-  if (cfg.dataRoot) add('data-root-writable', probes.dataRootWritable != null ? !!probes.dataRootWritable : probeWritable(cfg.dataRoot), cfg.dataRoot);
-  else add('data-root-writable', false, 'no dataRoot');
+
+  // durable data root available
+  if (cfg.dataRoot) {
+    const ok = probes.dataRootWritable != null ? !!probes.dataRootWritable : probeWritable(cfg.dataRoot);
+    add('data-root-writable', ok, cfg.dataRoot);
+  } else add('data-root-writable', false, 'no dataRoot');
+
+  // IAB / Brain transport callable. Reported PASS only when actually probed,
+  // otherwise DEFERRED (the IAB launcher probes it next) or FAIL.
   {
     let iab = 'DEFERRED', reason = 'iab transport not probed (deferred to launcher)';
     if (probes.iabCallable === true) { iab = 'PASS'; reason = 'iab transport callable'; }
     else if (probes.iabCallable === false) { iab = 'FAIL'; reason = 'iab transport not callable'; }
     checks.push({ check: 'iab-callable', status: iab, reason });
   }
+
   return { pass: checks.every((c) => c.status === 'PASS' || c.status === 'DEFERRED'), checks };
 }
 
+// Full doctor (RFC §7): only for setup / env change / preflight failure / explicit use.
 export async function fullDoctor({ config = null, codexJs = null, repoDir = null, stateDir = null } = {}) {
   const cfg = config || {};
   const out = [...doctorStatic({ codexJs: codexJs || cfg.codexJs, stateDir: stateDir || cfg.dataRoot, repoDir: repoDir || cfg.workspaceRoot })];
   const dl = await import('./doctor.js');
   const targetRepo = repoDir || cfg.workspaceRoot;
-  if (targetRepo) { try { out.push(dl.doctorGit({ repoDir: targetRepo })); } catch {} }
-  try { out.push(await dl.doctorIpc()); } catch {}
+  if (targetRepo) {
+    try { out.push(dl.doctorGit({ repoDir: targetRepo })); } catch (e) {}
+  }
+  try { out.push(await dl.doctorIpc()); } catch (e) {}
   out.push(...dl.doctorCompat());
   return out;
 }
 
+// Natural-language trigger detection for the brain-command launcher skill.
 export function isBrainCommandTrigger(text) {
   return /(指挥模式|让\s*ChatGPT\s*指挥|use\s+ChatGPT\s+as\s+the\s+brain|chatgpt\s+command\s+mode|brain\s*:\s*chatgpt|brain\s*=\s*chatgpt)/i.test(String(text || ''));
 }
 
+// --- Dogfood instrumentation (RFC §17 / §I) -------------------------------------
+// Lightweight metrics: bootstrap elapsed time to first valid Brain PLAN/TASK,
+// bootstrap tool/action count, broad-discovery occurrence, packet sizes, and
+// full-suite verification count. This is NOT a cost ledger.
 export function newBootstrapMetrics() {
-  return { startedAt: Date.now(), firstValidPlanTaskAt: null, bootstrapToolCount: 0, broadDiscoveryOccurred: false, stepPacketBytes: null, resultPacketBytes: null, fullSuiteVerificationCount: 0 };
+  return {
+    startedAt: Date.now(),
+    firstValidPlanTaskAt: null,
+    bootstrapToolCount: 0,
+    broadDiscoveryOccurred: false,
+    stepPacketBytes: null,
+    resultPacketBytes: null,
+    fullSuiteVerificationCount: 0,
+  };
 }
-export function recordBootstrapMetric(metrics, patch = {}) { return { ...metrics, ...patch }; }
+
+export function recordBootstrapMetric(metrics, patch = {}) {
+  return { ...metrics, ...patch };
+}
+
 export function bootstrapElapsedMs(metrics) {
   if (!metrics || typeof metrics.startedAt !== 'number') return null;
   return (metrics.firstValidPlanTaskAt || Date.now()) - metrics.startedAt;
