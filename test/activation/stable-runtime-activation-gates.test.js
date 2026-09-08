@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { StableRuntimeActivator } from '../../src/activation/stable-runtime-activator.js';
+import { StableRuntimeActivator, StableRuntimeActivationError, npmCiCommand } from '../../src/activation/stable-runtime-activator.js';
 
 const SHA = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
@@ -26,6 +26,27 @@ function binding() {
   };
 }
 
+function preCutoverRun({ failStep = null } = {}) {
+  const npmCommand = npmCiCommand('win32', process.env);
+  return async (file, args) => {
+    if (args.includes('fetch') || args.includes('merge-base') || args.includes('worktree')) return { code: 0, stdout: '', stderr: '' };
+    if (args.includes('rev-parse')) return { code: 0, stdout: `${SHA}\n`, stderr: '' };
+    if (file === npmCommand.file && args.join(' ') === npmCommand.args.join(' ')) {
+      if (failStep === 'dependency_install') throw new Error('spawn EINVAL');
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (file === process.execPath && args.includes('--oneshot')) {
+      if (failStep === 'preflight') {
+        const error = new Error('node preflight exited with code 1');
+        error.result = { code: 1, stdout: '', stderr: 'preflight failed' };
+        throw error;
+      }
+      return { code: 0, stdout: 'V02_RUNTIME {"readyForLocalMcp":true}\n', stderr: '' };
+    }
+    throw new Error(`unexpected command: ${file} ${args.join(' ')}`);
+  };
+}
+
 test('exact target validation rejects missing, mismatched, and non-main-reachable revisions', async () => {
   for (const mode of ['missing', 'mismatch', 'not-main']) {
     const activator = new StableRuntimeActivator({ run: async (_file, args) => {
@@ -44,7 +65,7 @@ test('exact target validation rejects missing, mismatched, and non-main-reachabl
   }
 });
 
-test('dependency preparation failure refuses cutover and never stops or starts a process', async () => {
+test('dependency spawn failure is phase prepare and refuses cutover before any stop/start', async () => {
   const { repo, configPath, config } = binding();
   let stopped = 0;
   let started = 0;
@@ -54,14 +75,39 @@ test('dependency preparation failure refuses cutover and never stops or starts a
     probeJson: async (url) => ({ ok: true, status: 200, body: { status: url.endsWith('/healthz') ? 'ok' : 'ready' } }),
     stopPid: () => { stopped += 1; },
     spawnRuntime: async () => { started += 1; return { pid: 222 }; },
-    run: async (file, args) => {
-      if (args.includes('fetch') || args.includes('merge-base') || args.includes('worktree')) return { code: 0, stdout: '', stderr: '' };
-      if (args.includes('rev-parse')) return { code: 0, stdout: `${SHA}\n`, stderr: '' };
-      if (file === 'npm.cmd') throw new Error('npm ci failed');
-      throw new Error(`unexpected command: ${file} ${args.join(' ')}`);
-    },
+    run: preCutoverRun({ failStep: 'dependency_install' }),
   });
-  await assert.rejects(() => activator.activate({ targetSha: SHA, configPath, repoPath: repo }), /npm ci failed/);
+  await assert.rejects(() => activator.activate({ targetSha: SHA, configPath, repoPath: repo }), (error) => {
+    assert.ok(error instanceof StableRuntimeActivationError);
+    assert.equal(error.details.phase, 'prepare');
+    assert.equal(error.details.step, 'dependency_install');
+    assert.equal(error.details.cause, 'spawn EINVAL');
+    return true;
+  });
+  assert.equal(stopped, 0);
+  assert.equal(started, 0);
+});
+
+test('preflight child-process failure is phase prepare and refuses cutover before any stop/start', async () => {
+  const { repo, configPath, config } = binding();
+  let stopped = 0;
+  let started = 0;
+  const activator = new StableRuntimeActivator({
+    platform: 'win32',
+    loadConfig: () => config,
+    probeJson: async (url) => ({ ok: true, status: 200, body: { status: url.endsWith('/healthz') ? 'ok' : 'ready' } }),
+    stopPid: () => { stopped += 1; },
+    spawnRuntime: async () => { started += 1; return { pid: 222 }; },
+    run: preCutoverRun({ failStep: 'preflight' }),
+  });
+  await assert.rejects(() => activator.activate({ targetSha: SHA, configPath, repoPath: repo }), (error) => {
+    assert.ok(error instanceof StableRuntimeActivationError);
+    assert.equal(error.details.phase, 'prepare');
+    assert.equal(error.details.step, 'preflight');
+    assert.equal(error.details.cause, 'node preflight exited with code 1');
+    assert.equal(error.details.exitCode, 1);
+    return true;
+  });
   assert.equal(stopped, 0);
   assert.equal(started, 0);
 });
