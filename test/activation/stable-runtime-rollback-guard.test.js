@@ -24,33 +24,30 @@ function binding() {
   return { root, repo, configPath, config };
 }
 
-test('cutover records a provisional rollback candidate only when serving revision matches exact clean same-profile state', async () => {
-  const { root, configPath, config } = binding();
-  const checkout = path.join(root, 'previous');
-  fs.mkdirSync(checkout, { recursive: true });
-  const state = {
-    version: 1, sha: PREVIOUS_SHA, checkout, configPath,
-    profileFingerprint: stableProfileFingerprint(config),
-  };
+test('first-use cutover binds a provisional rollback candidate only from proven serving revision plus an exact clean prepared same-profile checkout', async () => {
+  const { repo, configPath, config } = binding();
+  fs.mkdirSync(path.join(repo, 'node_modules'), { recursive: true });
   const activator = new StableRuntimeActivator({
     platform: 'win32',
     run: async (_file, args) => {
       if (args.includes('rev-parse')) return { code: 0, stdout: `${PREVIOUS_SHA}\n`, stderr: '' };
-      if (args.includes('status')) return { code: 0, stdout: '', stderr: '' };
+      if (args.includes('status') || args.includes('merge-base')) return { code: 0, stdout: '', stderr: '' };
       throw new Error(`unexpected command: ${args.join(' ')}`);
     },
   });
+  activator._trustedRepo = repo;
   activator._latestLocalProbe = {
     health: { ok: true, body: { revision: PREVIOUS_SHA } },
     ready: { ok: true, body: { revision: PREVIOUS_SHA } },
   };
-  const validated = await activator._validateRollbackState(state, {
+  const validated = await activator._validateRollbackState(null, {
     fingerprint: stableProfileFingerprint(config), configPath,
   });
   assert.equal(validated.sha, PREVIOUS_SHA);
+  assert.equal(validated.checkout, repo);
+  assert.equal(validated.profileFingerprint, stableProfileFingerprint(config));
   assert.equal(activator.rollbackEvidence.status, 'provisional_safe');
-  assert.equal(activator.rollbackEvidence.sha, PREVIOUS_SHA);
-  assert.equal(activator.rollbackEvidence.checkout, checkout);
+  assert.equal(activator.rollbackEvidence.source, 'serving_revision_plus_exact_clean_checkout_current_profile');
 });
 
 test('first-use readiness failure never guesses a previous revision and emits structured no-safe-rollback evidence', async () => {
@@ -86,7 +83,7 @@ test('first-use readiness failure never guesses a previous revision and emits st
     assert.equal(error.details.rollback.attempted, false);
     assert.equal(error.details.rollback.status, 'not_available');
     assert.equal(error.details.rollbackEvidence.status, 'no_safe_rollback');
-    assert.equal(error.details.rollbackEvidence.reason, 'no_valid_exact_clean_same_profile_activation_state');
+    assert.equal(error.details.rollbackEvidence.reason, 'serving_revision_not_exactly_proven');
     assert.equal(error.details.rollbackEvidence.healthRevision, null);
     assert.equal(error.details.rollbackEvidence.readyRevision, null);
     return true;
