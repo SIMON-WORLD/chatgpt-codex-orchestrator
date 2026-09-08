@@ -23,9 +23,10 @@ const VALID = {
   defaultBrain: 'chatgpt',
   defaultExecutor: 'codex',
   defaultConversationMode: 'new',
+  defaultRuntime: 'v0.2',
 };
 
-test('healthy: skill discoverable + valid config -> ok, exit 0, all six fields', () => {
+test('healthy: skill discoverable + valid config -> ok, exit 0, all safe fields (incl. defaultRuntime v0.2)', () => {
   const home = dir();
   writeSkill(home);
   writeBrainCommandConfig(VALID, { codexHome: home });
@@ -89,6 +90,44 @@ test('legacy skill only -> discoverable (WARN); ok with valid config', () => {
   assert.strictEqual(s.skill.discoverable, true);
   assert.strictEqual(s.skill.status, 'WARN');
   assert.strictEqual(s.ok, true);
+});
+
+test('config without defaultRuntime -> effective default is v0.2 (no implicit legacy)', () => {
+  const home = dir();
+  writeSkill(home);
+  const { defaultRuntime: _dr, ...noRuntime } = VALID;
+  writeBrainCommandConfig(noRuntime, { codexHome: home });
+  const s = brainCommandStatus({ codexHome: home, home });
+  assert.strictEqual(s.ok, true);
+  assert.strictEqual(s.fields.defaultRuntime, 'v0.2', 'absent defaultRuntime resolves to the v0.2 operational default');
+});
+
+test('explicit defaultRuntime alpha3 is an accepted legacy opt-in and is surfaced', () => {
+  const home = dir();
+  writeSkill(home);
+  writeBrainCommandConfig({ ...VALID, defaultRuntime: 'alpha3' }, { codexHome: home });
+  const s = brainCommandStatus({ codexHome: home, home });
+  assert.strictEqual(s.ok, true);
+  assert.strictEqual(s.fields.defaultRuntime, 'alpha3');
+});
+
+test('unsupported explicit defaultRuntime -> not ok (fail closed, never silently legacy)', () => {
+  const home = dir();
+  writeSkill(home);
+  writeBrainCommandConfig({ ...VALID, defaultRuntime: 'mystery-runtime' }, { codexHome: home });
+  const s = brainCommandStatus({ codexHome: home, home });
+  assert.strictEqual(s.ok, false);
+  assert.strictEqual(s.config.status, 'FAIL');
+  assert.match(s.config.reason, /unsupported defaultRuntime/);
+});
+
+test('formatBrainCommandStatus renders the defaultRuntime line', () => {
+  const home = dir();
+  writeSkill(home);
+  writeBrainCommandConfig({ ...VALID, defaultRuntime: 'alpha3' }, { codexHome: home });
+  const s = brainCommandStatus({ codexHome: home, home });
+  const text = formatBrainCommandStatus(s);
+  assert.match(text, /defaultRuntime:\s+alpha3/);
 });
 
 test('no secret/token field is surfaced in fields or status object', () => {
