@@ -25,6 +25,11 @@ function sendJson(res, status, obj) {
   res.end(JSON.stringify(obj));
 }
 
+function runtimeRevision() {
+  const value = String(process.env.V02_BUILD_REVISION || '').trim().toLowerCase();
+  return /^[0-9a-f]{40}$/.test(value) ? value : null;
+}
+
 export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null } = {}) {
   // Router + Governance are session-scoped (shared across all requests) so governance
   // state persists across route_decide / governance_transition / governance_status.
@@ -38,24 +43,20 @@ export async function startMcpServer({ workspaceRegistry, appServerExecutor = nu
 
   const httpServer = http.createServer(async (req, res) => {
     const url = (req.url || '').split('?')[0];
+    const revision = runtimeRevision();
 
-    if (req.method === 'GET' && url === '/healthz') return sendJson(res, 200, { status: 'ok' });
+    if (req.method === 'GET' && url === '/healthz') return sendJson(res, 200, { status: 'ok', revision });
     if (req.method === 'GET' && url === '/readyz') {
-      return sendJson(res, 200, { status: 'ready', loopback: host === '127.0.0.1' || host === '::1', hasAllowedRoots: !!workspaceRegistry && workspaceRegistry.hasAllowedRoots });
+      return sendJson(res, 200, { status: 'ready', revision, loopback: host === '127.0.0.1' || host === '::1', hasAllowedRoots: !!workspaceRegistry && workspaceRegistry.hasAllowedRoots });
     }
 
     if (url === '/mcp' || url === '/mcp/') {
-      // DNS-rebinding protection: invalid Host or non-local Origin -> 403.
       if (!validateHost(req, res)) return;
       if (!validateOrigin(req, res)) return;
-      try {
-        await nodeHandler(req, res);
-      } catch (e) {
-        if (!res.headersSent) sendJson(res, 500, { error: 'internal error' });
-      }
+      try { await nodeHandler(req, res); }
+      catch { if (!res.headersSent) sendJson(res, 500, { error: 'internal error' }); }
       return;
     }
-
     return sendJson(res, 404, { error: 'not_found' });
   });
 
@@ -63,10 +64,8 @@ export async function startMcpServer({ workspaceRegistry, appServerExecutor = nu
     httpServer.once('error', reject);
     httpServer.listen(port, host, () => resolve());
   });
-
   const addr = httpServer.address();
   const port2 = typeof addr === 'object' && addr ? addr.port : port;
   const close = () => new Promise((resolve) => httpServer.close(() => resolve()));
-
   return { httpServer, close, host, port: port2, url: `http://${host}:${port2}/mcp` };
 }
