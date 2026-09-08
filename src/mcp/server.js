@@ -30,27 +30,33 @@ function runtimeRevision() {
   return /^[0-9a-f]{40}$/.test(value) ? value : null;
 }
 
-export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null } = {}) {
-  // Router + Governance are session-scoped (shared across all requests) so governance
-  // state persists across route_decide / governance_transition / governance_status.
-  const router = capabilityRouter || createCapabilityRouter();
-  const gov = governanceService || createGovernanceService();
-  const factory = () => createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, verifyService, verifyChecks, capabilityRouter: router, governanceService: gov, worktreeService });
-  const handler = createMcpHandler(factory);
-  const nodeHandler = toNodeHandler(handler);
+export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, activationPreflight = false } = {}) {
+  // Normal serving mode keeps the canonical MCP tools surface. Activation preflight
+  // intentionally creates no MCP handler at all: only /healthz and /readyz exist as
+  // narrow startup evidence, so no Governance/Codex/worktree/generic MCP operation can
+  // be authorized through this temporary ephemeral listener.
+  let nodeHandler = null;
   const validateHost = localhostHostValidation();
   const validateOrigin = localhostOriginValidation();
+  if (!activationPreflight) {
+    const router = capabilityRouter || createCapabilityRouter();
+    const gov = governanceService || createGovernanceService();
+    const factory = () => createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, verifyService, verifyChecks, capabilityRouter: router, governanceService: gov, worktreeService });
+    const handler = createMcpHandler(factory);
+    nodeHandler = toNodeHandler(handler);
+  }
 
   const httpServer = http.createServer(async (req, res) => {
     const url = (req.url || '').split('?')[0];
     const revision = runtimeRevision();
 
-    if (req.method === 'GET' && url === '/healthz') return sendJson(res, 200, { status: 'ok', revision });
+    if (req.method === 'GET' && url === '/healthz') return sendJson(res, 200, { status: 'ok', revision, activationPreflight: !!activationPreflight });
     if (req.method === 'GET' && url === '/readyz') {
-      return sendJson(res, 200, { status: 'ready', revision, loopback: host === '127.0.0.1' || host === '::1', hasAllowedRoots: !!workspaceRegistry && workspaceRegistry.hasAllowedRoots });
+      return sendJson(res, 200, { status: 'ready', revision, activationPreflight: !!activationPreflight, loopback: host === '127.0.0.1' || host === '::1', hasAllowedRoots: !!workspaceRegistry && workspaceRegistry.hasAllowedRoots });
     }
 
     if (url === '/mcp' || url === '/mcp/') {
+      if (activationPreflight) return sendJson(res, 403, { error: 'activation_preflight_mcp_disabled' });
       if (!validateHost(req, res)) return;
       if (!validateOrigin(req, res)) return;
       try { await nodeHandler(req, res); }
