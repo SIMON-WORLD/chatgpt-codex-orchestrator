@@ -27,6 +27,10 @@ const config = {
   defaultBrain: 'chatgpt',
   defaultExecutor: 'codex',
   defaultConversationMode: 'new',
+  // Operational default (Issue #33): capability-first v0.2 / Stable Runtime.
+  // Alpha.3 legacy IAB is only an explicit opt-in compatibility fallback
+  // (config.defaultRuntime='alpha3' and/or BRAIN_COMMAND_LEGACY=1).
+  defaultRuntime: 'v0.2',
 };
 
 const res = setupBrainCommand({ codexHome, home, config });
@@ -37,4 +41,5 @@ console.log('  config file:     ' + res.configPath);
 console.log('  orchestratorRoot:' + config.orchestratorRoot);
 console.log('  dataRoot:        ' + config.dataRoot);
 console.log('  workspaceRoot:   ' + config.workspaceRoot);
-console.log('  defaults:        brain=chatgpt executor=codex conversation=new');
+const runtime = res.config && res.config.defaultRuntime ? res.config.defaultRuntime : 'v0.2';
+console.log('  defaults:        brain=chatgpt executor=codex conversation=new runtime=' + runtime + ' (v0.2 capability-first; Alpha.3 legacy IAB = explicit opt-in)');
