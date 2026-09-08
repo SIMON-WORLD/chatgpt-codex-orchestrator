@@ -16,9 +16,13 @@
 | N3 — Capability-First Re-baseline | **CLOSED** | capability-first 已成为当前 operating model |
 | M7 — Real-Project Capability Routing Dogfood | **CLOSED / ACCEPTED** | Native-only / Codex-required / Hybrid 全部 PASS |
 | Brain Continuity hardening | **CLOSED / ACCEPTED** | Issue #23 / PR #24 merged；formal Conversation A → real runtime restart → Conversation B dogfood PASS |
-| Direct Local canonical-path hardening | **ACTIVE** | Issue #27；关闭 symlink/junction sensitive-path policy alias bypass |
-| Default-policy review | **DEFERRED** | #27 关闭后重新决策；不自动 flip |
-| M8 — RC / Release | **PENDING** | default-policy gate 关闭后再进入 |
+| Direct Local canonical-path hardening | **CLOSED / ACCEPTED** | Issue #27；symlink/junction sensitive-path alias bypass closed |
+| Operational default-policy review | **CLOSED / ACCEPTED** | Issue #32；authorized Issue #33 implementation |
+| Bounded implementation-session continuity | **CLOSED / ACCEPTED** | Issue #34；scoped execution claim + real preserved-#33 dogfood PASS |
+| Stable Runtime activation bootstrap | **CLOSED / ACCEPTED** | Issue #36；exact accepted revision activation path + real dogfood support |
+| Thin Parent / Strong Mission policy correction | **ACTIVE** | Issue #43；policy/docs only；branch + PR + Parent independent review |
+| v0.2 operational default flip | **PAUSED / SAME MISSION** | Issue #33；resume after #43 Parent acceptance; preserved partial delta remains starting point |
+| M8 — RC / Release | **PENDING** | only after explicit Issue #33 Parent acceptance/default decision |
 
 ## N3 — 已接受基线
 
@@ -102,49 +106,111 @@ Formal isolated real-runtime dogfood 已 PASS：
 - lost required acceptance/evidence = `0`；
 - production/control-state pollution = `0`。
 
-Brain Continuity 现已不再阻塞 operational default review。
+## Post-Brain-Continuity hardening — CLOSED / ACCEPTED
 
-## Current gate — Direct Local canonical-path hardening (#27)
+### Issue #27 — Direct Local canonical-path hardening
 
-Independent audit 发现 Direct Local 的 sensitive/blocked-path policy 对 caller-visible alias path 检查，但 workspace-internal symlink/junction 可能指向另一个 canonical sensitive target，从而形成 policy alias bypass。该问题不属于 Brain Continuity correctness，但在 operational default flip 前必须关闭。
+Issue #27 closed the canonical symlink/junction sensitive-path alias bypass and is no longer an operational-default blocker.
 
-Issue #27 的 bounded contract：
+### Issue #34 — bounded implementation-session continuity
 
-1. sensitive/blocked rule 同时检查 requested path 与 canonical target / nearest existing canonical parent；
-2. mutation apply 时重新 canonicalize/revalidate，preview → apply 期间 link retarget 必须 fail closed；
-3. 保留安全的普通 internal symlink；不做无 evidence 的 blanket ban；
-4. regression 至少覆盖 file alias、directory alias/new-file create、preview→apply retarget、Windows junction-equivalent（where feasible）；
-5. 正常 deterministic CI；由于项目主要运行在 Windows，评估 Windows Node 24 coverage。
+Issue #33 fresh-session dogfood exposed a control-plane gap: Parent fencing correctly protected project controls, but a disposable bounded non-Parent implementation session could not continue an already-authorized Direct Local step without the Parent token. Issue #34 added a narrow task/step/workspace-scoped execution continuation claim, kept Parent generation/control authority separate, fenced stale claims, and passed the required real dogfood on the preserved Issue #33 worktree.
 
-Execution route：`HYBRID`，使用 ONE milestone-sized `CODEX_DELEGATE` 完成 inspect → edit → test → debug → refactor → retest → commit/push；Parent 随后从 GitHub/CI 独立验收。
+### Issue #36 — Stable Runtime activation bootstrap
 
-## Operational default policy review
+Issue #34 real dogfood required activating the accepted runtime revision without manual shell choreography. Issue #36 added the bounded exact-revision Stable Runtime activation boundary, preserving stable profile/dataRoot/Governance namespace/tunnel identity and enabling the real #34/#33 path.
 
-**Current decision: DEFER operational default flip until Issue #27 closes.**
+## Operating-model correction — Issue #43
 
-Brain Continuity blocker 已关闭，但这不自动 flip。#27 通过后，Parent Brain 必须基于当时 current `main`、tests、real-project dogfood、Direct Local safety 与 capability behavior 重新执行一次 default-policy decision。
+Recent #33/#34/#36 dogfood proved the v0.2 technical substrate while exposing a workflow problem: Parent conversations repeatedly entered routine implementation/debug hot paths, ordinary bugs caused unnecessary Parent round-trips, and the user risked becoming a conversation message bus.
+
+Issue #43 therefore materializes the bounded project-policy correction:
+
+`Thin Parent / Strong Mission / exception-based escalation`
+
+### Parent owns
+
+- North Star / architecture；
+- project policy；
+- mission outcome / authoritative acceptance contract；
+- material `REPLAN`；
+- cross-resource / authority conflict；
+- milestone independent acceptance；
+- operational default / release decisions。
+
+Parent does not enter routine implementation hot path.
+
+### Bounded mission owns within contract
+
+Once outcome、scope、acceptance、escalation boundary 与 required capability are clear, bounded non-Parent mission continuously progresses：
+
+`inspect → diagnose → implement → test → debug/retry → commit/push → PR → exact-head verification`
+
+A conversation turn, one tool-call boundary, or an ordinary in-scope implementation bug is not an escalation boundary.
+
+### Escalate only on material conditions
+
+- scope / acceptance must change；
+- authority / ownership conflict；
+- material architecture change；
+- destructive / irreversible / high-risk policy；
+- capability gap cannot be safely closed inside the authorized route；
+- material security / permission / long-term cost / breaking semantics；
+- project-level default / release decision。
+
+### Pointer-not-payload / acceptance discipline
+
+- GitHub Issue / PR / CI / current code = implementation/project truth；
+- durable Local Governance = live local control truth；
+- mission session writes material checkpoint / candidate SHA / PR / CI / residual material risk to durable surfaces；
+- user does not relay internal IDs、tokens、RESULT、routine error logs or shell/git/test output；
+- Issue body + Parent durable decision define mandatory acceptance；mission prompt cannot silently add new gates；
+- dogfood friction is classified P0 / P1 / P2 before it is promoted into new Governance scope。
+
+Canonical session naming：Parent = `① chatgpt-codex-orchestrator | 总控`；others = `chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>` where `MISSION_TYPE` is `IMPLEMENT / DOGFOOD / REVIEW / RUNTIME / INVESTIGATE`。
+
+Issue #43 is **policy/docs only**. It does not add runtime/Governance features and must use branch + PR with Parent independent review.
+
+## Operational default flip — SAME Issue #33
+
+Issue #32 already issued explicit default-policy **ACCEPT** and opened Issue #33. The old roadmap state `DEFER until #27 closes` is therefore historical, not current.
+
+Issue #33 remains the authorized bounded implementation milestone that makes the accepted v0.2 capability-first operating model the actual operational default while retaining Alpha.3/IAB as explicit feature-frozen compatibility/fallback.
+
+Current sequence:
+
+1. complete Issue #43 policy/docs candidate → exact-head PR → Parent independent review；
+2. after #43 Parent ACCEPT/merge, resume the **SAME Issue #33 durable task / SAME logical mission** from the preserved partial delta under Strong Mission rules；
+3. #33 mission autonomously continues inspect → diagnose → implement → tests/debug → commit/push → Draft PR → exact-head Node 22/24 verification；
+4. mission posts one material `IMPLEMENTATION_READY_FOR_PARENT_REVIEW` checkpoint and stops；
+5. Parent independently reacquires exact GitHub diff/files/tests/CI and decides `ACCEPT / REVISE`。
+
+No second Codex execution is authorized for #33. No Alpha.3 workaround, Parent takeover, manual durable JSON, user token/ID relay, M8/version/tag/release, or project-level self-acceptance is part of this path.
 
 ## Non-blocking observations
 
-以下 finding 保留，但当前不单独阻塞 #27：
+以下 finding 保留，但当前不自动变成 blocking gate：
 
 - **Codex Desktop thread visibility:** external App Server thread 的 Desktop sidebar live visibility 不可靠；作为独立 upstream/product investigation 处理，不回退 IAB。
 - **Passive execution observability:** long-running execution 缺少稳定用户 status/notification surface；后续作为 UX/observability candidate。
-- **Custom App conversation capability volatility:** 部分 conversation 曾从可实际调用 Developer MCP 变为 `FORBIDDEN: This conversation does not support developer MCPs`，而 fresh conversation 在 SAME Local MCP/tunnel 上可恢复。该 evidence 强化 capability availability 必须按 session/message boundary 重新发现；Brain Continuity 负责安全 rollover，不声称修复 ChatGPT 平台本身的 capability gate。
-- **Node 24 executor test timing:** ownership/permission continuation tests 偶发 timing failure，same-head rerun 可 PASS；保留为 test-stability evidence，不当前视作 Brain Continuity regression。
+- **Custom App conversation capability volatility:** 部分 conversation 曾从可实际调用 Developer MCP 变为 `FORBIDDEN: This conversation does not support developer MCPs`，而 fresh conversation 在 SAME Local MCP/tunnel 上可恢复。availability 必须按 session/message boundary 重新发现。
+- **Node 24 executor test timing:** ownership/permission continuation tests 偶发 timing failure，same-head rerun 可 PASS；保留为 test-stability evidence，除非出现 reproducible correctness evidence。
+- **Branch protection:** current `main` 尚未强制 required checks；属于后续 delivery hardening candidate，不属于 #43/#33 scope。
+- **Parent direct-main mistake:** Issue #43 记录了两次 no-net-content direct-main commits；accepted correction 是 branch + PR discipline，不做 history rewrite，也不创建新 runtime feature。
 
 ## M8 — RC / Release
 
-M8 只在 #27 关闭并重新完成 operational default policy decision 后进入。至少需要：
+M8 只在 Issue #33 operational-default candidate 经 Parent independent acceptance 后进入。至少需要：
 
 - current code / docs / public Skill/default entry 一致；
 - required CI / regression green；
 - M7 real-project dogfood evidence 完整；
 - Brain Continuity restart/re-entry dogfood PASS；
+- bounded mission continuity / Stable Runtime activation evidence 已闭环；
 - operational default 语义真实切换且 legacy IAB 保持 feature-frozen fallback/compatibility boundary；
 - state schema / migration / rollback / runtime compatibility 等 release hardening 完成；
-- release/version/tag 由 Brain 独立验收后决定。
+- release/version/tag 由 Parent 独立验收后决定。
 
 ## M8 之后
 
-不在本文件预设 v0.3 / v0.4 固定阶段。未来方向必须由新的真实需求与 dogfood evidence 驱动，并通过后续 PLAN / RFC 决定。用户现有 GitHub 项目组合（包括长期、多 repo 项目）可以在 v0.2 稳定后成为真实 dogfood portfolio；是否需要 multi-workstream / multi-Child orchestration，由这些真实应用 evidence 再决定。
+不在本文件预设 v0.3 / v0.4 固定阶段。未来方向必须由新的真实需求与 dogfood evidence 驱动，并通过后续 PLAN / RFC 决定。是否需要 multi-workstream / multi-Agent orchestration，也只由后续真实 portfolio evidence 决定；v0.2 不预先扩张为 multi-Parent、Child-Brain hierarchy、scheduler、consensus、generic RBAC/lease 或 workflow engine。
