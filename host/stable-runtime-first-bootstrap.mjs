@@ -5,6 +5,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const EXACT_SHA_RE = /^[0-9a-f]{40}$/i;
+const ACTIVATION_EVIDENCE_PREFIX = 'STABLE_RUNTIME_ACTIVATION ';
+const MAX_STRUCTURED_STRING_CHARS = 2048;
+const MAX_STRUCTURED_ARRAY_ITEMS = 20;
+const MAX_STRUCTURED_OBJECT_KEYS = 50;
+const MAX_FALLBACK_CHARS = 512;
+const MAX_FALLBACK_LINES = 4;
+const SENSITIVE_DIAGNOSTIC_KEY_RE = /(?:api[_-]?key|authorization|cookie|credential|password|secret|token|^env$|^environment$|^stdout$|^stderr$)/i;
 const REQUIRED_TARGET_FILES = [
   'scripts/stable-runtime-activate.mjs',
   'src/activation/stable-runtime-activator.js',
@@ -94,11 +101,75 @@ function loadBootstrapBinding(fsImpl, configPath, repoPath, platform) {
   return { absoluteConfigPath, repo };
 }
 
+function redactSensitiveText(value) {
+  return String(value || '')
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
+    .replace(/\b(api[_-]?key|authorization|cookie|credential|password|secret|token)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi, '$1=[REDACTED]');
+}
+
+function boundedStructuredValue(value, depth = 0) {
+  if (depth > 6) return '[TRUNCATED]';
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const redacted = redactSensitiveText(value);
+    return redacted.length <= MAX_STRUCTURED_STRING_CHARS
+      ? redacted
+      : `${redacted.slice(0, MAX_STRUCTURED_STRING_CHARS - 3)}...`;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, MAX_STRUCTURED_ARRAY_ITEMS).map((entry) => boundedStructuredValue(entry, depth + 1));
+  }
+  if (!value || typeof value !== 'object') return undefined;
+
+  const out = {};
+  for (const [key, entry] of Object.entries(value).slice(0, MAX_STRUCTURED_OBJECT_KEYS)) {
+    if (SENSITIVE_DIAGNOSTIC_KEY_RE.test(key)) continue;
+    const bounded = boundedStructuredValue(entry, depth + 1);
+    if (bounded !== undefined) out[key] = bounded;
+  }
+  return out;
+}
+
+export function parseActivationFailureEvidence(stderr, stdout) {
+  for (const output of [stderr, stdout]) {
+    for (const line of String(output || '').split(/\r?\n/)) {
+      if (!line.startsWith(ACTIVATION_EVIDENCE_PREFIX)) continue;
+      try {
+        const payload = JSON.parse(line.slice(ACTIVATION_EVIDENCE_PREFIX.length));
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.status !== 'FAIL') continue;
+        return boundedStructuredValue(payload);
+      } catch {}
+    }
+  }
+  return null;
+}
+
+function boundedOutputSnippet(output) {
+  const lines = String(output || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-MAX_FALLBACK_LINES);
+  if (!lines.length) return null;
+  const redacted = redactSensitiveText(lines.join(' | '));
+  return redacted.length <= MAX_FALLBACK_CHARS
+    ? redacted
+    : `${redacted.slice(0, MAX_FALLBACK_CHARS - 3)}...`;
+}
+
 function parseActivationResult(output) {
-  const line = String(output || '').split(/\r?\n/).find((entry) => entry.startsWith('STABLE_RUNTIME_ACTIVATION '));
+  const line = String(output || '').split(/\r?\n/).find((entry) => entry.startsWith(ACTIVATION_EVIDENCE_PREFIX));
   if (!line) throw new StableRuntimeFirstBootstrapError('target activator did not emit structured activation evidence', { phase: 'target_activator' });
-  try { return JSON.parse(line.slice('STABLE_RUNTIME_ACTIVATION '.length)); }
+  try { return JSON.parse(line.slice(ACTIVATION_EVIDENCE_PREFIX.length)); }
   catch { throw new StableRuntimeFirstBootstrapError('target activator emitted invalid structured activation evidence', { phase: 'target_activator' }); }
+}
+
+export function firstBootstrapFailurePayload(error) {
+  return {
+    status: 'FAIL',
+    message: error?.message || String(error),
+    ...(error instanceof StableRuntimeFirstBootstrapError ? error.details : {}),
+  };
 }
 
 export async function firstBootstrap(
@@ -157,8 +228,30 @@ export async function firstBootstrap(
       { cwd: checkout, env: process.env },
     );
   } catch (error) {
+    const childResult = error?.result && typeof error.result === 'object' ? error.result : null;
+    const childFailure = parseActivationFailureEvidence(childResult?.stderr, childResult?.stdout);
+    if (childFailure) {
+      const details = {
+        bootstrapPhase: 'target_activator',
+        requestedSha: sha,
+        checkout,
+        targetExitCode: childResult?.code ?? null,
+        ...childFailure,
+      };
+      if (!details.phase) details.phase = 'target_activator';
+      throw new StableRuntimeFirstBootstrapError(childFailure.message || 'target checkout activator failed', details);
+    }
+
+    const stderrSummary = boundedOutputSnippet(childResult?.stderr);
+    const stdoutSummary = boundedOutputSnippet(childResult?.stdout);
     throw new StableRuntimeFirstBootstrapError('target checkout activator failed', {
-      phase: 'target_activator', sha, checkout, cause: error?.message || String(error), targetExitCode: error?.result?.code ?? null,
+      phase: 'target_activator',
+      sha,
+      checkout,
+      cause: error?.message || String(error),
+      targetExitCode: childResult?.code ?? null,
+      ...(stderrSummary ? { targetStderrSummary: stderrSummary } : {}),
+      ...(stdoutSummary ? { targetStdoutSummary: stdoutSummary } : {}),
     });
   }
 
@@ -225,8 +318,7 @@ async function main() {
     const result = await firstBootstrap(args);
     process.stdout.write(`STABLE_RUNTIME_FIRST_BOOTSTRAP ${JSON.stringify(result)}\n`);
   } catch (error) {
-    const payload = { status: 'FAIL', message: error?.message || String(error), ...(error instanceof StableRuntimeFirstBootstrapError ? error.details : {}) };
-    process.stderr.write(`STABLE_RUNTIME_FIRST_BOOTSTRAP ${JSON.stringify(payload)}\n`);
+    process.stderr.write(`STABLE_RUNTIME_FIRST_BOOTSTRAP ${JSON.stringify(firstBootstrapFailurePayload(error))}\n`);
     process.exitCode = 1;
   }
 }
