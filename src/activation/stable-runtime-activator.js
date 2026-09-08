@@ -265,7 +265,7 @@ export class StableRuntimeActivator {
 
     let preflight;
     try {
-      preflight = await this.run(process.execPath, ['scripts/v0.2-start.mjs', '--config', configPath, '--oneshot'], {
+      preflight = await this.run(process.execPath, ['scripts/v0.2-start.mjs', '--config', configPath, '--activation-preflight', '--oneshot'], {
         cwd: checkout,
         env: { ...process.env, V02_PORT: '0', V02_BUILD_REVISION: sha },
       });
