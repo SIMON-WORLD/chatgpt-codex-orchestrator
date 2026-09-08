@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { StableRuntimeActivator, StableRuntimeActivationError } from '../src/activation/stable-runtime-activator.js';
+import { StableRuntimeActivator, StableRuntimeActivationError } from '../src/activation/stable-runtime-rollback-guard.js';
 
 function parseArgs(argv) {
   const out = {};
