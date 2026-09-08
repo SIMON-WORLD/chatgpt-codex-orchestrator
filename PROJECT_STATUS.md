@@ -12,17 +12,22 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 
 长期连续性原则：**Brain session 可以替换，但 logical work / authority / evidence 不能依赖单一 conversation 或单一 runtime process 的内存存活。** Conversation 是 interaction/context surface，不是 project/control truth。
 
+当前项目 operating model 正在通过 Issue #43 固化为 **Thin Parent / Strong Mission / exception-based escalation**：project-level Parent 保持 project policy / mission contract / material REPLAN / independent acceptance / default-release authority；bounded non-Parent mission session 在既定 contract 内持续推进 routine implementation，并通过 durable pointer 恢复，不让用户充当 conversation message bus。
+
 ## 当前发布 / operational 状态
 
 - **Released version:** `v0.1.0-alpha.3`
 - **Released/default operational path:** Alpha.3 legacy IAB Direct Brain Loop（feature-frozen）
-- **v0.2:** candidate；M0–M7 与 Brain Continuity core/dogfood 已完成，但尚未 operational default flip / release
+- **v0.2:** candidate；M0–M7、Brain Continuity、Direct Local canonical-path hardening、bounded implementation-session continuity 与 Stable Runtime activation bootstrap 已完成；operational default flip 尚未 Parent-ACCEPT
 - **Brain Continuity:** implementation + exact-head CI + formal Conversation A → real runtime restart → Conversation B dogfood **ACCEPTED / COMPLETE**
-- **Current pre-default blocker:** Issue #27 Direct Local canonical symlink/junction sensitive-path policy hardening
+- **Issue #34:** **CLOSED / ACCEPTED**；bounded non-Parent execution continuation claim 已通过 preserved Issue #33 real dogfood
+- **Issue #36:** **CLOSED / ACCEPTED**；Stable Runtime exact-revision activation bootstrap 已完成并支持 #34 real dogfood
+- **Issue #43:** **ACTIVE**；bounded project-policy correction：Thin Parent / Strong Mission
+- **Issue #33:** **PAUSED only until #43 Parent acceptance**；scope/acceptance/default-flip semantics 未改变，preserved partial delta 仍是 SAME mission starting point
 - **M8:** 尚未进入
 - **Version bump / release:** 尚未执行
 
-当前规范性 routing policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。Brain Continuity contract 见 [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md)。
+当前规范性 routing / executor / operating policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。Brain Continuity contract 见 [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md)。
 
 ## 已接受基线
 
@@ -38,7 +43,12 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 | N3 | **ACCEPTED** | Capability-First operating model / control-plane re-baseline |
 | M7 | **ACCEPTED / COMPLETE** | Native-only + Codex-required + Hybrid real-project dogfood |
 | Brain Continuity | **ACCEPTED / COMPLETE** | Issue #23 / PR #24 merged；durable Governance + semantic re-entry + Parent fencing + SAME-execution recovery + formal restart/re-entry dogfood PASS |
-| Direct Local canonical-path hardening | **ACTIVE** | Issue #27；must close before operational default review |
+| Direct Local canonical-path hardening | **CLOSED / ACCEPTED** | Issue #27；canonical symlink/junction sensitive-path policy hardening merged and accepted |
+| Operational default-policy review | **CLOSED / ACCEPTED** | Issue #32；authorized Issue #33 default-flip implementation |
+| Bounded implementation-session continuity | **CLOSED / ACCEPTED** | Issue #34；execution continuation claim separated from Parent control authority；real #33 dogfood PASS |
+| Stable Runtime activation bootstrap | **CLOSED / ACCEPTED** | Issue #36；exact accepted revision activation with preserved stable profile/state |
+| Thin Parent / Strong Mission policy correction | **ACTIVE** | Issue #43；policy/docs only；must reach Parent independent review before SAME #33 resumes |
+| v0.2 operational default flip | **PAUSED / SAME MISSION** | Issue #33；resume immediately after #43 Parent acceptance under Strong Mission contract |
 
 ## M7 — Real-Project Capability Routing Dogfood
 
@@ -93,27 +103,48 @@ Final required metrics：
 
 The dogfood additionally observed real ChatGPT product capability volatility: some conversations that had previously invoked Developer MCP later returned `FORBIDDEN: This conversation does not support developer MCPs`, while a fresh conversation on the SAME Local MCP/tunnel could invoke successfully. This is treated as capability-plane evidence, not as Governance corruption. Brain Continuity provides safe session rollover; it does not claim to repair the upstream ChatGPT capability gate itself。
 
-## Current pre-default blocker — Issue #27
+## Post-Brain-Continuity hardening — CLOSED / ACCEPTED
 
-**Direct Local canonical symlink/junction sensitive-path policy hardening — ACTIVE / BLOCKING operational default review**
+### Issue #27 — Direct Local canonical-path hardening
 
-Independent audit found that workspace containment already canonicalizes links, but sensitive/blocked-path policy can still be evaluated against the caller-visible alias path rather than the canonical in-workspace target. A safe-looking symlink/junction may therefore alias a sensitive path such as `.git/...` or a secrets path while remaining inside the workspace boundary。
+The symlink/junction sensitive-path alias bypass identified before default review is closed. Current accepted Direct Local behavior evaluates sensitive/blocked policy against canonical targets and preserves apply-time canonical safety; Issue #27 is no longer an operational-default blocker.
 
-Required bounded fix：
+### Issue #34 — bounded implementation-session continuity
 
-1. Evaluate sensitive/blocked rules against both requested path and canonical target / nearest existing canonical parent。
-2. Revalidate canonical mutation target at apply time; preview → apply link retargeting must fail closed。
-3. Preserve ordinary safe internal symlinks where compatible; no blanket symlink ban without evidence。
-4. Add regressions for file alias, directory alias/new-file create, preview→apply retarget, and Windows junction-equivalent behavior where feasible。
-5. Run normal deterministic gates; evaluate Windows Node 24 coverage because the primary operating environment is Windows。
+Issue #33 fresh-session dogfood exposed that Parent fencing alone did not let a disposable bounded non-Parent mission session continue an already-authorized Direct Local step without receiving the Parent token. Issue #34 added a narrow task/step/workspace execution continuation claim, kept Parent generation/control authority separate, fenced stale claims, and passed real dogfood on the preserved Issue #33 worktree.
 
-Execution policy：`HYBRID` + ONE milestone-sized `CODEX_DELEGATE`；Codex owns local inspect/edit/test/debug/refactor/retest/commit/push tactics，Parent independently verifies GitHub diff / PR / CI before ACCEPT/REVISE。
+### Issue #36 — Stable Runtime activation bootstrap
 
-## Operational default policy review
+Issue #34 dogfood required activating the accepted exact runtime revision without manual shell choreography. Issue #36 added the bounded exact-revision Stable Runtime activation boundary and completed the real activation path while preserving the stable profile/dataRoot/Governance namespace/tunnel identity.
 
-**Decision: DEFER until Issue #27 closes.**
+## Current operating gate — Issue #43 then SAME Issue #33
 
-Brain Continuity is no longer the blocker and does not automatically trigger the v0.2 default flip. After #27 closes, Parent Brain must re-read current code/docs/tests/dogfood evidence and explicitly choose ACCEPT / REVISE for the operational default policy。
+Issue #43 is a **project-policy correction**, not another runtime prerequisite. Recent dogfood proved the v0.2 technical substrate is useful but the Parent/mission workflow was too turn-heavy and could make the user a message courier.
+
+The accepted direction being materialized is:
+
+`Thin Parent / Strong Mission / exception-based escalation`
+
+Key operating rules:
+
+- Parent owns North Star / architecture / project policy / mission acceptance contract / material REPLAN / cross-resource authority conflicts / milestone independent acceptance / default-release decisions；
+- bounded mission owns continuous progression inside its contract：`inspect → diagnose → implement → test → debug/retry → commit/push → PR → exact-head verification`；
+- ordinary bugs/tool boundaries are not Parent escalation points；
+- GitHub Issue/PR/CI/current code remain implementation truth；durable Local Governance remains live local control truth；
+- user does not relay internal IDs/tokens/RESULT or routine logs；
+- Issue body + Parent durable decision define mandatory acceptance；ordinary prompts may not add hidden gates；
+- dogfood friction uses P0/P1/P2 classification before creating new Governance work；
+- canonical session naming is `① chatgpt-codex-orchestrator | 总控` for Parent and `chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>` for other sessions。
+
+After Issue #43 receives Parent independent acceptance and merges, resume the **SAME Issue #33 durable task / SAME implementation mission** from the preserved partial delta. Do not create a new Codex execution or new project-level scope.
+
+## Operational default flip — Issue #33
+
+Issue #32 already completed the explicit operational-default review with **ACCEPT** and authorized Issue #33. Therefore the old `DEFER until #27 closes` statement is historical and no longer current policy.
+
+Issue #33 remains the bounded implementation milestone that makes the accepted v0.2 capability-first model the actual operational default while keeping Alpha.3 legacy IAB explicit, feature-frozen compatibility/fallback. Its scope and acceptance contract are unchanged by Issue #43; only the mission operating policy is being corrected before continuation.
+
+Issue #33 is not M8 and does not authorize version bump/tag/release.
 
 ## Non-blocking observations retained
 
@@ -121,20 +152,21 @@ Brain Continuity is no longer the blocker and does not automatically trigger the
 2. **Passive execution observability:** long-running execution 缺少稳定用户 status/notification surface；后续作为 UX/observability candidate。
 3. **Developer MCP conversation volatility:** per-conversation invocation may disappear even when the SAME local transport is healthy；availability must be rediscovered rather than assumed。
 4. **Node 24 executor test timing:** ownership/permission continuation tests have shown transient timing failures that pass on same-head rerun；retain as test-stability evidence unless reproducible correctness evidence emerges。
-5. **Branch protection:** current `main` is not protected by required checks；delivery-hardening candidate, not current #27 implementation scope。
+5. **Branch protection:** current `main` is not protected by required checks；delivery-hardening candidate, not current #43/#33 scope。
+6. **Parent direct-main process mistake:** Issue #43 records two no-net-content direct-main commits from Parent preparation；accepted response is branch + PR discipline, not history rewrite or a new runtime feature。
 
 ## 当前下一步
 
-1. **Issue #27:** bounded Direct Local canonical-path hardening implementation + regressions。
-2. **Parent independent acceptance:** exact diff / changed files / CI / Windows-relevant evidence；REVISE if any safety regression。
-3. **Operational default-policy review:** only after #27 closes；do not auto-flip。
-4. **M8 RC / Release:** only after explicit default-policy ACCEPT；version/tag/release remain unauthorized before that gate。
+1. **Issue #43:** complete minimum policy/docs reconciliation on branch + exact-head PR and stop for Parent independent review。
+2. **SAME Issue #33:** after #43 Parent ACCEPT/merge, resume preserved default-flip implementation under Strong Mission contract and continue autonomously to exact candidate + Draft PR + exact-head CI。
+3. **Parent independent acceptance:** Parent reacquires Issue #33 exact diff/files/tests/CI and decides `ACCEPT / REVISE`；mission session does not self-accept default flip。
+4. **M8 RC / Release:** remains separate and unauthorized until explicit post-#33 Parent decision。
 
 ## Authority
 
 - **GitHub `main` / current code / PR / CI:** implementation truth / canonical authority。
-- **`CAPABILITY_ROUTING.md`:** current routing / executor policy。
-- **`docs/rfc-v0.2-brain-continuity.md`:** accepted Brain Continuity contract。
+- **`CAPABILITY_ROUTING.md`:** current routing / executor / operating policy。
+- **`docs/rfc-v0.2-brain-continuity.md`:** Brain Continuity contract and historical design rationale；current implementation state is also reflected by GitHub code/tests/issues。
 - **`docs/architecture.md`:** current technical architecture facts。
 - **`ROADMAP.md`:** accepted high-level sequence / current gate。
 - **GitHub Issues / PR comments:** durable mission/checkpoint/review surfaces；they do not replace live Local Governance authority for mutating local control state。
