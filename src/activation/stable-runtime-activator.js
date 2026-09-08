@@ -6,6 +6,7 @@ import { loadV02Config } from '../config.js';
 
 const EXACT_SHA_RE = /^[0-9a-f]{40}$/i;
 const STATE_FILE = 'stable-runtime-active.json';
+const PREPARE_CAUSE_LIMIT = 320;
 
 export class StableRuntimeActivationError extends Error {
   constructor(message, details = {}) {
@@ -89,6 +90,25 @@ export function parseV02RuntimeReport(stdout) {
   if (!line) throw new StableRuntimeActivationError('pre-activation runtime sanity check did not emit V02_RUNTIME evidence', { phase: 'prepare' });
   try { return JSON.parse(line.slice('V02_RUNTIME '.length)); }
   catch { throw new StableRuntimeActivationError('pre-activation runtime sanity check emitted invalid V02_RUNTIME evidence', { phase: 'prepare' }); }
+}
+
+export function npmCiCommand(platform = process.platform, env = process.env) {
+  if (platform === 'win32') {
+    return { file: env?.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', 'npm.cmd', 'ci'] };
+  }
+  return { file: 'npm', args: ['ci'] };
+}
+
+function boundedPrepareCause(error) {
+  const value = error?.message || String(error);
+  return String(value).replace(/\s+/g, ' ').trim().slice(0, PREPARE_CAUSE_LIMIT);
+}
+
+function prepareCommandError(message, step, error) {
+  const details = { phase: 'prepare', step, cause: boundedPrepareCause(error) };
+  const exitCode = error?.result?.code;
+  if (Number.isInteger(exitCode)) details.exitCode = exitCode;
+  return new StableRuntimeActivationError(message, details);
 }
 
 export async function runCommand(file, args, { cwd = undefined, env = process.env } = {}) {
@@ -235,11 +255,24 @@ export class StableRuntimeActivator {
       const dirty = (await this.run('git', ['-C', checkout, 'status', '--porcelain'])).stdout.trim();
       if (head !== sha || dirty) throw new StableRuntimeActivationError('existing activation checkout is not an exact clean target worktree', { phase: 'prepare', checkout, expectedSha: sha, actualSha: head, dirty: !!dirty });
     }
-    await this.run(this.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci'], { cwd: checkout });
-    const preflight = await this.run(process.execPath, ['scripts/v0.2-start.mjs', '--config', configPath, '--oneshot'], {
-      cwd: checkout,
-      env: { ...process.env, V02_PORT: '0', V02_BUILD_REVISION: sha },
-    });
+
+    const npmCi = npmCiCommand(this.platform, process.env);
+    try {
+      await this.run(npmCi.file, npmCi.args, { cwd: checkout });
+    } catch (error) {
+      throw prepareCommandError('dependency installation failed during target preparation', 'dependency_install', error);
+    }
+
+    let preflight;
+    try {
+      preflight = await this.run(process.execPath, ['scripts/v0.2-start.mjs', '--config', configPath, '--oneshot'], {
+        cwd: checkout,
+        env: { ...process.env, V02_PORT: '0', V02_BUILD_REVISION: sha },
+      });
+    } catch (error) {
+      throw prepareCommandError('pre-activation runtime sanity check process failed', 'preflight', error);
+    }
+
     const report = parseV02RuntimeReport(preflight.stdout);
     if (report.readyForLocalMcp !== true) throw new StableRuntimeActivationError('prepared target failed local-MCP startup sanity check', { phase: 'prepare', sha, report });
     const preparedHead = (await this.run('git', ['-C', checkout, 'rev-parse', 'HEAD'])).stdout.trim().toLowerCase();

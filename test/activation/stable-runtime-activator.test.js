@@ -7,6 +7,7 @@ import {
   StableRuntimeActivator,
   StableRuntimeActivationError,
   assertExactCommitSha,
+  npmCiCommand,
   parseWindowsListeningPids,
   stableProfileFingerprint,
   stableProfileSnapshot,
@@ -60,6 +61,19 @@ test('process selection parses only the exact configured Windows listener endpoi
   assert.deepEqual(parseWindowsListeningPids(output, { host: '127.0.0.1', port: 8745 }), [111]);
 });
 
+test('npm ci command uses bounded Windows ComSpec shape and preserves non-Windows behavior', () => {
+  const comSpec = 'C:\\Windows\\System32\\cmd.exe';
+  assert.deepEqual(npmCiCommand('win32', { ComSpec: comSpec }), {
+    file: comSpec,
+    args: ['/d', '/s', '/c', 'npm.cmd', 'ci'],
+  });
+  assert.deepEqual(npmCiCommand('win32', {}), {
+    file: 'cmd.exe',
+    args: ['/d', '/s', '/c', 'npm.cmd', 'ci'],
+  });
+  assert.deepEqual(npmCiCommand('linux', {}), { file: 'npm', args: ['ci'] });
+});
+
 test('target validation fails closed when exact revision is not reachable from origin/main', async () => {
   const activator = new StableRuntimeActivator({ run: async (_file, args) => {
     if (args.includes('fetch')) return { code: 0, stdout: '', stderr: '' };
@@ -101,7 +115,8 @@ test('successful activation prepares before exact PID cutover and proves exact r
   assert.equal(result.tunnelLifecycle, 'external-preserved');
   assert.equal(result.evidence.healthz.revision, SHA);
   assert.equal(result.evidence.readyz.revision, SHA);
-  const ci = events.findIndex((event) => event.includes('npm.cmd:ci'));
+  const npmCommand = npmCiCommand('win32', process.env);
+  const ci = events.findIndex((event) => event === `run:${npmCommand.file}:${npmCommand.args.join(' ')}`);
   const preflight = events.findIndex((event) => event.includes('--oneshot'));
   const stop = events.findIndex((event) => event === 'stop:111');
   assert.ok(ci >= 0 && preflight > ci && stop > preflight, events.join(' | '));
