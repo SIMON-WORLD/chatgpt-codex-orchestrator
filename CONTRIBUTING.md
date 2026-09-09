@@ -4,7 +4,7 @@ Thanks for your interest in contributing to `chatgpt-codex-orchestrator`.
 
 The project builds a **Capability Orchestrator with ChatGPT as the authoritative Brain**. ChatGPT owns investigation, architecture, routing, governance, independent verification, and final acceptance; Native capabilities, Direct Local, Codex, and future specialist executors perform bounded work.
 
-The latest formal release is **`v0.1.0-alpha.3`**. The repository operational contract is now capability-first **v0.2**; this does **not** itself create a new tag/version/release. M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the explicit default-policy review are complete/accepted. Issue #33 materializes that authorized default policy in code/Skill/docs; M8/release remains separate. See [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
+The latest formal release is **`v0.1.0-alpha.3`**. The repository operational contract is now capability-first **v0.2**; this does **not** itself create a new tag/version/release. M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the explicit default-policy review are complete/accepted. Issue #33 / PR #45 materialized that authorized default policy in code/Skill/docs; M8/release remains separate. See [`PROJECT_STATUS.md`](PROJECT_STATUS.md).
 
 Before you start, read:
 
@@ -122,7 +122,7 @@ Use the GitHub issue templates under `.github/ISSUE_TEMPLATE/` where possible. I
 
 ## Security and sensitive information
 
-Do not include credentials, API keys, cookies, private repository data, private conversation contents, or local runtime secrets in issues or PRs. Redact sensitive logs before sharing.
+Do not include credentials, bearer tokens, API keys, cookies, private repository data, private conversation contents, or local runtime secrets in issues or PRs. Redact sensitive logs before sharing.
 
 There is currently no dedicated private vulnerability reporting channel. If you report a security concern through a public issue, describe the problem without posting secrets or exploit-sensitive private data.
 
