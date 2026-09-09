@@ -1,6 +1,6 @@
 # PROJECT_STATUS
 
-> 本文件记录 `chatgpt-codex-orchestrator` 的当前项目状态基线。实现事实以 GitHub 当前 `main`、代码、PR 与 CI 为最高权威；本文件用于 Brain 快速恢复阶段上下文。实时 SHA 应重新读取 GitHub。
+> 本文件记录 `chatgpt-codex-orchestrator` 的项目状态基线。实现事实以 GitHub 当前 `main`、代码、PR 与 CI 为最高权威；正式 publication truth 以 GitHub tag / Release readback 为准；Issue #46 的最新 authoritative Parent checkpoint 定义当前 M8 release-control 状态。本文件用于 Brain 快速恢复稳定上下文，不嵌入会在同一 release commit 发布后立即过期的阶段快照。
 
 ## North Star
 
@@ -16,18 +16,18 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 
 ## 当前发布 / operational 状态
 
-- **Released version:** `v0.1.0-alpha.3`
+- **Formal publication truth:** 不在本文件静态记录“latest published version”；必须从 GitHub tag / Release readback 获取。`v0.2.0` 是本 release line 的语义版本，Issue #46 是其 authoritative release-control surface。
 - **Repository/default operational contract:** capability-first v0.2；Alpha.3 legacy IAB 仅显式 feature-frozen compatibility/fallback
-- **v0.2:** M0–M7、Brain Continuity、Direct Local canonical-path hardening、bounded implementation-session continuity、Stable Runtime activation bootstrap、explicit default-policy review 与 operational-default flip 已完成/接受；Issue #33 / PR #45 已 materialize default semantics；尚未 version/tag/release
+- **v0.2:** M0–M7、Brain Continuity、Direct Local canonical-path hardening、bounded implementation-session continuity、Stable Runtime activation bootstrap、explicit default-policy review 与 operational-default flip 已完成/接受；Issue #33 / PR #45 已 materialize default semantics；M8 publication 状态由 Issue #46 + GitHub tag/Release live truth 决定。
 - **Brain Continuity:** implementation + exact-head CI + formal Conversation A → real runtime restart → Conversation B dogfood **ACCEPTED / COMPLETE**
 - **Issue #34:** **CLOSED / ACCEPTED**；bounded non-Parent execution continuation claim 已通过 preserved Issue #33 real dogfood
 - **Issue #36:** **CLOSED / ACCEPTED**；Stable Runtime exact-revision activation bootstrap 已完成并支持 #34 real dogfood
 - **Issue #43 / PR #44:** **CLOSED / ACCEPTED / MERGED**；Thin Parent / Strong Mission operating policy 已进入 `main`
-- **Issue #33 / PR #45:** **ACCEPTED / MATERIALIZED**；capability-first v0.2 operational-default flip 已闭环；M8/release 仍是独立后续边界
-- **M8:** 尚未进入
-- **Version bump / release:** 尚未执行
+- **Issue #33 / PR #45:** **ACCEPTED / MATERIALIZED**；capability-first v0.2 operational-default flip 已闭环；M8/release 是独立 release-control boundary
+- **Issue #46 / M8:** exact current state（RC review / revise / publication authorized / published）必须读取 Issue #46 最新 Parent checkpoint；本文件不复制该易变状态。
+- **Version metadata:** release line 使用 `0.2.0` metadata；metadata 本身不证明 publication。`v0.2.0` 是否已经正式发布只由 GitHub tag / Release readback 证明。
 
-当前规范性 routing / executor / operating policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。Brain Continuity contract 见 [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md)。
+当前规范性 routing / executor / operating policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。Brain Continuity contract 见 [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md)。v0.2.0 release/operator contract 见 [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md)。
 
 ## 已接受基线
 
@@ -49,6 +49,7 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 | Stable Runtime activation bootstrap | **CLOSED / ACCEPTED** | Issue #36；exact accepted revision activation with preserved stable profile/state |
 | Thin Parent / Strong Mission policy correction | **CLOSED / ACCEPTED** | Issue #43 / PR #44 merged；policy/docs only |
 | v0.2 operational default flip | **ACCEPTED / MATERIALIZED** | Issue #33 / PR #45；capability-first v0.2 is repository operational default；Alpha.3 explicit compatibility only |
+| M8 RC / Release | **LIVE AUTHORITY: ISSUE #46** | Current review/publication state is read from the latest Issue #46 Parent checkpoint plus GitHub tag/Release truth |
 
 ## M7 — Real-Project Capability Routing Dogfood
 
@@ -151,10 +152,27 @@ Accepted/materialized semantics include:
 - unknown runtime and capability/provider failure never silently map to Alpha.3；
 - canonical Skill begins with runtime capability discovery / Native-first routing；
 - Stable Runtime Direct Local is used for bounded local work；Codex is selected only when sustained coding is actually required；
-- latest tagged release remains `v0.1.0-alpha.3`；
-- M8/version/tag/release remain separate and unauthorized。
+- formal published-version truth is never inferred from local Skill/status/version prose and must be read from GitHub tag / Release state；
+- Issue #46 is the separate M8 release-control mission and records readiness/revision/publication decisions durably。
 
-The #33 implementation mission is no longer an active gate once this tree is on `main`. Its ACCEPT/materialization does not authorize M8, version bump, tag, GitHub Release, or project release.
+The #33 implementation mission is no longer an active gate. Its ACCEPT/materialization did not authorize M8 automatically; Issue #46 provides the separate M8 contract and keeps publication authority explicit.
+
+## M8 — Issue #46 release control
+
+Issue #46 defines a two-stage bounded release-control contract around exact `v0.2.0` publication. The exact live phase and Parent decision are not snapshotted here; read the latest Issue #46 authoritative checkpoint.
+
+Release-readiness evidence includes:
+
+- exact candidate SHA on a release branch;
+- Draft PR to `main`;
+- semantic version/tag contract (`0.2.0` / `v0.2.0`);
+- release/operator notes distinguishing operational-default state from formal publication;
+- release-hardening regressions for Governance migration/recovery, Stable Runtime exact-revision rollback, and runtime-default/no-silent-fallback behavior;
+- normal deterministic suite;
+- exact-head GitHub CI on Node 22.x and 24.x;
+- residual P0/P1/P2 risk classification.
+
+Publication is never implied by readiness evidence. It requires an explicit project-level Parent publication decision for the accepted exact candidate, followed by merge/post-merge CI/tag/GitHub Release and independent readback. GitHub tag/Release remains the publication truth.
 
 ## Non-blocking observations retained
 
@@ -165,18 +183,20 @@ The #33 implementation mission is no longer an active gate once this tree is on 
 5. **Branch protection:** current `main` is not protected by required checks；delivery-hardening candidate outside the completed #33 scope。
 6. **Parent direct-main process mistake:** Issue #43 records two no-net-content direct-main commits from Parent preparation；accepted response is branch + PR discipline, not history rewrite or a new runtime feature。
 
-## 当前下一步
+## Release-state recovery
 
 1. **Operational default:** capability-first v0.2 is accepted/materialized through Issue #33 / PR #45；Alpha.3 remains explicit compatibility/fallback only。
-2. **M8 RC / Release:** remains separate, **NOT STARTED**, and requires explicit Parent authorization；#33 completion does not auto-start it。
-3. **Future work:** must come from a new authoritative Issue/mission contract rather than being inferred from the completed #33 mission。
+2. **M8 control truth:** read Issue #46's latest authoritative Parent checkpoint to determine whether the exact candidate is under review, revision, publication authorization, or completed release readback。
+3. **Publication truth:** read GitHub `main`, exact tag `v0.2.0`, and GitHub Release state; do not infer publication from package metadata, this file, or a branch name。
+4. **Future work:** must come from an authoritative Issue/mission contract rather than being inferred from completed milestones。
 
 ## Authority
 
-- **GitHub `main` / current code / PR / CI:** implementation truth / canonical authority。
+- **GitHub `main` / current code / PR / CI / tag / Release:** implementation and publication truth / canonical authority。
 - **`CAPABILITY_ROUTING.md`:** current routing / executor / operating policy。
 - **`docs/rfc-v0.2-brain-continuity.md`:** Brain Continuity contract and historical design rationale；current implementation state is also reflected by GitHub code/tests/issues。
 - **`docs/architecture.md`:** current technical architecture facts。
-- **`ROADMAP.md`:** accepted high-level sequence / current gate。
-- **GitHub Issues / PR comments:** durable mission/checkpoint/review surfaces；they do not replace live Local Governance authority for mutating local control state。
+- **`docs/releases/v0.2.0.md`:** v0.2.0 release/operator contract, including upgrade/rollback and publication boundary。
+- **`ROADMAP.md`:** accepted high-level sequence / release-control boundary。
+- **GitHub Issues / PR comments:** durable mission/checkpoint/review surfaces；Issue #46 is the live release-control authority surface, while these surfaces do not replace live Local Governance authority for mutating local control state。
 - **ChatGPT Project Library:** Brain-readable slow-changing reference mirror；must not silently override current GitHub truth。

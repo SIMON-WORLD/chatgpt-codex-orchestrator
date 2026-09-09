@@ -26,6 +26,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Run release-hardening focused tests
+        run: node --test test/governance/store.test.js test/activation/stable-runtime-rollback-guard.test.js test/bootstrap.test.js
+
       - name: Run tests
         run: npm test
 
