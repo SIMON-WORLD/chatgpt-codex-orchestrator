@@ -22,7 +22,7 @@
 | Stable Runtime activation bootstrap | **CLOSED / ACCEPTED** | Issue #36；exact accepted revision activation path + real dogfood support |
 | Thin Parent / Strong Mission policy correction | **CLOSED / ACCEPTED** | Issue #43 / PR #44 merged |
 | v0.2 operational default flip | **ACCEPTED / MATERIALIZED** | Issue #33 / PR #45；capability-first v0.2 is repository operational default；Alpha.3 explicit compatibility only |
-| M8 — RC / Release | **PENDING** | separate Parent authorization；#33 completion does not auto-start M8 |
+| M8 — RC / Release | **PHASE A ACTIVE** | Issue #46；prepare exact `v0.2.0` RC/evidence; merge/tag/GitHub Release remain explicit Parent-gated Phase B |
 
 ## N3 — 已接受基线
 
@@ -182,9 +182,9 @@ Post-merge state:
 1. capability-first v0.2 operational default is **ACCEPTED / MATERIALIZED** through Issue #33 / PR #45；
 2. Alpha.3/IAB remains explicit feature-frozen compatibility/fallback only；
 3. Issue #33 is no longer an active operational-default gate；
-4. M8/version/tag/release remain separate and require explicit Parent authorization。
+4. M8 remains a separate release boundary and is entered only through its own Parent-issued mission contract；Issue #46 now supplies that Phase A contract。
 
-The completed #33 mission did not authorize a second Codex execution, Alpha.3 workaround, Parent takeover, manual durable JSON, user token/ID relay, M8/version/tag/release, or project-level self-acceptance.
+The completed #33 mission did not authorize a second Codex execution, Alpha.3 workaround, Parent takeover, manual durable JSON, user token/ID relay, M8/version/tag/release, or project-level self-acceptance. Issue #46 separately authorizes only bounded M8 Phase A RC preparation, not publication.
 
 ## Non-blocking observations
 
@@ -194,21 +194,32 @@ The completed #33 mission did not authorize a second Codex execution, Alpha.3 wo
 - **Passive execution observability:** long-running execution 缺少稳定用户 status/notification surface；后续作为 UX/observability candidate。
 - **Custom App conversation capability volatility:** 部分 conversation 曾从可实际调用 Developer MCP 变为 `FORBIDDEN: This conversation does not support developer MCPs`，而 fresh conversation 在 SAME Local MCP/tunnel 上可恢复。availability 必须按 session/message boundary 重新发现。
 - **Node 24 executor test timing:** ownership/permission continuation tests 偶发 timing failure，same-head rerun 可 PASS；保留为 test-stability evidence，除非出现 reproducible correctness evidence。
-- **Branch protection:** current `main` 尚未强制 required checks；属于后续 delivery hardening candidate，outside the completed #33 scope。
+- **Branch protection:** current `main` 尚未强制 required checks；属于后续 delivery hardening candidate，outside the M8 Phase A RC implementation scope unless it becomes material release evidence。
 - **Parent direct-main mistake:** Issue #43 记录了两次 no-net-content direct-main commits；accepted correction 是 branch + PR discipline，不做 history rewrite，也不创建新 runtime feature。
 
 ## M8 — RC / Release
 
-Issue #33 / PR #45 已完成 operational-default ACCEPT/materialization；M8 仍为独立 **PENDING** 阶段，只有在新的 explicit Parent authorization 后进入。进入时至少需要：
+Issue #46 explicitly enters **M8 Phase A** after Issue #33 / PR #45 completed the operational-default materialization. Phase A is bounded release-readiness work, not publication authority.
 
-- current code / docs / public Skill/default entry 一致；
+Release target: semantic version `0.2.0`, proposed tag `v0.2.0`.
+
+Phase A requires:
+
+- current code / docs / public release entry consistent with the v0.2 operational-default boundary；
+- package/version metadata and release/operator notes prepared as a candidate；
 - required CI / regression green；
-- M7 real-project dogfood evidence 完整；
+- M7 real-project dogfood evidence complete；
 - Brain Continuity restart/re-entry dogfood PASS；
-- bounded mission continuity / Stable Runtime activation evidence 已闭环；
-- operational default 语义真实切换且 legacy IAB 保持 feature-frozen fallback/compatibility boundary；
-- state schema / migration / rollback / runtime compatibility 等 release hardening 完成；
-- release/version/tag 由 Parent 独立验收后决定。
+- bounded mission continuity / Stable Runtime activation evidence closed；
+- operational default semantics genuinely switched while legacy IAB remains feature-frozen explicit compatibility only；
+- Governance state schema/migration/known-good-backup/future-schema fail-closed behavior reverified；
+- Stable Runtime exact-revision activation and no-guess rollback boundary reverified；
+- Node/runtime compatibility reverified；
+- Draft PR + exact candidate SHA + exact-head Node 22/24 CI + release-note pointer + residual P0/P1/P2 risk written durably for independent Parent review。
+
+Phase A hard stop: **no merge/tag/GitHub Release/irreversible publication**. Only after the project-level Parent independently reviews the exact candidate and writes `PARENT_AUTHORIZE_PUBLICATION` may Phase B merge the accepted exact head, verify post-merge `main` CI, create `v0.2.0` at the accepted commit, create the matching GitHub Release, and independently read back publication truth.
+
+See [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for the release/operator contract.
 
 ## M8 之后
 
