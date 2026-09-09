@@ -1,6 +1,11 @@
-// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT the canonical Alpha.4 Direct Brain
+// LEGACY / EXPERIMENTAL RUNTIME: this module is NOT the v0.2 operational default and is
+// NOT the canonical Alpha.4 Direct Brain Loop. Issue #33 flipped the brain-command default
+// to capability-first v0.2 / Stable Runtime. This detached worker/TaskService launcher is an
+// explicit Alpha.3 compatibility/experimental path ONLY: it refuses to run unless the caller
+// opts in via { legacyOptIn: true } / BRAIN_COMMAND_LEGACY=1 / config.defaultRuntime='alpha3'.
+// It NEVER runs from the v0.2 default (fail closed; no silent fallback to Alpha.3).
 //
-// Deterministic sequence for `$brain-command <goal>`:
+// Deterministic sequence for an opted-in `$brain-command <goal>` legacy invocation:
 //   load config -> deterministic repo resolution -> fast preflight (trusted-REPL
 //   aware) -> (worker is started by the ordinary-node entrypoint) -> open ChatGPT
 //   Brain -> TaskService.createTask -> advanceTask loop -> DONE / ASK_USER /
@@ -127,12 +132,15 @@ export async function runBrainCommand({
   legacyOptIn = false,
 } = {}) {
   if (!goal) throw new BrainCommandLaunchError('goal is required');
-  if (!legacyOptIn && getEnv(envScope).BRAIN_COMMAND_LEGACY !== '1') {
-    throw new BrainCommandLaunchError('legacy launcher is non-canonical/experimental; set BRAIN_COMMAND_LEGACY=1 or pass { legacyOptIn: true } to opt in');
-  }
-
   const trustedRepl = isTrustedRepl(envScope);
   const cfg = config || loadConfig(configPath, getCodexHome(envScope));
+  // No silent fallback to Alpha.3 (Issue #33): legacy execution requires an explicit
+  // opt-in. Accepted opt-ins: { legacyOptIn: true }, BRAIN_COMMAND_LEGACY=1, or a
+  // machine config whose defaultRuntime is explicitly 'alpha3'. Anything else fails
+  // closed before any worker / TaskService / IAB code runs.
+  if (!legacyOptIn && cfg && cfg.defaultRuntime !== 'alpha3' && getEnv(envScope).BRAIN_COMMAND_LEGACY !== '1') {
+    throw new BrainCommandLaunchError('legacy launcher is non-canonical/experimental; set BRAIN_COMMAND_LEGACY=1, config defaultRuntime="alpha3", or pass { legacyOptIn: true } to opt in');
+  }
   const r = resolveRepoDir({ cwd: getCwd(envScope), explicitRepoPath: null, explicitGitHubRepo: null, config: cfg });
   if (!r.repoDir) throw new BrainCommandLaunchError('repo not resolvable: ' + r.source);
   const targetRepo = repoDir || r.repoDir;

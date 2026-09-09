@@ -1,8 +1,8 @@
 # Architecture
 
-> **Current architecture reference:** capability-first v0.2 candidate.
+> **Current architecture / operational default:** capability-first v0.2.
 >
-> **Released operational default:** `v0.1.0-alpha.3` legacy IAB Direct Brain Loop remains the feature-frozen released/default path until an explicit post-hardening operational-default decision changes it.
+> **Release distinction:** the latest tagged release remains `v0.1.0-alpha.3`; its legacy IAB Direct Brain Loop is retained feature-frozen as an explicit compatibility/fallback path, not the repository operational default. Issue #33 changes default semantics only; M8/version/tag/release remain separate.
 >
 > Current implementation truth is GitHub `main`; current phase/status is [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md); normative routing policy is [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md); the accepted post-M7 continuity contract is [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md). Historical IAB/worker engineering detail lives in [`development-history.md`](development-history.md).
 
@@ -29,7 +29,7 @@ Responsibilities are deliberately separated:
 - **Codex** — sustained local coding executor for multi-file, iterative, shell-heavy, debugging, refactor, test/build work; not the default downstream for all tasks.
 - **Human** — principal / product owner / risk authority. The human supplies goals, preferences, strategic correction, and approvals for genuinely high-impact decisions; the human is not an internal-ID or RESULT message bus.
 
-Two additional principles are important for the current hardening phase:
+Two additional principles are part of the current operating model:
 
 - **Brain sessions are disposable; work state is durable.** A ChatGPT conversation is an interaction/context surface, not the durable identity of a project/task.
 - **Delegate outcomes, not keystrokes.** The Brain delegates milestone-sized outcomes, scope, constraints, and acceptance; an executor owns its local implementation tactics inside that boundary.
@@ -237,15 +237,15 @@ Independent verification means independent reacquisition of resource truth; it d
 - **Direct Local OperationState:** durable operation state for bounded edits/reconciliation.
 - **Legacy Task State:** versioned JSON, atomic temp-write + rename, `.bak` fallback, corruption fail-closed; retained as a proven persistence pattern.
 
-### Current blocking gap
+### Durable Governance / Brain Continuity — implemented and accepted
 
-`GovernanceService` is currently instantiated from fresh in-memory state by the v0.2 runtime. Therefore executor execution may remain recoverable while Brain governance task/step/acceptance/evidence authority is lost across local runtime restart.
+Canonical v0.2 runtime assembly now uses `createDurableGovernanceService` under the configured `dataRoot` / Governance namespace. It preserves task/step/acceptance/evidence/control state across runtime replacement, enforces one canonical Governance writer, provides bounded semantic recovery and Context Capsules, and fences stale Parent generations. Issue #23 / PR #24 plus formal restart/re-entry dogfood are **CLOSED / ACCEPTED**.
 
-This is the current post-M7 default-flip blocker. The accepted contract is [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md).
+Post-continuity hardening is also accepted: Issue #34 adds bounded current-step Direct Local execution continuation without Parent takeover, and Issue #36 provides exact-revision Stable Runtime activation. These are implementation facts, not new mandatory routing hops.
 
-## 9. Brain Continuity target contract — accepted, implementation pending
+## 9. Brain Continuity contract — accepted / implemented / dogfood complete
 
-The accepted contract requires, at minimum:
+The accepted contract, now implemented and exercised in real restart/re-entry dogfood, requires at minimum:
 
 - versioned durable canonical Governance state under the existing `dataRoot`;
 - atomic persistence + known-good backup + corruption/future-schema fail-closed behavior;
@@ -258,7 +258,7 @@ The accepted contract requires, at minimum:
 - proof-reuse cache loss may only force conservative re-verification, never implicit PASS;
 - isolated restart/conversation-re-entry dogfood with zero manual internal-ID/RESULT relay.
 
-Until implementation and real dogfood pass, the operational default remains Alpha.3 legacy IAB.
+Implementation and real dogfood have passed. Capability observations remain ephemeral after re-entry, and the v0.2 operational default still fails closed on ambiguity; this completion does not authorize M8/release on its own.
 
 ## 10. Mutation / authority scopes
 
@@ -272,19 +272,19 @@ Current safety policy remains: one authoritative writer per mutable resource. Re
 
 No distributed lock manager is part of the current v0.2 contract.
 
-## 11. Released Alpha.3 legacy path
+## 11. Alpha.3 release / compatibility boundary
 
-The latest formal release is still `v0.1.0-alpha.3`.
+The latest formal tagged release is still `v0.1.0-alpha.3`.
 
-Its operational default is the feature-frozen IAB Direct Brain Loop, whose browser/worker implementation is isolated under `src/legacy/` and whose released instructions are preserved in [`../SKILL.md`](../SKILL.md) and `skills/brain-command/SKILL.md`.
+Its feature-frozen IAB Direct Brain Loop implementation remains isolated under `src/legacy/`. Under the current repository operating contract it is an **explicit compatibility/fallback path only**; capability/provider failure never silently routes into it.
 
-This fallback remains intentionally present until a later explicit operational-default decision. v0.2 architecture acceptance and M7 completion did **not** automatically delete or flip the released path.
+The v0.2 default flip does not delete Alpha.3 and does not itself create a new version/tag/release. Those release decisions remain separate Parent/M8 work.
 
 Historical implementation detail is kept in [`development-history.md`](development-history.md).
 
 ## 12. Current boundaries / non-goals
 
-For the current Brain Continuity hardening, these are explicit non-goals:
+For the current v0.2 operating model, these remain explicit non-goals:
 
 - multi-Child scheduler / recursive Child tree;
 - generic work DAG;
@@ -304,7 +304,7 @@ Use the following order when determining current truth:
 2. [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) — current project phase and active gate.
 3. [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md) — current normative routing/executor policy.
 4. This file — current technical architecture reference.
-5. [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md) — accepted continuity contract pending implementation.
+5. [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md) — accepted continuity contract and historical design rationale; implementation + real dogfood are complete.
 6. Historical RFCs / [`development-history.md`](development-history.md) — design/evidence history, not automatic current operating truth.
 
 See [`README.md`](README.md) for the complete docs index and supersession notes.

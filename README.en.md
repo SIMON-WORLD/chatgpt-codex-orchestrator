@@ -4,7 +4,7 @@ A **ChatGPT-centered Capability Orchestrator** with ChatGPT as the authoritative
 
 **Core idea:** ChatGPT decides. Capabilities execute. ChatGPT verifies.
 
-**Status:** Alpha · latest release `v0.1.0-alpha.3` · [简体中文](README.md)
+**Status:** Alpha · latest release `v0.1.0-alpha.3` · repository operational default = **capability-first v0.2** · [简体中文](README.md)
 
 ## Why this project
 
@@ -39,7 +39,7 @@ Evidence first
 - **Direct Local** — for workspace read/search/status/diff, bounded edits, and focused verification.
 - **Codex delegation** — for multi-file implementation, debugging, refactoring, shell-heavy work, and iterative tests/builds.
 - **Evidence-first verification** — executor `RESULT` is an evidence candidate; the Brain reacquires GitHub, CI, Web, or local resource evidence before acceptance when possible.
-- **Brain Continuity (current hardening)** — Brain sessions should be replaceable while logical work, authority, and evidence do not depend on one conversation or one runtime process staying alive.
+- **Brain Continuity** — implemented and proven by formal restart/re-entry dogfood, so logical work, authority, and evidence do not depend on one conversation or one runtime process staying alive.
 - **Zero human relay goal** — the user should not become the message bus between tools or agents.
 
 ## Architecture
@@ -72,12 +72,11 @@ Claude, DeepSeek, or other agents may later be attached as specialists, advisors
 
 ## Current status
 
-- Latest release: `v0.1.0-alpha.3`
-- Released/default operational path: Alpha.3 legacy IAB Direct Brain Loop (feature-frozen)
-- Current development direction: capability-first v0.2
-- v0.2 M0–M7 real-project dogfood is complete and accepted
-- Current post-M7 gate: **Brain Continuity / Governance durability**; the contract is accepted, while implementation and real re-entry dogfood are still pending
-- Operational default flip: **DEFERRED**
+- Latest release: `v0.1.0-alpha.3` (Issue #33 / PR #45 changed the repository operational default only; tag/version unchanged)
+- Repository/default operational contract: **capability-first v0.2**
+- Alpha.3 legacy IAB Direct Brain Loop: feature-frozen, explicit compatibility/fallback only; capability failure never silently falls back to it
+- M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the default-policy review are complete and accepted
+- Issue #33 / PR #45: the operational default flip is accepted and materialized; this does not imply M8/version/tag/release
 - M8 RC / release: not started
 
 See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the current development state and [`ROADMAP.md`](ROADMAP.md) for the accepted high-level path.
@@ -99,9 +98,9 @@ npm install
 npm test
 ```
 
-### Current released workflow
+### Operational workflow
 
-See [`SKILL.md`](SKILL.md) for runtime wiring and usage of the current released path.
+See [`skills/brain-command/SKILL.md`](skills/brain-command/SKILL.md) for current repository operational policy. [`SKILL.md`](SKILL.md) also records the last-tagged Alpha.3 release and compatibility boundary.
 
 ### v0.2 local runtime
 
@@ -109,7 +108,7 @@ See [`SKILL.md`](SKILL.md) for runtime wiring and usage of the current released 
 npm run start:v0.2
 ```
 
-> v0.2 is still a candidate and has not been default-flipped or formally released.
+> v0.2 is the current repository operational default contract. This is not a new tag/version/release by itself.
 
 ## Routing policy
 
@@ -129,12 +128,12 @@ Route, Capability, and Provider are separate concepts. Connecting GitHub, Gmail,
 - [`PROJECT_STATUS.md`](PROJECT_STATUS.md) — current project state and fast recovery entrypoint
 - [`ROADMAP.md`](ROADMAP.md) — accepted high-level path
 - [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md) — current routing / executor policy
-- [`docs/architecture.md`](docs/architecture.md) — current technical architecture and released/candidate boundary
-- [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md) — accepted Brain Continuity contract
+- [`docs/architecture.md`](docs/architecture.md) — current technical architecture and operational-default / release compatibility boundary
+- [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md) — accepted, implemented, and real-dogfood-complete Brain Continuity contract
 - [`docs/README.md`](docs/README.md) — documentation authority and historical RFC index
 - [`CHANGELOG.md`](CHANGELOG.md) — release and unreleased change history
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution guide
-- [`SKILL.md`](SKILL.md) — agent-facing instructions for the current released runtime
+- [`SKILL.md`](SKILL.md) — repository entry / Alpha.3 compatibility boundary
 
 ## License
 

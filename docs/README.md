@@ -11,8 +11,8 @@ Use these documents for current project decisions:
 1. [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) — current phase, accepted milestones, active blocker, and next action.
 2. [`../ROADMAP.md`](../ROADMAP.md) — accepted high-level path; future phases are not pre-invented without evidence.
 3. [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md) — normative current capability / route / executor policy, including the minimal Parent/non-Parent mission boundary.
-4. [`architecture.md`](architecture.md) — current technical architecture and released-vs-candidate boundary.
-5. [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md) — **accepted post-M7 contract**, with implementation / real restart-re-entry dogfood still pending.
+4. [`architecture.md`](architecture.md) — current technical architecture and operational-default vs release/compatibility boundary.
+5. [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md) — **accepted / implemented / real-dogfood-complete** continuity contract; its pre-implementation body is retained as historical design rationale.
 6. [`chatgpt-project-instructions.md`](chatgpt-project-instructions.md) — compact canonical copy/paste source for ChatGPT Project Settings → Instructions after the corresponding change is reviewed and merged.
 
 Implementation truth remains GitHub current code, PRs, CI, and releases. Project Library or narrative handoff material must not silently override newer GitHub evidence.
@@ -49,25 +49,28 @@ Historical Alpha.2 protocol/design RFC. Retained for release history and archite
 
 Archival implementation notes for the IAB / worker-era milestones and earlier reliability work. It deliberately preserves historical module names and decisions.
 
-The released Alpha.3 IAB path is still retained as a feature-frozen fallback, but this file is not the current architecture reference.
+The Alpha.3 IAB path is still retained as a feature-frozen, explicit compatibility/fallback path, but this file is not the current architecture reference.
 
-## Released operational instructions
+## Operational instructions / compatibility boundary
 
-- [`../SKILL.md`](../SKILL.md)
-- [`../skills/brain-command/SKILL.md`](../skills/brain-command/SKILL.md)
+- [`../skills/brain-command/SKILL.md`](../skills/brain-command/SKILL.md) — current capability-first v0.2 operational launcher policy.
+- [`../SKILL.md`](../SKILL.md) — repository entry plus last-tagged-release / Alpha.3 compatibility boundary.
 
-These describe the currently released Alpha.3 operational fallback. They must not be used to infer that the legacy IAB architecture remains the canonical v0.2 architecture. Until an explicit default-policy flip occurs, however, their released Alpha.3 execution instructions remain valid for that fallback.
+The latest tagged release remains `v0.1.0-alpha.3`, but repository operational semantics are capability-first v0.2. Alpha.3 IAB execution remains available only through explicit compatibility/fallback selection and is never a silent response to capability failure.
 
 ## Current post-M7 state
 
 At the time of this map:
 
 ```text
-M0–M7                         ACCEPTED
-Brain Continuity contract     ACCEPTED
-Brain Continuity implementation / real dogfood     PENDING
-Operational default flip      DEFERRED
-M8 RC / release               NOT STARTED
+M0–M7                                      ACCEPTED
+Brain Continuity implementation/dogfood   ACCEPTED / COMPLETE
+Direct Local / bounded mission / Stable Runtime hardening   ACCEPTED / COMPLETE
+Thin Parent / Strong Mission (#43 / PR #44)                 ACCEPTED / COMPLETE
+Issue #33 / PR #45 operational-default flip                 ACCEPTED / MATERIALIZED
+M8 RC / release                              NOT STARTED
 ```
+
+Issue #33 / PR #45 accepted and materialized the capability-first v0.2 repository operational default. This does not imply a version/tag/release; M8 remains separate and not started.
 
 For live status, always re-read [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) rather than treating this summary as a status database.

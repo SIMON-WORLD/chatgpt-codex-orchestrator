@@ -1,36 +1,36 @@
 ---
 name: chatgpt-codex-orchestrator
-description: "Alpha entry for the ChatGPT-command orchestrator (v0.1.0-alpha.3). Use when the user wants to run a coding task with ChatGPT as planner/reviewer and Codex as executor. The canonical launcher Skill is `brain-command`; its default path is the Direct Brain Loop (current Codex agent + built-in browser + ChatGPT). The detached worker/TaskService runtime is legacy/experimental. Released Alpha.3 operational default = legacy IAB Direct Brain Loop (feature-frozen); v0.2 canonical architecture (ChatGPT Custom MCP App -> Secure Tunnel -> local MCP -> Router/Governance -> Direct Local or Codex App Server) completed M7 real-project dogfood but is NOT yet the CLI/Skill default because the post-M7 Brain Continuity/default-policy gate remains open."
+description: "Compatibility entry for the ChatGPT-command orchestrator. Repository operational default = capability-first v0.2: discover current ChatGPT/runtime capability, prefer Native when sufficient, use Stable Runtime Direct Local for bounded local work, and use Codex only for sustained local coding when required. The last tagged release remains v0.1.0-alpha.3; its built-in-IAB Direct Brain Loop is retained feature-frozen as an explicit compatibility/fallback path only, never a silent fallback."
 ---
 
 # ChatGPT-command orchestrator (v0.1.0-alpha.3)
 
-Drives the currently released ChatGPT <-> Codex loop. The agent drives it; the user only speaks the goal.
+The repository's operational contract is capability-first v0.2. The user supplies the goal; ChatGPT remains the authoritative Brain and routes work from actual runtime/session capability. The last tagged release remains `v0.1.0-alpha.3`.
 
-> **Status boundary:** this file documents the released Alpha.3 operational fallback. The canonical development architecture is capability-first v0.2; see `PROJECT_STATUS.md`, `CAPABILITY_ROUTING.md`, `docs/architecture.md`, and `docs/rfc-v0.2-brain-continuity.md` for current project state. Do not infer current v0.2 milestone status from legacy runtime mechanics below.
+> **Status boundary:** capability-first v0.2 is now the repository operational default contract; Alpha.3/IAB is explicit feature-frozen compatibility only. This does not itself create a new tagged release. See `PROJECT_STATUS.md`, `CAPABILITY_ROUTING.md`, `docs/architecture.md`, and GitHub code/PR/CI for current truth.
 
-## Default: Direct Brain Loop
+## Default: capability-first v0.2
 
-The canonical released launcher Skill is **`brain-command`**. Its default path is the **Direct Brain Loop**: the current Codex agent uses the built-in browser to open/reuse one ChatGPT conversation, sends the goal + governance contract, receives `PLAN` / `TASK`, executes the `TASK` itself, sends a compact `RESULT` back to the same conversation, and repeats until `PUBLISH` -> publication transaction -> external readback -> terminal `DONE`. Provider-neutral by name; **Default Brain = ChatGPT**, **Default Executor = the current Codex agent**. See `skills/brain-command/SKILL.md`. Normal startup does NOT inspect orchestrator source and does NOT do broad filesystem discovery.
+The canonical launcher Skill is **`brain-command`**. Its normal path begins with **runtime capability discovery**: use `CHATGPT_NATIVE` when sufficient; when local capability is required, bind the Stable Runtime workspace and choose `CHATGPT_DIRECT_LOCAL` for bounded exact work or `CODEX_DELEGATE` for sustained coding. `HYBRID` composes these planes without becoming a mutation owner. See `skills/brain-command/SKILL.md` and `CAPABILITY_ROUTING.md`.
 
-**Browser isolation:** canonical released Direct Mode uses the Codex **in-app browser (iab) only** — it never attaches to the user's Edge/Chrome/external browser and there is no fallback; if the IAB is unavailable, stop and report instead of switching browser backend.
+**Alpha.3 compatibility:** the retained Direct Brain Loop uses the Codex **in-app browser (iab) only** when explicitly selected. IAB unavailability or any current capability loss must not silently switch the v0.2 path into Alpha.3.
 
 **Existing conversation:** `$brain-command --conversation "<title>"` / `--conversation-url <url>` / `--adopt-current` continue an existing ChatGPT conversation (no new conversation). By default a new dedicated Brain conversation is created.
 
-## v0.2 canonical (post-M7 status — NOT the released default)
+## v0.2 operational default
 
-The released operational default remains the **Direct Brain Loop** over the built-in IAB (Alpha.3, feature-frozen). A separate **v0.2 canonical** path exists and is the active development architecture:
+The repository operational default is **capability-first v0.2**. Native capability is used directly when sufficient; the local capability plane is:
 
 `ChatGPT (Custom MCP App)` → `OpenAI Secure Tunnel` → `local MCP` → `Router/Governance` → `Direct Local` or `Codex App Server`.
 
 - **M5** completed the Secure Tunnel + real ChatGPT/Codex App Server production E2E.
 - **M6** completed the structural isolation of the IAB / Alpha.4 implementation under `src/legacy/`.
 - **M7** real-project capability-routing dogfood is **COMPLETE / ACCEPTED**: Native-only, Codex-required, and Hybrid paths passed.
-- The separate operational-default decision is currently **DEFERRED** while the accepted **Brain Continuity / Governance durability** contract is being implemented and real restart/re-entry dogfood remains pending.
-- v0.2 therefore is **not yet** the CLI/Skill default, has not been released, and M8 has not started.
-- The IAB path is **feature-frozen**, **not deleted**.
+- **Brain Continuity**, Direct Local canonical-path hardening, bounded execution claims, Stable Runtime activation, and the explicit operational-default policy review are **COMPLETE / ACCEPTED**.
+- Issue #33 / PR #45 materialized the authorized v0.2 default flip. M8/version/tag/release remain separate; the last tagged release is still `v0.1.0-alpha.3`.
+- The IAB path is **feature-frozen**, **not deleted**, and available only through explicit compatibility/fallback selection.
 
-## Legacy / experimental runtime (not the default Direct Brain Loop)
+## Alpha.3 / legacy compatibility runtime (explicit opt-in only)
 
 The detached worker/TaskService runtime is legacy / experimental, retained for compatibility:
 
@@ -63,16 +63,16 @@ No user-visible port/token/node-REPL details are exposed.
 ## Security / ownership
 
 - Data root: worker owns a durable writable root (no elevation, no dangerous bypass). If none writable -> doctor FAIL with `CHATGPT_ORCHESTRATOR_DATA_ROOT` guidance.
-- Secrets are redacted from logs/state; bearer token appears on the legacy codex child argv (local governor auth) — redacted but not removed.
+- Secrets are redacted from surfaced logs/state; the bearer token still exists on the legacy Codex child argv (local governor auth).
 - Never modifies other IAB tabs; an adopted user tab (when used) is not closed.
 
 ## Current development authority
 
-For v0.2 implementation work, use these current sources rather than this released fallback guide:
+For current implementation and operating truth, use these sources rather than the legacy compatibility mechanics above:
 
 - `PROJECT_STATUS.md` — current phase / blocker / next action;
 - `ROADMAP.md` — accepted high-level path;
-- `CAPABILITY_ROUTING.md` — normative routing/executor policy;
+- `CAPABILITY_ROUTING.md` — current routing/executor policy;
 - `docs/architecture.md` — current technical architecture;
-- `docs/rfc-v0.2-brain-continuity.md` — accepted Brain Continuity contract, implementation pending;
+- `docs/rfc-v0.2-brain-continuity.md` — accepted Brain Continuity contract and historical design rationale; implementation + real dogfood are complete;
 - GitHub current code / PR / CI — implementation truth.

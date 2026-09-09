@@ -12,18 +12,18 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 
 长期连续性原则：**Brain session 可以替换，但 logical work / authority / evidence 不能依赖单一 conversation 或单一 runtime process 的内存存活。** Conversation 是 interaction/context surface，不是 project/control truth。
 
-当前项目 operating model 正在通过 Issue #43 固化为 **Thin Parent / Strong Mission / exception-based escalation**：project-level Parent 保持 project policy / mission contract / material REPLAN / independent acceptance / default-release authority；bounded non-Parent mission session 在既定 contract 内持续推进 routine implementation，并通过 durable pointer 恢复，不让用户充当 conversation message bus。
+当前项目 operating model 已通过 Issue #43 / PR #44 固化为 **Thin Parent / Strong Mission / exception-based escalation**：project-level Parent 保持 project policy / mission contract / material REPLAN / independent acceptance / default-release authority；bounded non-Parent mission session 在既定 contract 内持续推进 routine implementation，并通过 durable pointer 恢复，不让用户充当 conversation message bus。
 
 ## 当前发布 / operational 状态
 
 - **Released version:** `v0.1.0-alpha.3`
-- **Released/default operational path:** Alpha.3 legacy IAB Direct Brain Loop（feature-frozen）
-- **v0.2:** candidate；M0–M7、Brain Continuity、Direct Local canonical-path hardening、bounded implementation-session continuity 与 Stable Runtime activation bootstrap 已完成；operational default flip 尚未 Parent-ACCEPT
+- **Repository/default operational contract:** capability-first v0.2；Alpha.3 legacy IAB 仅显式 feature-frozen compatibility/fallback
+- **v0.2:** M0–M7、Brain Continuity、Direct Local canonical-path hardening、bounded implementation-session continuity、Stable Runtime activation bootstrap、explicit default-policy review 与 operational-default flip 已完成/接受；Issue #33 / PR #45 已 materialize default semantics；尚未 version/tag/release
 - **Brain Continuity:** implementation + exact-head CI + formal Conversation A → real runtime restart → Conversation B dogfood **ACCEPTED / COMPLETE**
 - **Issue #34:** **CLOSED / ACCEPTED**；bounded non-Parent execution continuation claim 已通过 preserved Issue #33 real dogfood
 - **Issue #36:** **CLOSED / ACCEPTED**；Stable Runtime exact-revision activation bootstrap 已完成并支持 #34 real dogfood
-- **Issue #43:** **ACTIVE**；bounded project-policy correction：Thin Parent / Strong Mission
-- **Issue #33:** **PAUSED only until #43 Parent acceptance**；scope/acceptance/default-flip semantics 未改变，preserved partial delta 仍是 SAME mission starting point
+- **Issue #43 / PR #44:** **CLOSED / ACCEPTED / MERGED**；Thin Parent / Strong Mission operating policy 已进入 `main`
+- **Issue #33 / PR #45:** **ACCEPTED / MATERIALIZED**；capability-first v0.2 operational-default flip 已闭环；M8/release 仍是独立后续边界
 - **M8:** 尚未进入
 - **Version bump / release:** 尚未执行
 
@@ -47,8 +47,8 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 | Operational default-policy review | **CLOSED / ACCEPTED** | Issue #32；authorized Issue #33 default-flip implementation |
 | Bounded implementation-session continuity | **CLOSED / ACCEPTED** | Issue #34；execution continuation claim separated from Parent control authority；real #33 dogfood PASS |
 | Stable Runtime activation bootstrap | **CLOSED / ACCEPTED** | Issue #36；exact accepted revision activation with preserved stable profile/state |
-| Thin Parent / Strong Mission policy correction | **ACTIVE** | Issue #43；policy/docs only；must reach Parent independent review before SAME #33 resumes |
-| v0.2 operational default flip | **PAUSED / SAME MISSION** | Issue #33；resume immediately after #43 Parent acceptance under Strong Mission contract |
+| Thin Parent / Strong Mission policy correction | **CLOSED / ACCEPTED** | Issue #43 / PR #44 merged；policy/docs only |
+| v0.2 operational default flip | **ACCEPTED / MATERIALIZED** | Issue #33 / PR #45；capability-first v0.2 is repository operational default；Alpha.3 explicit compatibility only |
 
 ## M7 — Real-Project Capability Routing Dogfood
 
@@ -101,13 +101,13 @@ Final required metrics：
 - lost required acceptance/evidence = `0`；
 - production/control-state pollution = `0`。
 
-The dogfood additionally observed real ChatGPT product capability volatility: some conversations that had previously invoked Developer MCP later returned `FORBIDDEN: This conversation does not support developer MCPs`, while a fresh conversation on the SAME Local MCP/tunnel could invoke successfully. This is treated as capability-plane evidence, not as Governance corruption. Brain Continuity provides safe session rollover; it does not claim to repair the upstream ChatGPT capability gate itself。
+The dogfood additionally observed real ChatGPT product capability volatility: some conversations that had previously invoked Developer MCP later returned `FORBIDDEN: This conversation does not support developer MCPs`, while a fresh conversation on the SAME Local MCP/tunnel could invoke successfully. This is treated as capability-plane evidence, not as Governance corruption. Brain Continuity provides safe session rollover；it does not claim to repair the upstream ChatGPT capability gate itself。
 
 ## Post-Brain-Continuity hardening — CLOSED / ACCEPTED
 
 ### Issue #27 — Direct Local canonical-path hardening
 
-The symlink/junction sensitive-path alias bypass identified before default review is closed. Current accepted Direct Local behavior evaluates sensitive/blocked policy against canonical targets and preserves apply-time canonical safety; Issue #27 is no longer an operational-default blocker.
+The symlink/junction sensitive-path alias bypass identified before default review is closed. Current accepted Direct Local behavior evaluates sensitive/blocked policy against canonical targets and preserves apply-time canonical safety；Issue #27 is no longer an operational-default blocker。
 
 ### Issue #34 — bounded implementation-session continuity
 
@@ -117,11 +117,11 @@ Issue #33 fresh-session dogfood exposed that Parent fencing alone did not let a 
 
 Issue #34 dogfood required activating the accepted exact runtime revision without manual shell choreography. Issue #36 added the bounded exact-revision Stable Runtime activation boundary and completed the real activation path while preserving the stable profile/dataRoot/Governance namespace/tunnel identity.
 
-## Current operating gate — Issue #43 then SAME Issue #33
+## Current operating model — Issue #43 accepted; Issue #33 default flip materialized
 
-Issue #43 is a **project-policy correction**, not another runtime prerequisite. Recent dogfood proved the v0.2 technical substrate is useful but the Parent/mission workflow was too turn-heavy and could make the user a message courier.
+Issue #43 was a **project-policy correction**, not another runtime prerequisite. It is now **CLOSED / ACCEPTED / MERGED** through PR #44.
 
-The accepted direction being materialized is:
+Current policy is:
 
 `Thin Parent / Strong Mission / exception-based escalation`
 
@@ -136,15 +136,25 @@ Key operating rules:
 - dogfood friction uses P0/P1/P2 classification before creating new Governance work；
 - canonical session naming is `① chatgpt-codex-orchestrator | 总控` for Parent and `chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>` for other sessions。
 
-After Issue #43 receives Parent independent acceptance and merges, resume the **SAME Issue #33 durable task / SAME implementation mission** from the preserved partial delta. Do not create a new Codex execution or new project-level scope.
+Issue #43 acceptance unblocked the SAME Issue #33 implementation mission. Issue #33 / PR #45 subsequently materialized the accepted capability-first v0.2 default under Strong Mission rules without creating a second Codex execution or new project-level scope.
 
 ## Operational default flip — Issue #33
 
 Issue #32 already completed the explicit operational-default review with **ACCEPT** and authorized Issue #33. Therefore the old `DEFER until #27 closes` statement is historical and no longer current policy.
 
-Issue #33 remains the bounded implementation milestone that makes the accepted v0.2 capability-first model the actual operational default while keeping Alpha.3 legacy IAB explicit, feature-frozen compatibility/fallback. Its scope and acceptance contract are unchanged by Issue #43; only the mission operating policy is being corrected before continuation.
+Issue #33 / PR #45 materialized the accepted v0.2 capability-first model as the repository operational default while keeping Alpha.3 legacy IAB explicit, feature-frozen compatibility/fallback.
 
-Issue #33 is not M8 and does not authorize version bump/tag/release.
+Accepted/materialized semantics include:
+
+- effective `brain-command` runtime family defaults to `v0.2` when `defaultRuntime` is absent；
+- explicit `defaultRuntime='alpha3'` / explicit compatibility opt-in remains supported；
+- unknown runtime and capability/provider failure never silently map to Alpha.3；
+- canonical Skill begins with runtime capability discovery / Native-first routing；
+- Stable Runtime Direct Local is used for bounded local work；Codex is selected only when sustained coding is actually required；
+- latest tagged release remains `v0.1.0-alpha.3`；
+- M8/version/tag/release remain separate and unauthorized。
+
+The #33 implementation mission is no longer an active gate once this tree is on `main`. Its ACCEPT/materialization does not authorize M8, version bump, tag, GitHub Release, or project release.
 
 ## Non-blocking observations retained
 
@@ -152,15 +162,14 @@ Issue #33 is not M8 and does not authorize version bump/tag/release.
 2. **Passive execution observability:** long-running execution 缺少稳定用户 status/notification surface；后续作为 UX/observability candidate。
 3. **Developer MCP conversation volatility:** per-conversation invocation may disappear even when the SAME local transport is healthy；availability must be rediscovered rather than assumed。
 4. **Node 24 executor test timing:** ownership/permission continuation tests have shown transient timing failures that pass on same-head rerun；retain as test-stability evidence unless reproducible correctness evidence emerges。
-5. **Branch protection:** current `main` is not protected by required checks；delivery-hardening candidate, not current #43/#33 scope。
+5. **Branch protection:** current `main` is not protected by required checks；delivery-hardening candidate outside the completed #33 scope。
 6. **Parent direct-main process mistake:** Issue #43 records two no-net-content direct-main commits from Parent preparation；accepted response is branch + PR discipline, not history rewrite or a new runtime feature。
 
 ## 当前下一步
 
-1. **Issue #43:** complete minimum policy/docs reconciliation on branch + exact-head PR and stop for Parent independent review。
-2. **SAME Issue #33:** after #43 Parent ACCEPT/merge, resume preserved default-flip implementation under Strong Mission contract and continue autonomously to exact candidate + Draft PR + exact-head CI。
-3. **Parent independent acceptance:** Parent reacquires Issue #33 exact diff/files/tests/CI and decides `ACCEPT / REVISE`；mission session does not self-accept default flip。
-4. **M8 RC / Release:** remains separate and unauthorized until explicit post-#33 Parent decision。
+1. **Operational default:** capability-first v0.2 is accepted/materialized through Issue #33 / PR #45；Alpha.3 remains explicit compatibility/fallback only。
+2. **M8 RC / Release:** remains separate, **NOT STARTED**, and requires explicit Parent authorization；#33 completion does not auto-start it。
+3. **Future work:** must come from a new authoritative Issue/mission contract rather than being inferred from the completed #33 mission。
 
 ## Authority
 

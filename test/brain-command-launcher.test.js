@@ -45,6 +45,37 @@ function cfg(repo) {
   return { orchestratorRoot: repo, dataRoot: os.tmpdir(), workspaceRoot: repo, defaultBrain: 'chatgpt', defaultExecutor: 'codex', defaultConversationMode: 'new' };
 }
 
+test('Issue #33: legacy launcher fails closed without explicit Alpha.3 opt-in', async () => {
+  const repo = tmpRepo();
+  const worker = new MockWorker();
+  const brain = new MockBrain([TASK, 'DONE']);
+  await assert.rejects(
+    runBrainCommand({ goal: 'g', config: { ...cfg(repo), defaultRuntime: 'v0.2' }, repoDir: repo, worker, brainSession: brain, preflight: false }),
+    /legacy launcher is non-canonical\/experimental/,
+  );
+  assert.strictEqual(worker.executeCalls, 0, 'v0.2/default invocation must not enter legacy execution');
+});
+
+test('Issue #33: explicit config defaultRuntime=alpha3 opts into the retained legacy launcher', async () => {
+  const repo = tmpRepo();
+  const worker = new MockWorker();
+  const brain = new MockBrain([TASK, 'DONE']);
+  const r = await runBrainCommand({ goal: 'g', config: { ...cfg(repo), defaultRuntime: 'alpha3' }, repoDir: repo, worker, brainSession: brain, preflight: false });
+  assert.strictEqual(r.status, 'completed');
+  assert.ok(worker.executeCalls >= 1, 'explicit Alpha.3 opt-in reaches retained legacy executor');
+});
+
+test('Issue #33: unknown runtime never silently falls back to legacy', async () => {
+  const repo = tmpRepo();
+  const worker = new MockWorker();
+  const brain = new MockBrain([TASK, 'DONE']);
+  await assert.rejects(
+    runBrainCommand({ goal: 'g', config: { ...cfg(repo), defaultRuntime: 'mystery' }, repoDir: repo, worker, brainSession: brain, preflight: false }),
+    /legacy launcher is non-canonical\/experimental/,
+  );
+  assert.strictEqual(worker.executeCalls, 0);
+});
+
 test('runBrainCommand uses TaskService/createTask/advanceTask, binds worker taskId, reaches DONE, shuts worker down', async () => {
   const repo = tmpRepo();
   const worker = new MockWorker();
@@ -79,13 +110,11 @@ test('launcher source uses TaskService/advanceTask and does NOT import LoopContr
   assert.ok(!src.includes('loop-controller'), 'launcher must not import legacy LoopController');
 });
 
-// --- trusted-REPL runtime adapter coverage (no process shim, no preflight:false) ---
 import { canonicalReadyFile, runtimePaths } from '../src/runtime-paths.js';
 import { isTrustedRepl } from '../src/runtime-env.js';
 import { fastPreflight } from '../src/bootstrap.js';
 import { defaultReadyFile, codexHomePath } from '../scripts/brain-command-launcher.mjs';
 
-// Mimics the Codex trusted REPL: nodeRepl.rpc available, but scope exposes NO process.
 function trustedLauncherScope({ cwd }) {
   return { nodeRepl: { rpc() { return null; }, env: {}, cwd, homeDir: null } };
 }
@@ -95,7 +124,6 @@ test('worker bootstrap and launcher agree on the canonical ready-file path autom
   const expected = path.join(runtimePaths(dataRoot).runtime, 'brain-command.ready.json');
   assert.strictEqual(canonicalReadyFile(dataRoot), expected);
   assert.strictEqual(defaultReadyFile(dataRoot), expected, 'launcher defaultReadyFile === canonicalReadyFile');
-  // Worker bootstrap derives the same canonical path when --ready-file is omitted.
   const workerSrc = fs.readFileSync(path.join(process.cwd(), 'scripts', 'brain-command-worker.mjs'), 'utf8');
   assert.ok(workerSrc.includes('canonicalReadyFile(dataRoot)'), 'worker derives the canonical ready file');
 });
@@ -106,12 +134,10 @@ test('preflight ownership: trusted-REPL launcher passes dataRootWritable=true an
   cfg2.codexJs = path.join(repo, 'codex.js');
   fs.mkdirSync(path.dirname(cfg2.codexJs), { recursive: true });
   fs.writeFileSync(cfg2.codexJs, '//', 'utf8');
-  // Trusted-REPL probe set: IAB callable, data root owned by worker -> PASS.
   const ok = fastPreflight({ config: cfg2, probes: { cwd: repo, repoDir: repo, repoExists: true, dataRootWritable: true, iabCallable: true } });
   assert.strictEqual(ok.pass, true, JSON.stringify(ok.checks));
   const dr = ok.checks.find((c) => c.check === 'data-root-writable');
   assert.strictEqual(dr.status, 'PASS', 'worker-owned data root does not fail the REPL');
-  // A genuinely broken IAB is still reported honestly.
   const ko = fastPreflight({ config: cfg2, probes: { cwd: repo, repoDir: repo, repoExists: true, dataRootWritable: true, iabCallable: false } });
   assert.strictEqual(ko.pass, false);
   assert.ok(ko.checks.some((c) => c.check === 'iab-callable' && c.status === 'FAIL'));

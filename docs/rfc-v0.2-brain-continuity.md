@@ -1,8 +1,10 @@
 # RFC: v0.2 Brain Continuity
 
-> Status: **ACCEPTED CONTRACT — implementation / real dogfood pending**
+> Status: **ACCEPTED / IMPLEMENTED / REAL DOGFOOD COMPLETE**
 >
-> This RFC records the current best-known design based on M7 dogfood and subsequent Parent Brain review. It is intentionally revisable: new production evidence may trigger `REPLAN`. Acceptance of this contract does not accept any future implementation automatically.
+> This RFC is the accepted Brain Continuity contract and preserves its original pre-implementation reasoning as historical design evidence. Current implementation truth is GitHub code/PR/CI and `PROJECT_STATUS.md`: Issue #23 / PR #24 implementation and formal restart/re-entry dogfood are complete; later Issues #34 and #36 closed bounded mission continuation and Stable Runtime activation gaps.
+>
+> **Historical-reading boundary:** sections below intentionally retain design-time statements such as “not yet equally durable”, “should”, and acceptance criteria that existed before implementation. They document why the contract was chosen; they must not be read as current runtime status or as a new gate for Issue #33.
 
 ## 1. Problem
 

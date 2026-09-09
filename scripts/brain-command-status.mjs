@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // chatgpt-codex-orchestrator: read-only brain-command status check CLI (Alpha.2).
 // Checks whether the user-level launcher Skill is discoverable and the user-scoped
-// brain-command config exists/parses, then prints the six safe config fields.
+// brain-command config exists/parses, then prints the safe config fields (including the effective operational runtime family).
 // Never prints any secret/token. Exits 0 when healthy, 1 when missing/invalid.
 //   node scripts/brain-command-status.mjs [--codex-home <dir>] [--home <dir>] [--json]
 import os from 'node:os';
@@ -16,7 +16,7 @@ const home = arg('--home') || process.env.HOME || process.env.USERPROFILE || os.
 const status = brainCommandStatus({ codexHome, home });
 
 if (has('--json')) {
-  // The status object carries only the six safe config fields + check reasons;
+  // The status object carries only the safe config fields + check reasons;
   // it never contains a raw config dump or any secret/token field.
   console.log(JSON.stringify(status, null, 2));
 } else {

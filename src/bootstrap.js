@@ -23,6 +23,19 @@ export function brainCommandConfigPath(ch = codexHome()) {
   return path.join(ch, 'brain-command', 'config.json');
 }
 
+// Operational default runtime family (Issue #33, v0.2 operational default flip):
+// the normal brain-command entry is capability-first v0.2 / Stable Runtime.
+// Alpha.3 legacy IAB is an explicit opt-in compatibility fallback ONLY
+// (config.defaultRuntime='alpha3' and/or BRAIN_COMMAND_LEGACY=1 / legacyOptIn).
+export const DEFAULT_RUNTIME_FAMILY = 'v0.2';
+export const RUNTIME_FAMILIES = ['v0.2', 'alpha3'];
+
+// Effective runtime family of a brain-command config. Absent => v0.2 (the
+// operational default). `alpha3` is the explicit legacy IAB value; any other
+// explicit value is rejected at validation (fail closed, never silent).
+export function effectiveRuntimeFamily(config = {}) {
+  return config && RUNTIME_FAMILIES.includes(config.defaultRuntime) ? config.defaultRuntime : DEFAULT_RUNTIME_FAMILY;
+}
 export const DEFAULT_BRAIN_COMMAND_CONFIG = {
   orchestratorRoot: '',
   dataRoot: '',
@@ -30,6 +43,7 @@ export const DEFAULT_BRAIN_COMMAND_CONFIG = {
   defaultBrain: 'chatgpt',
   defaultExecutor: 'codex',
   defaultConversationMode: 'new',
+  defaultRuntime: DEFAULT_RUNTIME_FAMILY, // capability-first v0.2 / Stable Runtime (Issue #33)
 };
 
 export function defaultBrainCommandConfig(overrides = {}) {
@@ -45,6 +59,10 @@ export function validateBrainCommandConfig(cfg) {
   if (!['chatgpt'].includes(cfg.defaultBrain)) errors.push(`unsupported defaultBrain: ${cfg.defaultBrain}`);
   if (!['codex'].includes(cfg.defaultExecutor)) errors.push(`unsupported defaultExecutor: ${cfg.defaultExecutor}`);
   if (!['new', 'current'].includes(cfg.defaultConversationMode)) errors.push(`unsupported defaultConversationMode: ${cfg.defaultConversationMode}`);
+  // Optional defaultRuntime: absent => v0.2 (operational default). Only explicit
+  // 'v0.2' / 'alpha3' accepted; any other explicit value fails closed (never
+  // silently maps to legacy Alpha.3).
+  if (cfg.defaultRuntime !== undefined && !RUNTIME_FAMILIES.includes(cfg.defaultRuntime)) errors.push(`unsupported defaultRuntime: ${cfg.defaultRuntime} (expected ${RUNTIME_FAMILIES.join(' | ')})`);
   return { ok: errors.length === 0, errors };
 }
 
@@ -128,7 +146,7 @@ export function installBrainCommandSkill({ home = userHome(), skillSourceDir = n
 // create/update the user-scoped bootstrap config at $CODEX_HOME/brain-command/config.json,
 // preserving machine-local paths. Normal task execution does NOT call this; it only
 // reads the config via loadBrainCommandConfig.
-export function setupBrainCommand({ codexHome: ch = codexHome(), home = userHome(), config = null, orchestratorRoot = null, skillSourceDir = null, dataRoot = null, workspaceRoot = null, defaultBrain = 'chatgpt', defaultExecutor = 'codex', defaultConversationMode = 'new' } = {}) {
+export function setupBrainCommand({ codexHome: ch = codexHome(), home = userHome(), config = null, orchestratorRoot = null, skillSourceDir = null, dataRoot = null, workspaceRoot = null, defaultBrain = 'chatgpt', defaultExecutor = 'codex', defaultConversationMode = 'new', defaultRuntime = DEFAULT_RUNTIME_FAMILY } = {}) {
   const skillPath = installBrainCommandSkill({ home, skillSourceDir });
   let existing = null;
   const cfgFile = brainCommandConfigPath(ch);
@@ -143,6 +161,10 @@ export function setupBrainCommand({ codexHome: ch = codexHome(), home = userHome
     defaultBrain: (config && config.defaultBrain) || (existing && existing.defaultBrain) || defaultBrain,
     defaultExecutor: (config && config.defaultExecutor) || (existing && existing.defaultExecutor) || defaultExecutor,
     defaultConversationMode: (config && config.defaultConversationMode) || (existing && existing.defaultConversationMode) || defaultConversationMode,
+    // Runtime family: explicit config wins, then preserved machine setting, then
+    // the v0.2 operational default. An existing explicit 'alpha3' is preserved on
+    // re-run (setup never silently forces legacy off or on).
+    defaultRuntime: (config && config.defaultRuntime) || (existing && existing.defaultRuntime) || defaultRuntime,
   };
   const configPath = writeBrainCommandConfig(merged, { codexHome: ch });
   return { skillPath, configPath, config: merged };
@@ -151,7 +173,7 @@ export function setupBrainCommand({ codexHome: ch = codexHome(), home = userHome
 // --- brain-command read-only status check (Alpha.2) ----------------------------
 // A deterministic, read-only self-check used by the `status:brain-command` CLI and
 // by library callers. It NEVER writes, NEVER echoes the raw config, and NEVER
-// exposes any secret/token field -- only the six known safe config fields plus
+// exposes any secret/token field -- only the known safe config fields plus
 // per-check diagnostics. Config missing/invalid yields a clear FAIL and a non-zero
 // exit code; a healthy install yields PASS and exit code 0.
 export function brainCommandStatus({ codexHome: ch = codexHome(), home = userHome() } = {}) {
@@ -191,8 +213,9 @@ export function brainCommandStatus({ codexHome: ch = codexHome(), home = userHom
       status.config.status = 'PASS';
       status.config.parseable = true;
       status.config.reason = 'config present and parseable';
-      // Only the six safe fields are surfaced. The raw config object is never
-      // returned or printed, so any extra/secret field is intentionally excluded.
+      // Only the known safe fields are surfaced (including the effective
+      // operational runtime family). The raw config object is never returned or
+      // printed, so any extra/secret field is intentionally excluded.
       status.fields = {
         orchestratorRoot: cfg.orchestratorRoot,
         dataRoot: cfg.dataRoot,
@@ -200,6 +223,7 @@ export function brainCommandStatus({ codexHome: ch = codexHome(), home = userHom
         defaultBrain: cfg.defaultBrain,
         defaultExecutor: cfg.defaultExecutor,
         defaultConversationMode: cfg.defaultConversationMode,
+        defaultRuntime: effectiveRuntimeFamily(cfg),
       };
       status.checks.push({ check: 'brain-command-config', status: 'PASS', reason: cfgFile });
     } catch (e) {
@@ -231,6 +255,7 @@ export function formatBrainCommandStatus(status) {
     lines.push('  defaultBrain:     ' + status.fields.defaultBrain);
     lines.push('  defaultExecutor:  ' + status.fields.defaultExecutor);
     lines.push('  defaultConversationMode: ' + status.fields.defaultConversationMode);
+    lines.push('  defaultRuntime: ' + status.fields.defaultRuntime + (status.fields.defaultRuntime === 'alpha3' ? '  (explicit Alpha.3 legacy IAB opt-in)' : '  (capability-first v0.2 / Stable Runtime)'));
   }
   lines.push('');
   lines.push(status && status.ok

@@ -16,15 +16,17 @@ import { buildCompactResult, normalizeResult, parseBrainOutput } from '../src/pr
 
 const skillPath = fileURLToPath(new URL('../skills/brain-command/SKILL.md', import.meta.url));
 
-test('canonical SKILL.md describes Direct Brain Loop as the default', () => {
+test('canonical SKILL.md describes capability-first v0.2 as the operational default and Alpha.3 IAB as explicit fallback', () => {
   assert.ok(fs.existsSync(skillPath), 'canonical skill file should exist');
   const md = fs.readFileSync(skillPath, 'utf8');
-  assert.match(md, /Direct Brain Loop/i, 'skill must describe the Direct Brain Loop');
-  assert.match(md, /current Codex agent/i, 'skill must say the current Codex agent is the executor');
-  assert.match(md, /built-in browser/i, 'skill must use the built-in browser');
-  assert.match(md, /Legacy \/ experimental runtime/i, 'skill must mark the detached runtime as legacy/experimental');
-  // The default path must NOT be the worker/nested-Codex path.
-  assert.doesNotMatch(md, /brain-command-worker\.mjs\s+--config/i, 'default path must not tell the agent to start the worker via --config');
+  assert.match(md, /capability-first v0\.2/i, 'skill must name the v0.2 operational default');
+  assert.match(md, /runtime capability discovery/i, 'skill must route from current runtime capability');
+  assert.match(md, /Stable Runtime/i, 'skill must identify the Stable Runtime local plane');
+  assert.match(md, /Alpha\.3/i, 'skill must retain the Alpha.3 compatibility path');
+  assert.match(md, /explicit[^\n]*(?:fallback|opt-in)|(?:fallback|opt-in)[^\n]*explicit/i, 'Alpha.3 must be explicit rather than an automatic fallback');
+  assert.match(md, /Direct Brain Loop/i, 'legacy Direct Brain Loop must remain documented');
+  assert.match(md, /built-in (?:IAB|browser)/i, 'legacy IAB mechanics must remain identifiable');
+  assert.doesNotMatch(md, /default[^\n]*brain-command-worker\.mjs\s+--config/i, 'default path must not tell the agent to start the worker via --config');
 });
 
 test('default path does not require worker bootstrap / ready file / nested Codex / localhost / token / REPL long loop / process shim', () => {
@@ -69,7 +71,6 @@ test('RESULT packet stays compact structured protocol', () => {
   assert.equal(r.changed[0], 'a.txt');
   assert.equal(r.evidence[0].acceptanceId, 'acc-1');
   assert.equal(r.evidence[0].status, 'pass');
-  // normalizeResult round-trips the compact shape.
   const n = normalizeResult(r);
   assert.equal(n.type, 'result');
   assert.equal(n.stepId, 'step-1');
@@ -80,11 +81,9 @@ test('PUBLISH authorizes publication; DONE is terminal and never authorizes publ
   assert.equal(evaluatePublicationGate({ brainControl: 'DONE', acceptanceGateOk: true, identityPreflightOk: true, workingTreeScopeOk: true }).ok, false, 'DONE must not start publication');
   assert.equal(evaluatePublicationGate({ brainControl: 'REVISE', acceptanceGateOk: true, identityPreflightOk: true, workingTreeScopeOk: true }).ok, false, 'REVISE must not publish');
   assert.equal(evaluatePublicationGate({ brainControl: 'PUBLISH', acceptanceGateOk: false, identityPreflightOk: true, workingTreeScopeOk: true }).ok, false, 'failed acceptance gate must not publish');
-  // Terminal DONE only accepts the already-verified final state.
   assert.equal(evaluateDoneGate({ publicationReady: true, finalVerificationOk: true, workingTreeScopeOk: true }).ok, true);
   assert.equal(evaluateDoneGate({ publicationReady: false, finalVerificationOk: true, workingTreeScopeOk: true }).ok, false, 'DONE without publication/readback must be rejected');
   assert.equal(evaluateDoneGate({ publicationReady: true, finalVerificationOk: false, workingTreeScopeOk: true }).ok, false, 'DONE without final verification must be rejected');
-  // Known forbidden states.
   for (const s of ['REVISE', 'ASK_USER', 'failure', 'recovery_required']) {
     assert.equal(isPublishForbiddenState(s), true, `${s} is a non-publish state`);
   }

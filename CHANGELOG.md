@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
-The current unreleased line is the **capability-first v0.2 candidate**. These changes are present on `main` but have **not** been operationally default-flipped, version-bumped, tagged, or formally released. The latest formal release remains `v0.1.0-alpha.3`.
+The current unreleased line is **capability-first v0.2**. M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the explicit default-policy review are complete/accepted on `main`. Issue #33 / PR #45 materialized the accepted repository operational-default flip. This does **not** version-bump, tag, or formally release v0.2. The latest formal release remains `v0.1.0-alpha.3`.
 
 ### Added
 
@@ -15,25 +15,27 @@ The current unreleased line is the **capability-first v0.2 candidate**. These ch
 - Deterministic Router + canonical Governance service with `PLAN / TASK / RESULT / REVISE / REPLAN / ASK_USER / PUBLISH / DONE` semantics and explicit executor/machine/Brain acceptance separation.
 - v0.2 production runtime entry (`npm run start:v0.2`) and local/App Server smoke/E2E scripts.
 - M7-C durable Codex orchestration binding (`taskId / stepId / identity`) plus bounded `codex_recover`: unique-match recovery only; `not_found / ambiguous / wrong_workspace / stale` fail closed; no most-recent guessing or generic force unlock.
-- Accepted [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md), defining the current post-M7 continuity contract: durable Governance, bounded Parent re-entry, authority fencing, Context Capsule semantics, capability freshness, single canonical Governance writer, and isolated fault-injection dogfood.
+- Accepted [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md), defining the post-M7 continuity contract: durable Governance, bounded Parent re-entry, authority fencing, Context Capsule semantics, capability freshness, single canonical Governance writer, and isolated fault-injection dogfood. Its implementation and formal restart/re-entry dogfood are now complete.
 - Read-only brain-command status check: `npm run status:brain-command` (`scripts/brain-command-status.mjs` → `brainCommandStatus`). Verifies the user-level launcher Skill is discoverable and `$CODEX_HOME/brain-command/config.json` exists/parses, prints safe configuration fields, never prints secrets, and returns exit 0 healthy / 1 missing-or-invalid.
 - Durable new-task admission gate (Issue #29): a genuinely new `PLAN` on a fresh/restarted durable Governance runtime scans the durable namespace first - 0 non-terminal tasks allow admission, 1 rejects with bounded recovery-required semantics, >1 fails ambiguous; in-process terminal `DONE -> new PLAN` stays valid and persisted terminal tasks are never reopened under another task authority.
 - Task-scoped mutation authorization (Issue #29): `workspaceId`/`jobId`/`changeSetId` are selectors only; new Codex start/continue turns and Direct Local apply / workspace-effect mutations validate the current durable Governance task + its canonical workspace root + the current Parent authority token (same token family). Already-authorized running Codex execution continues to survive Parent takeover/restart through the existing bounded recover/reconcile path without cancel/restart/duplicate.
 - Narrow bounded worktree bootstrap primitive (Issue #29): `worktree_create(repo, targetPath, branch, startPoint)` with strict trust-root containment, `git worktree add`, and an exact canonical created-path return; rejects existing targets, ambiguous/unsafe branch or ref, untrusted repos, and pool escapes. No generic shell / repo manager / scheduler / GC.
 - Stable runtime lifecycle alignment (Issue #29): externally managed Secure Tunnel opt-out (`tunnel.external`) keeps Local MCP as owner of its HTTP MCP/Governance/tool lifecycle while readiness is proven through the external tunnel health URL; the runtime never spawns or kills an externally owned tunnel-client.
+- Bounded implementation-session continuity (Issue #34): a narrow current-task/current-step/canonical-workspace execution continuation claim separated from Parent control authority, with stale-claim fencing and preserved-#33 real dogfood PASS.
+- Stable Runtime exact-revision activation bootstrap (Issue #36), preserving stable profile/dataRoot/Governance namespace/tunnel identity.
 
 ### Changed
 
-- The canonical development architecture is now capability-first: ChatGPT is the authoritative Brain; Native capabilities are reused when sufficient; Codex is a sustained local coding executor rather than the default downstream for every task.
-- The Alpha.3/Alpha.4 IAB implementation is structurally isolated under `src/legacy/` and remains feature-frozen as the released fallback.
-- M7 real-project routing dogfood is complete and accepted: Native-only, Codex-required, and genuine Hybrid paths all passed independent Brain verification.
-- The post-M7 operational-default decision is **DEFERRED** until Brain Continuity / Governance durability implementation and real restart/conversation-re-entry dogfood close the current blocker.
+- The repository operational contract is now capability-first: ChatGPT is the authoritative Brain; runtime capability discovery precedes routing; Native capabilities are reused when sufficient; Codex is a sustained local coding executor rather than the default downstream for every task.
+- Issue #33 makes `v0.2` the effective `brain-command` runtime family by default, keeps `alpha3` as an explicit compatibility opt-in, and fails closed rather than silently routing capability/provider failure into the legacy IAB path.
+- The Alpha.3/Alpha.4 IAB implementation is structurally isolated under `src/legacy/` and remains feature-frozen as an explicit compatibility/fallback path.
+- M7 real-project routing dogfood, Brain Continuity implementation/re-entry dogfood, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the explicit default-policy review are complete and accepted.
 
 ### Not released yet
 
-- Brain Continuity implementation and real isolated Conversation A → B restart/re-entry dogfood remain pending.
-- v0.2 is not yet the CLI/Skill/default operational path.
-- No `v0.2` version bump, tag, release, or M8 transition has occurred.
+- The v0.2 operational default is accepted/materialized through Issue #33 / PR #45; M8/release remains a separate Parent authorization.
+- No `v0.2` version bump, tag, formal release, or M8 transition has occurred.
+- The last tagged Alpha.3 release remains available as the explicit feature-frozen compatibility boundary.
 
 ## [0.1.0-alpha.3]
 

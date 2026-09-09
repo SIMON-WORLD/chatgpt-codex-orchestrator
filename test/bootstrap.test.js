@@ -11,6 +11,8 @@ import {
   sourceBrainCommandSkillPath, legacyBrainCommandSkillPath, userHome,
   discoverBroadRepoDir, markBroadDiscovery,
   isBrainCommandTrigger, newBootstrapMetrics, bootstrapElapsedMs,
+  defaultBrainCommandConfig, DEFAULT_RUNTIME_FAMILY, RUNTIME_FAMILIES, effectiveRuntimeFamily,
+  validateBrainCommandConfig,
 } from '../src/bootstrap.js';
 
 function dir() { const d = path.join(os.tmpdir(), 'boot-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)); fs.mkdirSync(d, { recursive: true }); return d; }
@@ -32,6 +34,7 @@ test('loadBrainCommandConfig reads a valid config', () => {
   assert.strictEqual(cfg.defaultBrain, 'chatgpt');
   assert.strictEqual(cfg.defaultExecutor, 'codex');
   assert.strictEqual(cfg.defaultConversationMode, 'new');
+  assert.strictEqual(effectiveRuntimeFamily(cfg), 'v0.2', 'config without an explicit runtime resolves to capability-first v0.2 / Stable Runtime');
   assert.ok(cfg.orchestratorRoot && cfg.workspaceRoot && cfg.dataRoot);
 });
 
@@ -46,6 +49,22 @@ test('invalid JSON config -> fail fast', () => {
   assert.throws(() => loadBrainCommandConfig({ codexHome: home }), BrainCommandConfigError);
 });
 
+test('Issue #33 default runtime family: absent => v0.2; explicit alpha3 accepted; unknown rejected', () => {
+  assert.strictEqual(DEFAULT_RUNTIME_FAMILY, 'v0.2');
+  assert.deepStrictEqual(RUNTIME_FAMILIES, ['v0.2', 'alpha3']);
+  assert.strictEqual(effectiveRuntimeFamily({}), 'v0.2');
+  assert.strictEqual(effectiveRuntimeFamily(null), 'v0.2');
+  assert.strictEqual(effectiveRuntimeFamily({ defaultRuntime: 'alpha3' }), 'alpha3');
+  assert.strictEqual(effectiveRuntimeFamily({ defaultRuntime: 'weird' }), 'v0.2', 'unknown explicit value never silently maps to legacy');
+  assert.strictEqual(defaultBrainCommandConfig().defaultRuntime, 'v0.2');
+  assert.strictEqual(validateBrainCommandConfig(defaultBrainCommandConfig(VALID)).ok, true, 'a complete fresh config with the v0.2 runtime default must validate');
+  assert.strictEqual(validateBrainCommandConfig(VALID).ok, true);
+  assert.strictEqual(validateBrainCommandConfig({ ...VALID, defaultRuntime: 'alpha3' }).ok, true);
+  const bad = validateBrainCommandConfig({ ...VALID, defaultRuntime: 'mystery' });
+  assert.strictEqual(bad.ok, false);
+  assert.match(bad.errors.join(' '), /unsupported defaultRuntime/);
+});
+
 test('invalid config (bad defaultBrain / missing root) -> fail fast', () => {
   const home = dir();
   writeBrainCommandConfig({ ...VALID, defaultBrain: 'claude', dataRoot: '' }, { codexHome: home });
@@ -56,26 +75,21 @@ test('resolveRepoDir: cwd inside workspace wins; explicit path; config fallback;
   const ws = VALID.workspaceRoot;
   const inside = path.join(ws, 'sub');
   fs.mkdirSync(inside, { recursive: true });
-  // 1. cwd inside workspace -> cwd
   let r = resolveRepoDir({ cwd: inside, config: VALID });
   assert.strictEqual(r.repoDir, path.resolve(inside));
   assert.strictEqual(r.source, 'cwd');
   assert.strictEqual(r.broadDiscoveryOccurred, false);
-  // 2. explicit local path wins when cwd is NOT inside the configured workspace
   const exp = path.join(dir(), 'explicit-repo');
   fs.mkdirSync(exp, { recursive: true });
   r = resolveRepoDir({ cwd: path.join(dir(), 'elsewhere'), explicitRepoPath: exp, config: VALID });
   assert.strictEqual(r.repoDir, path.resolve(exp));
   assert.strictEqual(r.source, 'explicit');
-  // 3. explicit GitHub repo -> config workspaceRoot
   r = resolveRepoDir({ explicitGitHubRepo: 'owner/repo', config: VALID });
   assert.strictEqual(r.repoDir, path.resolve(VALID.workspaceRoot));
   assert.strictEqual(r.source, 'github-config');
-  // 4. config fallback
   r = resolveRepoDir({ config: VALID });
   assert.strictEqual(r.repoDir, path.resolve(VALID.workspaceRoot));
   assert.strictEqual(r.source, 'config');
-  // 5. unresolved (no workspace, no cwd repo)
   r = resolveRepoDir({ cwd: path.join(dir(), 'not-a-repo'), config: { ...VALID, workspaceRoot: '' } });
   assert.strictEqual(r.repoDir, null);
   assert.strictEqual(r.source, 'unresolved');
@@ -90,7 +104,6 @@ test('resolveOrchestratorRoot: config > explicit > self-identify', () => {
   o = resolveOrchestratorRoot({ explicitRoot: '/tmp/x' });
   assert.strictEqual(o.orchestratorRoot, path.resolve('/tmp/x'));
   assert.strictEqual(o.source, 'explicit');
-  // self-identify only when cwd contains this orchestrator's source
   const self = VALID.orchestratorRoot;
   fs.mkdirSync(path.join(self, 'src'), { recursive: true });
   fs.writeFileSync(path.join(self, 'src', 'protocol.js'), '// x', 'utf8');
@@ -100,21 +113,14 @@ test('resolveOrchestratorRoot: config > explicit > self-identify', () => {
 });
 
 test('fastPreflight: all green with probes / detects failures', () => {
-  const cfg = {
-    ...VALID,
-    codexJs: path.join(dir(), 'codex.js'),
-  };
-  fs.mkdirSync(cfg.codexJs ? path.dirname(cfg.codexJs) : VALID.orchestratorRoot, { recursive: true });
+  const cfg = { ...VALID, codexJs: path.join(dir(), 'codex.js') };
+  fs.mkdirSync(path.dirname(cfg.codexJs), { recursive: true });
   fs.writeFileSync(cfg.codexJs, '//', 'utf8');
   fs.mkdirSync(cfg.orchestratorRoot, { recursive: true });
   fs.mkdirSync(cfg.workspaceRoot, { recursive: true });
   fs.mkdirSync(cfg.dataRoot, { recursive: true });
-  const has = fs.existsSync;
-  assert.ok(has(cfg.orchestratorRoot) && has(cfg.workspaceRoot) && has(cfg.dataRoot));
-  // all probes green
   const pass = fastPreflight({ config: cfg, probes: { iabCallable: true, repoExists: true, dataRootWritable: true } });
   assert.strictEqual(pass.pass, true, JSON.stringify(pass.checks));
-  // iab not callable -> fail
   const fail = fastPreflight({ config: cfg, probes: { iabCallable: false } });
   assert.ok(!fail.pass);
   assert.ok(fail.checks.some((c) => c.check === 'iab-callable' && c.status === 'FAIL'));
@@ -140,8 +146,8 @@ test('brain-command trigger detection', () => {
 });
 
 test('setup installs the Skill to $HOME/.agents/skills/brain-command (canonical) and config to $CODEX_HOME/brain-command; external cwd resolves without repo location', async () => {
-  const home = dir();      // isolated HOME
-  const codexHome = dir(); // isolated CODEX_HOME
+  const home = dir();
+  const codexHome = dir();
   const cfg = {
     orchestratorRoot: path.join(dir(), 'orch'),
     dataRoot: path.join(dir(), 'data'),
@@ -149,36 +155,30 @@ test('setup installs the Skill to $HOME/.agents/skills/brain-command (canonical)
     defaultBrain: 'chatgpt', defaultExecutor: 'codex', defaultConversationMode: 'new',
   };
   const res = setupBrainCommand({ codexHome, home, config: cfg });
-  // Skill lives at $HOME/.agents/skills/brain-command/SKILL.md (canonical user Skill root).
-  assert.ok(res.skillPath === installedBrainCommandSkillPath({ home }), 'installed path is the canonical user Skill path');
-  assert.ok(fs.existsSync(res.skillPath), 'skill installed to $HOME/.agents/skills/brain-command/SKILL.md');
-  assert.ok(!fs.existsSync(legacyBrainCommandSkillPath({ codexHome })), 'canonical new-install is NOT the deprecated $CODEX_HOME/skills path');
-  assert.ok(fs.existsSync(res.configPath), 'config installed to $CODEX_HOME/brain-command/config.json');
+  assert.ok(res.skillPath === installedBrainCommandSkillPath({ home }));
+  assert.ok(fs.existsSync(res.skillPath));
+  assert.ok(!fs.existsSync(legacyBrainCommandSkillPath({ codexHome })));
+  assert.ok(fs.existsSync(res.configPath));
   assert.strictEqual(res.configPath, brainCommandConfigPath(codexHome));
   assert.ok(brainCommandInstalled({ home, codexHome }));
-
-  // A fresh external working directory (elsewhere) resolves the installed skill /
-  // config without knowing the orchestrator repo location.
   const elsewhere = dir();
   const loaded = loadBrainCommandConfig({ codexHome });
   assert.strictEqual(loaded.orchestratorRoot, cfg.orchestratorRoot);
   assert.strictEqual(loaded.defaultBrain, 'chatgpt');
   assert.ok(fs.existsSync(installedBrainCommandSkillPath({ home })));
-  assert.ok(elsewhere !== home && elsewhere !== codexHome, 'external cwd used');
+  assert.ok(elsewhere !== home && elsewhere !== codexHome);
 });
 
 test('legacy $CODEX_HOME/skills/brain-command is recognized as a backward-compatible fallback, not the canonical install destination', () => {
   const home = dir();
   const codexHome = dir();
-  // Write a legacy skill at $CODEX_HOME/skills/brain-command/SKILL.md.
   const legacyDir = path.join(codexHome, 'skills', 'brain-command');
   fs.mkdirSync(legacyDir, { recursive: true });
   fs.writeFileSync(path.join(legacyDir, 'SKILL.md'), 'legacy', 'utf8');
-  assert.strictEqual(brainCommandInstalled({ home, codexHome }), true, 'legacy location counts as installed fallback');
-  // But a NEW install goes to the canonical user Skill root, not legacy.
+  assert.strictEqual(brainCommandInstalled({ home, codexHome }), true);
   const res = setupBrainCommand({ codexHome, home, config: { orchestratorRoot: path.join(dir(), 'o'), dataRoot: path.join(dir(), 'd'), workspaceRoot: path.join(dir(), 'w') } });
   assert.strictEqual(res.skillPath, installedBrainCommandSkillPath({ home }));
-  assert.ok(!res.skillPath.startsWith(codexHome), 'setup never writes to the deprecated path');
+  assert.ok(!res.skillPath.startsWith(codexHome));
 });
 
 test('setup preserves machine-local paths and is idempotent (does not reinstall every run)', () => {
@@ -202,26 +202,17 @@ test('normal load does NOT reinstall the Skill', () => {
 });
 
 test('user-runnable setup entrypoint (npm run setup:brain-command) installs Skill + config with isolated HOME / CODEX_HOME and writes nothing to the real env', () => {
-  const home = dir();          // isolated HOME
-  const codexHome = dir();     // isolated CODEX_HOME
+  const home = dir();
+  const codexHome = dir();
   const orch = dir(); const data = dir(); const ws = dir();
   const script = path.join(process.cwd(), 'scripts', 'setup-brain-command.mjs');
-  const out = execFileSync(process.execPath, [
-    script,
-    '--home', home,
-    '--codex-home', codexHome,
-    '--orchestrator-root', orch,
-    '--data-root', data,
-    '--workspace-root', ws,
-  ], { encoding: 'utf8', cwd: process.cwd() });
-  assert.ok(out.includes('brain-command setup complete'), 'setup completed');
-
+  const out = execFileSync(process.execPath, [script, '--home', home, '--codex-home', codexHome, '--orchestrator-root', orch, '--data-root', data, '--workspace-root', ws], { encoding: 'utf8', cwd: process.cwd() });
+  assert.ok(out.includes('brain-command setup complete'));
   const skillPath = path.join(home, '.agents', 'skills', 'brain-command', 'SKILL.md');
-  assert.ok(fs.existsSync(skillPath), 'Skill installed to $HOME/.agents/skills/brain-command/SKILL.md');
-  assert.ok(fs.existsSync(legacyBrainCommandSkillPath({ codexHome })) === false, 'no write to deprecated $CODEX_HOME/skills path');
-
+  assert.ok(fs.existsSync(skillPath));
+  assert.ok(fs.existsSync(legacyBrainCommandSkillPath({ codexHome })) === false);
   const cfgPath = brainCommandConfigPath(codexHome);
-  assert.ok(fs.existsSync(cfgPath), 'config written to $CODEX_HOME/brain-command/config.json');
+  assert.ok(fs.existsSync(cfgPath));
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
   assert.strictEqual(cfg.orchestratorRoot, orch);
   assert.strictEqual(cfg.dataRoot, data);
@@ -229,25 +220,19 @@ test('user-runnable setup entrypoint (npm run setup:brain-command) installs Skil
   assert.strictEqual(cfg.defaultBrain, 'chatgpt');
   assert.strictEqual(cfg.defaultExecutor, 'codex');
   assert.strictEqual(cfg.defaultConversationMode, 'new');
-
-  // Deterministic defaults when no roots passed: orchestratorRoot resolves to the repo.
   const home2 = dir(); const codexHome2 = dir();
   execFileSync(process.execPath, [script, '--home', home2, '--codex-home', codexHome2, '--workspace-root', ws], { encoding: 'utf8', cwd: process.cwd() });
   const cfg2 = JSON.parse(fs.readFileSync(brainCommandConfigPath(codexHome2), 'utf8'));
-  assert.ok(cfg2.orchestratorRoot, 'orchestratorRoot deterministically resolved');
-  assert.ok(cfg2.dataRoot, 'dataRoot deterministically resolved');
+  assert.ok(cfg2.orchestratorRoot);
+  assert.ok(cfg2.dataRoot);
 });
-
 
 test('broad discovery telemetry: configured fast path reports false and does not invoke a broad search', () => {
   const cfg = { ...VALID };
-  // fast path: broadDiscoveryOccurred is false and no broad-search helper is called
   const r = resolveRepoDir({ cwd: cfg.workspaceRoot, config: cfg });
   assert.strictEqual(r.broadDiscoveryOccurred, false);
-  // an explicit fallback/setup discovery marks broadDiscoveryOccurred = true
   const broad = discoverBroadRepoDir({ roots: [cfg.workspaceRoot] });
   assert.strictEqual(broad.broadDiscoveryOccurred, true);
-  // markBroadDiscovery flips the flag on an otherwise-false metrics object
   const m = markBroadDiscovery(newBootstrapMetrics());
   assert.strictEqual(m.broadDiscoveryOccurred, true);
 });

@@ -4,7 +4,7 @@
 
 **核心原则：** ChatGPT decides. Capabilities execute. ChatGPT verifies.
 
-**状态：** Alpha · 最新正式版本 `v0.1.0-alpha.3` · [English](README.en.md)
+**状态：** Alpha · 最新正式版本 `v0.1.0-alpha.3` · repository operational default = **capability-first v0.2** · [English](README.en.md)
 
 ## 为什么做这个项目
 
@@ -39,7 +39,7 @@ Evidence first
 - **Direct Local** — 适合 workspace read/search/status/diff、bounded edit 和 focused verify。
 - **Codex delegation** — 适合 multi-file implementation、debug、refactor、shell-heavy work 和 iterative tests/builds。
 - **Evidence-first verification** — Executor `RESULT` 只是 evidence candidate；Brain 会尽可能重新读取 GitHub、CI、Web 或 local resource state 后再验收。
-- **Brain Continuity（当前 hardening）** — 目标是让 Brain session 可以替换，而 logical work / authority / evidence 不依赖单一 conversation 或单一 runtime process 的内存存活。
+- **Brain Continuity** — 已实现并通过正式 restart/re-entry dogfood：Brain session 可以替换，而 logical work / authority / evidence 不依赖单一 conversation 或单一 runtime process 的内存存活。
 - **Zero human relay goal** — 用户不需要做人肉消息总线。
 
 ## 架构
@@ -72,12 +72,11 @@ flowchart TD
 
 ## 当前状态
 
-- 最新正式版本：`v0.1.0-alpha.3`
-- 正式/default operational path：Alpha.3 legacy IAB Direct Brain Loop（feature-frozen）
-- 当前开发方向：Capability-first v0.2
-- v0.2 的 M0–M7 real-project dogfood 已完成并接受
-- 当前 post-M7 gate：**Brain Continuity / Governance durability**；contract 已接受，implementation / real re-entry dogfood 尚未完成
-- operational default flip：**DEFERRED**
+- 最新正式版本：`v0.1.0-alpha.3`（Issue #33 / PR #45 只改变 repository operational default；tag/version 不变）
+- repository/default operational contract：**capability-first v0.2**
+- Alpha.3 legacy IAB Direct Brain Loop：feature-frozen、显式 compatibility/fallback only；不会因 capability failure 静默回退
+- M0–M7、Brain Continuity、Direct Local canonical-path hardening、bounded mission continuation、Stable Runtime activation 与 default-policy review 已完成并接受
+- Issue #33 / PR #45：operational default flip 已接受并 materialized；这不等于 M8/version/tag/release
 - M8 RC / release：尚未进入
 
 详细状态见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)，高层路线见 [`ROADMAP.md`](ROADMAP.md)。
@@ -99,9 +98,9 @@ npm install
 npm test
 ```
 
-### Current released workflow
+### Operational workflow
 
-当前正式 release 的运行时接线和使用方式见 [`SKILL.md`](SKILL.md)。
+当前 repository operational policy 见 [`skills/brain-command/SKILL.md`](skills/brain-command/SKILL.md)；[`SKILL.md`](SKILL.md) 同时记录最后 tagged Alpha.3 release 与 compatibility boundary。
 
 ### v0.2 local runtime
 
@@ -109,7 +108,7 @@ npm test
 npm run start:v0.2
 ```
 
-> v0.2 仍是 candidate，不代表已经完成 default flip 或正式 release。
+> v0.2 是当前 repository operational default contract；这不等于已经创建新的 tag/version/release。
 
 ## Routing policy
 
@@ -129,12 +128,12 @@ Route、Capability 和 Provider 是三个不同概念；不会因为接入 GitHu
 - [`PROJECT_STATUS.md`](PROJECT_STATUS.md) — 当前项目状态 / implementation truth 的快速恢复入口
 - [`ROADMAP.md`](ROADMAP.md) — 已接受的高层路线
 - [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md) — 当前 routing / executor policy
-- [`docs/architecture.md`](docs/architecture.md) — 当前技术架构与 released/candidate 边界
-- [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md) — 当前已接受的 Brain Continuity contract
+- [`docs/architecture.md`](docs/architecture.md) — 当前技术架构与 operational-default / release compatibility 边界
+- [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md) — 已接受、已实现并完成 real dogfood 的 Brain Continuity contract
 - [`docs/README.md`](docs/README.md) — 文档 authority / 历史 RFC 索引
 - [`CHANGELOG.md`](CHANGELOG.md) — 发布与 unreleased 变更历史
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — 贡献指南
-- [`SKILL.md`](SKILL.md) — 当前 released runtime 的 agent-facing 使用说明
+- [`SKILL.md`](SKILL.md) — repository entry / Alpha.3 compatibility boundary
 
 ## License
 
