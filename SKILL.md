@@ -27,7 +27,7 @@ The repository operational default is **capability-first v0.2**. Native capabili
 - **M6** completed the structural isolation of the IAB / Alpha.4 implementation under `src/legacy/`.
 - **M7** real-project capability-routing dogfood is **COMPLETE / ACCEPTED**: Native-only, Codex-required, and Hybrid paths passed.
 - **Brain Continuity**, Direct Local canonical-path hardening, bounded execution claims, Stable Runtime activation, and the explicit operational-default policy review are **COMPLETE / ACCEPTED**.
-- Issue #33 materializes the authorized v0.2 default flip. M8/version/tag/release remain separate; the last tagged release is still `v0.1.0-alpha.3`.
+- Issue #33 / PR #45 materialized the authorized v0.2 default flip. M8/version/tag/release remain separate; the last tagged release is still `v0.1.0-alpha.3`.
 - The IAB path is **feature-frozen**, **not deleted**, and available only through explicit compatibility/fallback selection.
 
 ## Alpha.3 / legacy compatibility runtime (explicit opt-in only)
@@ -63,7 +63,7 @@ No user-visible port/token/node-REPL details are exposed.
 ## Security / ownership
 
 - Data root: worker owns a durable writable root (no elevation, no dangerous bypass). If none writable -> doctor FAIL with `CHATGPT_ORCHESTRATOR_DATA_ROOT` guidance.
-- Secrets are redacted from logs/state; `***` appears on the legacy codex child argv (local governor auth) — redacted but not removed.
+- Secrets are redacted from surfaced logs/state; the bearer token still exists on the legacy Codex child argv (local governor auth).
 - Never modifies other IAB tabs; an adopted user tab (when used) is not closed.
 
 ## Current development authority
