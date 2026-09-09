@@ -4,7 +4,9 @@
 
 **核心原则：** ChatGPT decides. Capabilities execute. ChatGPT verifies.
 
-**状态：** Alpha · 最新正式版本 `v0.1.0-alpha.3` · repository operational default = **capability-first v0.2** · [English](README.en.md)
+**状态：** v0.2 release line · repository operational default = **capability-first v0.2** · M8 release target `v0.2.0` · [English](README.en.md)
+
+> `v0.2.0` 是否已经正式发布，以 GitHub tag / Release 的实际 readback 为准。M8 Phase A 的版本化 RC 文件不等于已经完成发布。
 
 ## 为什么做这个项目
 
@@ -72,14 +74,14 @@ flowchart TD
 
 ## 当前状态
 
-- 最新正式版本：`v0.1.0-alpha.3`（Issue #33 / PR #45 只改变 repository operational default；tag/version 不变）
 - repository/default operational contract：**capability-first v0.2**
+- M8 release target：`v0.2.0`；正式 publication 状态必须从 GitHub tag / Release 读取，不从 branch 上的候选 version 字段推断
 - Alpha.3 legacy IAB Direct Brain Loop：feature-frozen、显式 compatibility/fallback only；不会因 capability failure 静默回退
 - M0–M7、Brain Continuity、Direct Local canonical-path hardening、bounded mission continuation、Stable Runtime activation 与 default-policy review 已完成并接受
-- Issue #33 / PR #45：operational default flip 已接受并 materialized；这不等于 M8/version/tag/release
-- M8 RC / release：尚未进入
+- Issue #33 / PR #45：operational default flip 已接受并 materialized；它先于正式 v0.2 release
+- Issue #46：M8 Phase A RC/release-readiness；Phase B 的 merge/tag/GitHub Release 仍要求项目级 Parent 明确授权
 
-详细状态见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)，高层路线见 [`ROADMAP.md`](ROADMAP.md)。
+详细状态见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)，高层路线见 [`ROADMAP.md`](ROADMAP.md)。v0.2.0 release/operator contract 见 [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md)。
 
 ## Quick Start
 
@@ -100,7 +102,7 @@ npm test
 
 ### Operational workflow
 
-当前 repository operational policy 见 [`skills/brain-command/SKILL.md`](skills/brain-command/SKILL.md)；[`SKILL.md`](SKILL.md) 同时记录最后 tagged Alpha.3 release 与 compatibility boundary。
+当前 repository operational policy 见 [`skills/brain-command/SKILL.md`](skills/brain-command/SKILL.md)；[`SKILL.md`](SKILL.md) 同时记录 v0.2 release line 与 Alpha.3 compatibility boundary。
 
 ### v0.2 local runtime
 
@@ -108,7 +110,7 @@ npm test
 npm run start:v0.2
 ```
 
-> v0.2 是当前 repository operational default contract；这不等于已经创建新的 tag/version/release。
+> v0.2 是 repository operational default contract。对 Stable Runtime 的 release upgrade/rollback，请使用 [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) 记录的 exact-revision activation boundary；不要手工修改 durable Governance JSON。
 
 ## Routing policy
 
@@ -130,6 +132,7 @@ Route、Capability 和 Provider 是三个不同概念；不会因为接入 GitHu
 - [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md) — 当前 routing / executor policy
 - [`docs/architecture.md`](docs/architecture.md) — 当前技术架构与 operational-default / release compatibility 边界
 - [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md) — 已接受、已实现并完成 real dogfood 的 Brain Continuity contract
+- [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) — v0.2.0 release notes、upgrade、Governance recovery、Stable Runtime rollback 与 publication boundary
 - [`docs/README.md`](docs/README.md) — 文档 authority / 历史 RFC 索引
 - [`CHANGELOG.md`](CHANGELOG.md) — 发布与 unreleased 变更历史
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — 贡献指南
