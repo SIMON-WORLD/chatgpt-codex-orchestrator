@@ -4,7 +4,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
-The current unreleased line is **capability-first v0.2**. M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the explicit default-policy review are complete/accepted on `main`. Issue #33 / PR #45 materialized the accepted repository operational-default flip. This does **not** version-bump, tag, or formally release v0.2. The latest formal release remains `v0.1.0-alpha.3`.
+No changes yet. The next formal publication transaction remains gated by the project-level Parent and GitHub release state is authoritative for what has actually been published.
+
+## [0.2.0]
+
+Capability-first v0.2. M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, the explicit default-policy review, and the repository operational-default flip are complete/accepted. The operational default changed before formal publication; this section is the versioned release candidate for `v0.2.0`. See [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for the operator upgrade/rollback and publication-boundary contract.
 
 ### Added
 
@@ -15,7 +19,7 @@ The current unreleased line is **capability-first v0.2**. M0–M7, Brain Continu
 - Deterministic Router + canonical Governance service with `PLAN / TASK / RESULT / REVISE / REPLAN / ASK_USER / PUBLISH / DONE` semantics and explicit executor/machine/Brain acceptance separation.
 - v0.2 production runtime entry (`npm run start:v0.2`) and local/App Server smoke/E2E scripts.
 - M7-C durable Codex orchestration binding (`taskId / stepId / identity`) plus bounded `codex_recover`: unique-match recovery only; `not_found / ambiguous / wrong_workspace / stale` fail closed; no most-recent guessing or generic force unlock.
-- Accepted [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md), defining the post-M7 continuity contract: durable Governance, bounded Parent re-entry, authority fencing, Context Capsule semantics, capability freshness, single canonical Governance writer, and isolated fault-injection dogfood. Its implementation and formal restart/re-entry dogfood are now complete.
+- Accepted [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md), defining the post-M7 continuity contract: durable Governance, bounded Parent re-entry, authority fencing, Context Capsule semantics, capability freshness, single canonical Governance writer, and isolated fault-injection dogfood. Its implementation and formal restart/re-entry dogfood are complete.
 - Read-only brain-command status check: `npm run status:brain-command` (`scripts/brain-command-status.mjs` → `brainCommandStatus`). Verifies the user-level launcher Skill is discoverable and `$CODEX_HOME/brain-command/config.json` exists/parses, prints safe configuration fields, never prints secrets, and returns exit 0 healthy / 1 missing-or-invalid.
 - Durable new-task admission gate (Issue #29): a genuinely new `PLAN` on a fresh/restarted durable Governance runtime scans the durable namespace first - 0 non-terminal tasks allow admission, 1 rejects with bounded recovery-required semantics, >1 fails ambiguous; in-process terminal `DONE -> new PLAN` stays valid and persisted terminal tasks are never reopened under another task authority.
 - Task-scoped mutation authorization (Issue #29): `workspaceId`/`jobId`/`changeSetId` are selectors only; new Codex start/continue turns and Direct Local apply / workspace-effect mutations validate the current durable Governance task + its canonical workspace root + the current Parent authority token (same token family). Already-authorized running Codex execution continues to survive Parent takeover/restart through the existing bounded recover/reconcile path without cancel/restart/duplicate.
@@ -23,19 +27,21 @@ The current unreleased line is **capability-first v0.2**. M0–M7, Brain Continu
 - Stable runtime lifecycle alignment (Issue #29): externally managed Secure Tunnel opt-out (`tunnel.external`) keeps Local MCP as owner of its HTTP MCP/Governance/tool lifecycle while readiness is proven through the external tunnel health URL; the runtime never spawns or kills an externally owned tunnel-client.
 - Bounded implementation-session continuity (Issue #34): a narrow current-task/current-step/canonical-workspace execution continuation claim separated from Parent control authority, with stale-claim fencing and preserved-#33 real dogfood PASS.
 - Stable Runtime exact-revision activation bootstrap (Issue #36), preserving stable profile/dataRoot/Governance namespace/tunnel identity.
+- Release operator notes for v0.2.0 covering exact-revision upgrade, Governance schema/migration/recovery, fail-closed rollback boundaries, and the explicit Alpha.3 compatibility boundary.
 
 ### Changed
 
-- The repository operational contract is now capability-first: ChatGPT is the authoritative Brain; runtime capability discovery precedes routing; Native capabilities are reused when sufficient; Codex is a sustained local coding executor rather than the default downstream for every task.
+- The repository operational contract is capability-first: ChatGPT is the authoritative Brain; runtime capability discovery precedes routing; Native capabilities are reused when sufficient; Codex is a sustained local coding executor rather than the default downstream for every task.
 - Issue #33 makes `v0.2` the effective `brain-command` runtime family by default, keeps `alpha3` as an explicit compatibility opt-in, and fails closed rather than silently routing capability/provider failure into the legacy IAB path.
 - The Alpha.3/Alpha.4 IAB implementation is structurally isolated under `src/legacy/` and remains feature-frozen as an explicit compatibility/fallback path.
 - M7 real-project routing dogfood, Brain Continuity implementation/re-entry dogfood, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the explicit default-policy review are complete and accepted.
+- Package/release metadata is prepared as semantic version `0.2.0`; formal publication remains a separate Parent-authorized tag/GitHub Release transaction.
 
-### Not released yet
+### Release boundary
 
-- The v0.2 operational default is accepted/materialized through Issue #33 / PR #45; M8/release remains a separate Parent authorization.
-- No `v0.2` version bump, tag, formal release, or M8 transition has occurred.
-- The last tagged Alpha.3 release remains available as the explicit feature-frozen compatibility boundary.
+- The v0.2 operational default was accepted/materialized through Issue #33 / PR #45 before this formal release candidate.
+- Alpha.3 remains available as the explicit feature-frozen compatibility boundary; v0.2 capability/provider failure never silently enters it.
+- In M8 Phase A, versioned files are candidate state only. A formal `v0.2.0` release exists only after the gated Phase B tag/GitHub Release transaction and independent readback.
 
 ## [0.1.0-alpha.3]
 
