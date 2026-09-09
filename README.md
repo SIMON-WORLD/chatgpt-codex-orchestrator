@@ -72,11 +72,11 @@ flowchart TD
 
 ## 当前状态
 
-- 最新正式版本：`v0.1.0-alpha.3`（Issue #33 不自动改变 tag/version）
+- 最新正式版本：`v0.1.0-alpha.3`（Issue #33 / PR #45 只改变 repository operational default；tag/version 不变）
 - repository/default operational contract：**capability-first v0.2**
 - Alpha.3 legacy IAB Direct Brain Loop：feature-frozen、显式 compatibility/fallback only；不会因 capability failure 静默回退
 - M0–M7、Brain Continuity、Direct Local canonical-path hardening、bounded mission continuation、Stable Runtime activation 与 default-policy review 已完成并接受
-- Issue #33：当前 bounded implementation mission，负责把已授权 default policy 落到 code/Skill/docs；Parent 独立 acceptance 仍是后续边界
+- Issue #33 / PR #45：operational default flip 已接受并 materialized；这不等于 M8/version/tag/release
 - M8 RC / release：尚未进入
 
 详细状态见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)，高层路线见 [`ROADMAP.md`](ROADMAP.md)。
