@@ -1,13 +1,13 @@
 ---
 name: chatgpt-codex-orchestrator
-description: "Compatibility entry for the ChatGPT-command orchestrator. Repository operational default = capability-first v0.2: discover current ChatGPT/runtime capability, prefer Native when sufficient, use Stable Runtime Direct Local for bounded local work, and use Codex only for sustained local coding when required. The last tagged release remains v0.1.0-alpha.3; its built-in-IAB Direct Brain Loop is retained feature-frozen as an explicit compatibility/fallback path only, never a silent fallback."
+description: "Compatibility entry for the ChatGPT-command orchestrator. Repository operational default = capability-first v0.2: discover current ChatGPT/runtime capability, prefer Native when sufficient, use Stable Runtime Direct Local for bounded local work, and use Codex only for sustained local coding when required. M8 release target = v0.2.0; actual publication is authoritative from GitHub tag/Release readback. Alpha.3 built-in-IAB Direct Brain Loop remains feature-frozen as an explicit compatibility/fallback path only, never a silent fallback."
 ---
 
-# ChatGPT-command orchestrator (v0.1.0-alpha.3)
+# ChatGPT-command orchestrator (v0.2 release line)
 
-The repository's operational contract is capability-first v0.2. The user supplies the goal; ChatGPT remains the authoritative Brain and routes work from actual runtime/session capability. The last tagged release remains `v0.1.0-alpha.3`.
+The repository's operational contract is capability-first v0.2. The user supplies the goal; ChatGPT remains the authoritative Brain and routes work from actual runtime/session capability. The M8 release target is `v0.2.0`; whether it has been formally published is determined by GitHub tag/Release state, not by a candidate branch alone.
 
-> **Status boundary:** capability-first v0.2 is now the repository operational default contract; Alpha.3/IAB is explicit feature-frozen compatibility only. This does not itself create a new tagged release. See `PROJECT_STATUS.md`, `CAPABILITY_ROUTING.md`, `docs/architecture.md`, and GitHub code/PR/CI for current truth.
+> **Status boundary:** capability-first v0.2 is the repository operational default contract; Alpha.3/IAB is explicit feature-frozen compatibility only. M8 Phase A may prepare versioned RC files, but tag/GitHub Release creation remains a separate Parent-authorized publication transaction. See `PROJECT_STATUS.md`, `CAPABILITY_ROUTING.md`, `docs/architecture.md`, `docs/releases/v0.2.0.md`, and GitHub code/PR/CI for current truth.
 
 ## Default: capability-first v0.2
 
@@ -27,7 +27,7 @@ The repository operational default is **capability-first v0.2**. Native capabili
 - **M6** completed the structural isolation of the IAB / Alpha.4 implementation under `src/legacy/`.
 - **M7** real-project capability-routing dogfood is **COMPLETE / ACCEPTED**: Native-only, Codex-required, and Hybrid paths passed.
 - **Brain Continuity**, Direct Local canonical-path hardening, bounded execution claims, Stable Runtime activation, and the explicit operational-default policy review are **COMPLETE / ACCEPTED**.
-- Issue #33 / PR #45 materialized the authorized v0.2 default flip. M8/version/tag/release remain separate; the last tagged release is still `v0.1.0-alpha.3`.
+- Issue #33 / PR #45 materialized the authorized v0.2 default flip. Issue #46 is the separate M8 RC/release-readiness boundary; release target `v0.2.0` is prepared without granting this bounded mission publication authority.
 - The IAB path is **feature-frozen**, **not deleted**, and available only through explicit compatibility/fallback selection.
 
 ## Alpha.3 / legacy compatibility runtime (explicit opt-in only)
@@ -66,6 +66,10 @@ No user-visible port/token/node-REPL details are exposed.
 - Secrets are redacted from surfaced logs/state; the bearer token still exists on the legacy Codex child argv (local governor auth).
 - Never modifies other IAB tabs; an adopted user tab (when used) is not closed.
 
+## Release/operator boundary
+
+For the v0.2 release line, use [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for exact-revision Stable Runtime upgrade/rollback, Governance schema compatibility/recovery, Node support, and the gated publication transaction. Do not hand-edit durable Governance JSON and do not treat a package version field as proof that a tag/GitHub Release exists.
+
 ## Current development authority
 
 For current implementation and operating truth, use these sources rather than the legacy compatibility mechanics above:
@@ -75,4 +79,5 @@ For current implementation and operating truth, use these sources rather than th
 - `CAPABILITY_ROUTING.md` — current routing/executor policy;
 - `docs/architecture.md` — current technical architecture;
 - `docs/rfc-v0.2-brain-continuity.md` — accepted Brain Continuity contract and historical design rationale; implementation + real dogfood are complete;
-- GitHub current code / PR / CI — implementation truth.
+- `docs/releases/v0.2.0.md` — v0.2.0 release/operator contract and publication boundary;
+- GitHub current code / PR / CI / tag / Release — implementation and publication truth.
