@@ -4,7 +4,9 @@ A **ChatGPT-centered Capability Orchestrator** with ChatGPT as the authoritative
 
 **Core idea:** ChatGPT decides. Capabilities execute. ChatGPT verifies.
 
-**Status:** Alpha · latest release `v0.1.0-alpha.3` · repository operational default = **capability-first v0.2** · [简体中文](README.md)
+**Status:** v0.2 release line · repository operational default = **capability-first v0.2** · M8 release target `v0.2.0` · [简体中文](README.md)
+
+> Whether `v0.2.0` has been formally published is determined by actual GitHub tag / Release readback. Versioned files on an M8 Phase A RC branch are not themselves a release.
 
 ## Why this project
 
@@ -72,14 +74,14 @@ Claude, DeepSeek, or other agents may later be attached as specialists, advisors
 
 ## Current status
 
-- Latest release: `v0.1.0-alpha.3` (Issue #33 / PR #45 changed the repository operational default only; tag/version unchanged)
 - Repository/default operational contract: **capability-first v0.2**
+- M8 release target: `v0.2.0`; formal publication status must be read from GitHub tags/Releases, not inferred from a candidate branch's version field
 - Alpha.3 legacy IAB Direct Brain Loop: feature-frozen, explicit compatibility/fallback only; capability failure never silently falls back to it
 - M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the default-policy review are complete and accepted
-- Issue #33 / PR #45: the operational default flip is accepted and materialized; this does not imply M8/version/tag/release
-- M8 RC / release: not started
+- Issue #33 / PR #45: the operational default flip is accepted and materialized; it predates the formal v0.2 release
+- Issue #46: M8 Phase A RC/release-readiness; Phase B merge/tag/GitHub Release remains gated by explicit project-level Parent authorization
 
-See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the current development state and [`ROADMAP.md`](ROADMAP.md) for the accepted high-level path.
+See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the current development state, [`ROADMAP.md`](ROADMAP.md) for the accepted high-level path, and [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for the v0.2.0 release/operator contract.
 
 ## Quick Start
 
@@ -100,7 +102,7 @@ npm test
 
 ### Operational workflow
 
-See [`skills/brain-command/SKILL.md`](skills/brain-command/SKILL.md) for current repository operational policy. [`SKILL.md`](SKILL.md) also records the last-tagged Alpha.3 release and compatibility boundary.
+See [`skills/brain-command/SKILL.md`](skills/brain-command/SKILL.md) for current repository operational policy. [`SKILL.md`](SKILL.md) also records the v0.2 release line and Alpha.3 compatibility boundary.
 
 ### v0.2 local runtime
 
@@ -108,7 +110,7 @@ See [`skills/brain-command/SKILL.md`](skills/brain-command/SKILL.md) for current
 npm run start:v0.2
 ```
 
-> v0.2 is the current repository operational default contract. This is not a new tag/version/release by itself.
+> v0.2 is the repository operational default contract. For Stable Runtime release upgrade/rollback, follow the exact-revision activation boundary in [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md); do not hand-edit durable Governance JSON.
 
 ## Routing policy
 
@@ -130,6 +132,7 @@ Route, Capability, and Provider are separate concepts. Connecting GitHub, Gmail,
 - [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md) — current routing / executor policy
 - [`docs/architecture.md`](docs/architecture.md) — current technical architecture and operational-default / release compatibility boundary
 - [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md) — accepted, implemented, and real-dogfood-complete Brain Continuity contract
+- [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) — v0.2.0 release notes, upgrade, Governance recovery, Stable Runtime rollback, and publication boundary
 - [`docs/README.md`](docs/README.md) — documentation authority and historical RFC index
 - [`CHANGELOG.md`](CHANGELOG.md) — release and unreleased change history
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution guide
