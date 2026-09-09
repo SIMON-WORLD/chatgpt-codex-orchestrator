@@ -72,11 +72,11 @@ Claude, DeepSeek, or other agents may later be attached as specialists, advisors
 
 ## Current status
 
-- Latest release: `v0.1.0-alpha.3` (Issue #33 does not itself change the tag/version)
+- Latest release: `v0.1.0-alpha.3` (Issue #33 / PR #45 changed the repository operational default only; tag/version unchanged)
 - Repository/default operational contract: **capability-first v0.2**
 - Alpha.3 legacy IAB Direct Brain Loop: feature-frozen, explicit compatibility/fallback only; capability failure never silently falls back to it
 - M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the default-policy review are complete and accepted
-- Issue #33: current bounded implementation mission that materializes the already-authorized default policy in code/Skill/docs; Parent independent acceptance remains a later boundary
+- Issue #33 / PR #45: the operational default flip is accepted and materialized; this does not imply M8/version/tag/release
 - M8 RC / release: not started
 
 See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the current development state and [`ROADMAP.md`](ROADMAP.md) for the accepted high-level path.
