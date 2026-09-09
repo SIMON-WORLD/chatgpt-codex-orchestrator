@@ -21,8 +21,8 @@
 | Bounded implementation-session continuity | **CLOSED / ACCEPTED** | Issue #34；scoped execution claim + real preserved-#33 dogfood PASS |
 | Stable Runtime activation bootstrap | **CLOSED / ACCEPTED** | Issue #36；exact accepted revision activation path + real dogfood support |
 | Thin Parent / Strong Mission policy correction | **CLOSED / ACCEPTED** | Issue #43 / PR #44 merged |
-| v0.2 operational default flip | **ACTIVE / SAME MISSION** | Issue #33 / Draft PR #45；candidate → exact-head CI → Parent independent review |
-| M8 — RC / Release | **PENDING** | only after explicit Issue #33 Parent acceptance/default decision |
+| v0.2 operational default flip | **ACCEPTED / MATERIALIZED** | Issue #33 / PR #45；capability-first v0.2 is repository operational default；Alpha.3 explicit compatibility only |
+| M8 — RC / Release | **PENDING** | separate Parent authorization；#33 completion does not auto-start M8 |
 
 ## N3 — 已接受基线
 
@@ -175,16 +175,16 @@ Issue #43 was **policy/docs only** and added no runtime/Governance feature.
 
 Issue #32 already issued explicit default-policy **ACCEPT** and opened Issue #33. The old roadmap state `DEFER until #27 closes` is therefore historical, not current.
 
-Issue #33 remains the authorized bounded implementation milestone that makes the accepted v0.2 capability-first operating model the repository operational default while retaining Alpha.3/IAB as explicit feature-frozen compatibility/fallback.
+Issue #33 / PR #45 materialized the accepted v0.2 capability-first operating model as the repository operational default while retaining Alpha.3/IAB as explicit feature-frozen compatibility/fallback.
 
-Current sequence:
+Post-merge state:
 
-1. #43 is accepted/merged; the **SAME Issue #33 durable task / SAME logical mission** is resumed under Strong Mission rules；
-2. #33 mission autonomously continues inspect → diagnose → implement → tests/debug → commit/push → Draft PR #45 → exact-head Node 22/24 verification；
-3. mission posts one material `IMPLEMENTATION_READY_FOR_PARENT_REVIEW` checkpoint and stops；
-4. Parent independently reacquires exact GitHub diff/files/tests/CI and decides `ACCEPT / REVISE`。
+1. capability-first v0.2 operational default is **ACCEPTED / MATERIALIZED** through Issue #33 / PR #45；
+2. Alpha.3/IAB remains explicit feature-frozen compatibility/fallback only；
+3. Issue #33 is no longer an active operational-default gate；
+4. M8/version/tag/release remain separate and require explicit Parent authorization。
 
-No second Codex execution is authorized for #33. No Alpha.3 workaround, Parent takeover, manual durable JSON, user token/ID relay, M8/version/tag/release, or project-level self-acceptance is part of this path.
+The completed #33 mission did not authorize a second Codex execution, Alpha.3 workaround, Parent takeover, manual durable JSON, user token/ID relay, M8/version/tag/release, or project-level self-acceptance.
 
 ## Non-blocking observations
 
@@ -194,12 +194,12 @@ No second Codex execution is authorized for #33. No Alpha.3 workaround, Parent t
 - **Passive execution observability:** long-running execution 缺少稳定用户 status/notification surface；后续作为 UX/observability candidate。
 - **Custom App conversation capability volatility:** 部分 conversation 曾从可实际调用 Developer MCP 变为 `FORBIDDEN: This conversation does not support developer MCPs`，而 fresh conversation 在 SAME Local MCP/tunnel 上可恢复。availability 必须按 session/message boundary 重新发现。
 - **Node 24 executor test timing:** ownership/permission continuation tests 偶发 timing failure，same-head rerun 可 PASS；保留为 test-stability evidence，除非出现 reproducible correctness evidence。
-- **Branch protection:** current `main` 尚未强制 required checks；属于后续 delivery hardening candidate，不属于 #33 scope。
+- **Branch protection:** current `main` 尚未强制 required checks；属于后续 delivery hardening candidate，outside the completed #33 scope。
 - **Parent direct-main mistake:** Issue #43 记录了两次 no-net-content direct-main commits；accepted correction 是 branch + PR discipline，不做 history rewrite，也不创建新 runtime feature。
 
 ## M8 — RC / Release
 
-M8 只在 Issue #33 operational-default candidate 经 Parent independent acceptance 后进入。至少需要：
+Issue #33 / PR #45 已完成 operational-default ACCEPT/materialization；M8 仍为独立 **PENDING** 阶段，只有在新的 explicit Parent authorization 后进入。进入时至少需要：
 
 - current code / docs / public Skill/default entry 一致；
 - required CI / regression green；
