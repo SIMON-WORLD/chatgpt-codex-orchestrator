@@ -67,10 +67,10 @@ M0–M7                                      ACCEPTED
 Brain Continuity implementation/dogfood   ACCEPTED / COMPLETE
 Direct Local / bounded mission / Stable Runtime hardening   ACCEPTED / COMPLETE
 Thin Parent / Strong Mission (#43 / PR #44)                 ACCEPTED / COMPLETE
-Issue #33 operational-default implementation                ACTIVE / SAME MISSION
+Issue #33 / PR #45 operational-default flip                 ACCEPTED / MATERIALIZED
 M8 RC / release                              NOT STARTED
 ```
 
-Issue #33 is the implementation candidate for the already-authorized v0.2 default policy; project-level Parent acceptance/merge is still a later boundary, and no version/tag/release is implied.
+Issue #33 / PR #45 accepted and materialized the capability-first v0.2 repository operational default. This does not imply a version/tag/release; M8 remains separate and not started.
 
 For live status, always re-read [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) rather than treating this summary as a status database.
