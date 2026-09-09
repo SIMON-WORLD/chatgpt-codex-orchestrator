@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
-The current unreleased line is **capability-first v0.2**. M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the explicit default-policy review are complete/accepted on `main`. Issue #33 materializes the already-authorized repository operational-default flip in the current candidate. This does **not** version-bump, tag, or formally release v0.2. The latest formal release remains `v0.1.0-alpha.3`.
+The current unreleased line is **capability-first v0.2**. M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the explicit default-policy review are complete/accepted on `main`. Issue #33 / PR #45 materialized the accepted repository operational-default flip. This does **not** version-bump, tag, or formally release v0.2. The latest formal release remains `v0.1.0-alpha.3`.
 
 ### Added
 
@@ -33,7 +33,7 @@ The current unreleased line is **capability-first v0.2**. M0–M7, Brain Continu
 
 ### Not released yet
 
-- Issue #33 still requires exact-candidate PR/CI and project-level Parent independent acceptance; the implementation mission does not self-accept the project default decision.
+- The v0.2 operational default is accepted/materialized through Issue #33 / PR #45; M8/release remains a separate Parent authorization.
 - No `v0.2` version bump, tag, formal release, or M8 transition has occurred.
 - The last tagged Alpha.3 release remains available as the explicit feature-frozen compatibility boundary.
 
