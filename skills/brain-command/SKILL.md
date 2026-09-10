@@ -7,7 +7,7 @@ description: "Canonical launcher policy for the ChatGPT-command orchestrator. Op
 
 The operational default is **capability-first v0.2**. A normal invocation starts from **runtime capability discovery**, not from a hard-coded provider or executor. Use ChatGPT Native when it is sufficient; use the **Stable Runtime** only when local capability is required; choose Direct Local for bounded exact local work and Codex for sustained local coding. Alpha.3's built-in-IAB **Direct Brain Loop** is retained only as an **explicit fallback / opt-in** compatibility path. Provider/session/MCP capability loss fails closed into rediscovery or safe recovery; it never silently enters Alpha.3.
 
-> **Status boundary:** this Skill defines the repository's v0.2 operational default contract. Formal published-version truth is read from GitHub tag/Release state, while current release-control authority is read from the latest durable Issue #46 Parent checkpoint. Alpha.3/IAB remains feature-frozen compatibility only. Current project truth lives in `PROJECT_STATUS.md`, `CAPABILITY_ROUTING.md`, `docs/architecture.md`, GitHub code/PR/CI/tag/Release, and durable Local Governance.
+> **Status boundary:** this Skill defines the repository's v0.2 operational default contract. `v0.2.0` is formally published; live GitHub tag/Release readback is publication truth. Issue #46 / M8 is CLOSED / DONE and retained as historical release-control evidence, not current release authority. Alpha.3/IAB remains feature-frozen compatibility only. Current project truth lives in GitHub current `main`/PR/CI/tag/Release/active Issue, `CAPABILITY_ROUTING.md`, `PROJECT_STATUS.md`, `ROADMAP.md`, `docs/architecture.md`, and durable Local Governance when the local plane is involved.
 
 ```text
 User goal
@@ -23,6 +23,8 @@ User goal
 The legacy built-in-IAB Direct Brain Loop remains documented below only for explicit Alpha.3 compatibility selection.
 
 Defaults: **Brain = ChatGPT**; **route = derived from current capability**; **local runtime = Stable Runtime only when needed**. Native-first is not Native-only, and Codex is not a mandatory downstream hop.
+
+Current Parent/mission policy is normative in `CAPABILITY_ROUTING.md`: ongoing project Parent uses the human-facing `① chatgpt-codex-orchestrator | 总控 · ACTIVE` convention; genuinely superseded ongoing Parent may be `RETIRED`; an explicitly authorized bounded Parent delegation uses `#<issue> · PARENT`; bounded missions follow Thin Parent / Strong Mission, direct durable handoff / No Human Relay, and Act-or-Escalate / no Continue Tax. These names do not create authority, and this Skill does not define a second Parent registry or authority source.
 
 ## When to use
 
@@ -42,7 +44,7 @@ These states are distinct and must not be conflated:
 1. **v0.2 operational default** — capability-first / Native-first routing from current runtime/session availability. Local work uses the Stable Runtime with dynamic workspace binding; Local MCP is not a mandatory hop for native-only work.
 2. **v0.2 local capability plane** — `ChatGPT (Custom MCP App)` → `OpenAI Secure Tunnel` → `local MCP` → `Router/Governance` → `Direct Local` or `Codex App Server`; use it only when the mission actually needs local capability.
 3. **M6** — the IAB / Alpha.4 implementation has been **structurally isolated** under `src/legacy/` and is feature-frozen.
-4. **M7 + post-M7 hardening** — capability-routing dogfood, Brain Continuity, Direct Local canonical-path hardening, bounded execution claims, Stable Runtime activation, and the explicit default-policy review are **COMPLETE / ACCEPTED**. Issue #33 materialized the operational-default flip; release publication is separately governed through Issue #46 and authoritative GitHub tag/Release state.
+4. **M7 + post-M7 hardening** — capability-routing dogfood, Brain Continuity, Direct Local canonical-path hardening, bounded execution claims, Stable Runtime activation, and the explicit default-policy review are **COMPLETE / ACCEPTED**. Issue #33 materialized the operational-default flip; Issue #46 later completed the separately gated `v0.2.0` publication and is now CLOSED / DONE historical release-control evidence.
 
 `src/index.js` is a **compatibility barrel**; it is **not** the canonical v0.2 runtime import root. Canonical v0.2 production entries are `scripts/v0.2-start.mjs`, `src/transport/brain-local.js`, and the direct v0.2 modules under `src/{mcp,router,governance,local,executor,state,transport}`.
 
