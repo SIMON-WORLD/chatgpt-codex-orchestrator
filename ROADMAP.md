@@ -204,7 +204,7 @@ The completed #33 mission did not authorize a second Codex execution，Alpha.3 w
 - **Custom App conversation capability volatility:** 部分 conversation 曾从可实际调用 Developer MCP 变为 `FORBIDDEN: This conversation does not support developer MCPs`，而 fresh conversation 在 SAME Local MCP/tunnel 上可恢复。availability 必须按 session/message boundary 重新发现。
 - **Node 24 executor test timing:** ownership/permission continuation tests 偶发 timing failure，same-head rerun 可 PASS；保留为 test-stability evidence，除非出现 reproducible correctness evidence。
 - **Branch protection:** current `main` 尚未强制 required checks；属于独立 delivery-hardening candidate，不因 v0.2 release 完成而自动成为新 scope。
-- **Parent direct-main mistake:** Issue #43 记录了两次 no-net-content direct-main commits；accepted correction 是 branch + PR discipline，不做 history rewrite，也不创建 new runtime feature。
+- **Parent direct-main mistake:** Issue #43 记录了两次 no-net-content direct-main commits；accepted correction 是 branch + PR discipline，不做 history rewrite，也不创建新 runtime feature。
 
 ## M8 — RC / Release — CLOSED / RELEASED
 
