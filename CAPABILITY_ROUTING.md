@@ -29,6 +29,15 @@ Material architecture change 必须有新的 authoritative / dogfood evidence，
 
 未来是否引入 multi-Brain / shared-authority model 是独立架构问题，不在 v0.2 预先实现。
 
+### Parent continuity: ongoing Parent vs bounded Parent delegation
+
+Project-level Parent 是持续的 logical role，不等于某一条 conversation，也不等于某一个 Local Governance task 的 authority generation。
+
+- **Full Parent replacement**：新 session 被明确指定为 ongoing project Parent，并在需要时完成 overlapping writer / Local Governance reconciliation；之后它持续承担 project-level Parent role，直到后续明确 superseded。完成某一个 mission 本身不终止 ongoing Parent role。
+- **Bounded Parent delegation / takeover**：session 只在明确 Issue / mission / mutation scope 内临时使用 Parent authority；scope 完成后该授权结束，不因此自动成为 ongoing project Parent。
+- Conversation title、`ACTIVE/RETIRED` 标签或人类可读编号都不授予 authority。进入 Local Capability Plane 时，现有 durable Governance authority generation / fencing / execution-claim semantics 仍是 machine-enforced control truth。
+- 当前不建立新的 project-level `G01/G02` registry，也不把 task-scoped Governance generation 重新解释为 project Parent generation。Human-facing discoverability 不得制造第二套 authority source。
+
 ### Thin Parent / Strong Mission
 
 当前项目 operating model 采用：
@@ -51,13 +60,33 @@ conversation turn 结束、单次 tool call 结束、普通 implementation bug �
 - material security / permission / long-term cost / breaking semantics；
 - project-level default / release decision。
 
+### Act or Escalate / no Continue Tax
+
+对任何已经合法取得当前 scope authority 的 Parent 或 bounded mission session，默认规则是：
+
+> **next safe action 已知 + acceptance 未改变 + required capability 当前可用 → act；否则只因真实 material blocker 才 escalate / durably checkpoint。**
+
+Conversation turn、一次 tool call 完成、已经知道下一步、或需要用户再发送一句 `continue`，都不是控制门槛。不得把 Human Principal 当作 routine progression trigger。
+
+Parent 完成 milestone acceptance 后，如果 authoritative roadmap / contract 已明确下一项 project-level readiness / authorization decision，所需 evidence 可以自行取得，且不需要 user-only preference / fact，则 Parent 应继续完成该 bounded decision，而不是停下来等待用户重复提问。
+
+本规则不绕过真正的 `ASK_USER`：用户持有的产品偏好/事实、destructive / irreversible / high-risk gate、scope/acceptance 改变、权限/credential 人工动作或其他现有 escalation boundary 仍然有效。
+
 Pointer-not-payload：GitHub Issue / PR / CI / current code 是 implementation/project truth；durable Local Governance 是 live local control truth。Mission session 把 material checkpoint、candidate SHA、PR、CI 与 residual **material** risk 写入 durable surface。用户不承担 conversation message-bus 职责，也不需要复制 `RESULT`、普通错误报告、`workspaceId/jobId/taskId/stepId/threadId/turnId`、authority/execution token 或 routine shell/git/test 输出。
+
+当当前 capability 支持 direct durable handoff 时，Parent ↔ mission / reviewer / replacement 之间应自行写入并读取现有 durable surface。只有 direct durable write/read capability 确实不可用时才 fallback 到 Human Relay；此时只请求完成路由所需的最小 `verdict / material delta / durable evidence pointer`，不得要求用户复制完整 review、RESULT、CI dump、PR diff、历史 transcript 或内部 orchestration payload。
 
 Issue body + Parent durable decision 定义 authoritative mandatory acceptance。普通 mission prompt 不得静默增加新的 mandatory gate。Dogfood friction 先分类：P0 correctness/authority/safety 为 blocking；P1 operability 仅在实质阻止正常使用时 blocking；P2 UX/optional capability 默认 non-blocking。不要把每个 friction 自动升级为新的 Governance feature。
 
 Bounded implementation-session continuity 使用 execution claim 时，该 claim 只授权已经 Parent-approved 的 current task/step/workspace Direct Local execution；它不授予 Parent generation，也不能发起 `PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE`、Parent takeover、scope/acceptance 变化或 project-level final decision。
 
-Session naming：project Parent 使用 `① chatgpt-codex-orchestrator | 总控`；其他 session 统一使用 `chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>`，其中 `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`。普通 bug 不新建 logical mission；replacement 仅发生在 context/capability/natural checkpoint 边界，并继续 SAME mission。
+Session naming：
+
+- ongoing project Parent 使用 `① chatgpt-codex-orchestrator | 总控 · ACTIVE`；真正被 full Parent replacement supersede 的旧 ongoing Parent 可在方便时标为 `① chatgpt-codex-orchestrator | 总控 · RETIRED`。`ACTIVE/RETIRED` 只是 human-facing discoverability，不是 authority source；rename/archive 失败不影响 correctness。
+- 普通 bounded mission 继续使用 `chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>`，其中 `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`。
+- 明确授权的 bounded Parent delegation / takeover 使用 mission-style `chatgpt-codex-orchestrator | #<issue> · PARENT`；`PARENT` 只表示该 bounded scope 内的临时 Parent authority，不等于 ongoing project Parent。
+- 当前不使用 `G01/G02` 作为 canonical session naming；如果未来真实 dogfood 证明 `ACTIVE/RETIRED` 仍不足以让用户识别 current Parent，再基于本项目 authority model单独评估，而不是复制外部 generation-pointer architecture。
+- 普通 bug 不新建 logical mission；replacement 仅发生在 context/capability/natural checkpoint 边界，并继续 SAME logical work。
 
 ## 2. Operating Loop
 
