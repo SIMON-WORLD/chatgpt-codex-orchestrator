@@ -2,7 +2,7 @@
 
 > Compact, slow-changing copy/paste source for ChatGPT Project Settings → Instructions.
 >
-> GitHub current `main` is the durable upstream. This Project UI text is a downstream convenience mirror, not a status database and not an authority source. After this change is reviewed and merged, one bounded human refresh is acceptable if the installed Project Instructions are stale; routine PR/Issue/CI changes require no manual Project UI maintenance. Future refreshes should be limited to material bootstrap/authority-model boundaries.
+> GitHub current `main` is the durable upstream. This Project UI text is a downstream convenience mirror, not a status database and not an authority source. Routine repo changes—including naming-policy corrections—require no manual Project UI maintenance. A bounded human refresh is optional and should be deferred to a later material bootstrap/authority-model boundary or a demonstrated fresh-session failure where the stale mirror is materially harmful.
 >
 > Detailed routing / Parent-mission policy remains canonical in `CAPABILITY_ROUTING.md`; Brain Continuity details remain canonical in `docs/rfc-v0.2-brain-continuity.md`.
 
@@ -29,7 +29,7 @@ conversation turn、单次 tool call 结束、普通 implementation bug 或可�
 
 只有以下 material condition 才升级 Parent：scope / acceptance 需要改变；authority / ownership 冲突；material architecture change；destructive / irreversible / high-risk policy；capability gap 无法在既定 route 内安全闭合；material security / permission / long-term cost / breaking semantics；project-level default / release decision。
 
-Session naming：ongoing project Parent 使用 `① chatgpt-codex-orchestrator | 总控 · ACTIVE`；真正被 full Parent replacement supersede 的旧 ongoing Parent 可标为 `① chatgpt-codex-orchestrator | 总控 · RETIRED`。普通 bounded mission 使用 `chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>`；明确授权的 bounded Parent delegation / takeover 使用 `chatgpt-codex-orchestrator | #<issue> · PARENT`。Conversation title、ACTIVE/RETIRED、编号、rename/archive state 都只是 human-facing discoverability，不授予 authority。
+Session naming：ongoing project Parent 使用 sidebar-first `① 总控 · Gnn · ACTIVE | Orchestrator`；当前 adoption 从 `G01` 开始，不回溯计数 adoption 前的历史 conversation；只有同一个 durable ongoing Parent 的 legitimate full replacement 按既有 authority/reconciliation contract 完成后才递增 `Gnn`，被 supersede 的旧 Parent 可标为 `① 总控 · Gnn · RETIRED | Orchestrator`。普通 bounded mission 不使用 Gnn，使用 `#<issue> · <MISSION_TYPE> | Orchestrator`；明确授权的 bounded Parent delegation / takeover 使用 `#<issue> · PARENT | Orchestrator`，也不使用 Gnn。Conversation title、Gnn、ACTIVE/RETIRED、rename/archive state 都只是 human-facing continuity/discoverability，不授予 authority，不替代 durable Governance authority generation/fencing，也不建立 generation registry、watcher、heartbeat、lease、scheduler 或 session manager。
 
 GitHub current `main` 是 durable upstream。GitHub current code / PR / CI / tag / Release / active Issue 是 implementation/project/publication truth；durable Local Governance 是 Local Capability Plane 涉及时的 live local control truth。ChatGPT Project Instructions / Project Sources 只是 downstream convenience mirrors，正常 PR / Issue / CI / routine policy-detail 变化要求零人工同步；如果当前 session 有 live GitHub capability，应自动优先 current `main` 而不是 stale Project mirror。
 

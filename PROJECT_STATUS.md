@@ -138,13 +138,14 @@ Key operating rules:
 - Issue body + Parent durable decision define mandatory acceptance；ordinary prompts may not add hidden gates；
 - dogfood friction uses P0/P1/P2 classification before creating new Governance work。
 
-Parent continuity / naming rules from Issue #48 / PR #49：
+Parent continuity / naming rules：
 
-- ongoing project Parent uses `① chatgpt-codex-orchestrator | 总控 · ACTIVE`；a genuinely superseded ongoing Parent may be labeled `① chatgpt-codex-orchestrator | 总控 · RETIRED` for human discoverability；
-- ordinary bounded missions use `chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>` where `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`；
-- an explicitly authorized bounded Parent delegation / takeover uses `chatgpt-codex-orchestrator | #<issue> · PARENT` and ends with that bounded scope；
-- conversation title、`ACTIVE/RETIRED`、human-readable numbering and rename/archive state are human-facing only；they do **not** grant authority or replace durable Governance generation/fencing when Local Capability Plane control is involved；
-- no project-level `G01/G02` registry, heartbeat, lease, session manager, Parent/Child topology, or parallel authority source is introduced。
+- ongoing project Parent uses sidebar-first `① 总控 · Gnn · ACTIVE | Orchestrator`；current adoption starts at `G01` and does not back-count pre-adoption historical conversations；a genuinely superseded ongoing Parent may be labeled `① 总控 · Gnn · RETIRED | Orchestrator` for human discoverability；
+- `Gnn` increments only after a legitimate full replacement of the same durable ongoing Parent completes under the existing authority/reconciliation contract；arbitrary new conversations, ordinary bounded missions/reviews/investigations, and bounded Parent delegation do not increment or use `Gnn`；
+- ordinary bounded missions use sidebar-first, project-last `#<issue> · <MISSION_TYPE> | Orchestrator` where `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`；
+- an explicitly authorized bounded Parent delegation / takeover uses `#<issue> · PARENT | Orchestrator`, ends with that bounded scope, and does not use `Gnn`；
+- conversation title、`Gnn`、`ACTIVE/RETIRED`、human-readable numbering and rename/archive state are human-facing continuity/discoverability only；they do **not** grant authority or replace durable Governance generation/fencing when Local Capability Plane control is involved；
+- no project-level generation registry, conversation pointer service, heartbeat, watcher, lease, scheduler, session manager, Parent/Child topology, or parallel authority source is introduced。
 
 Issue #43 acceptance unblocked the SAME Issue #33 implementation mission. Issue #33 / PR #45 subsequently materialized the accepted capability-first v0.2 default under Strong Mission rules without creating a second Codex execution or new project-level scope. Issue #48 / PR #49 then corrected post-release Parent/session operating policy only。
 
@@ -212,7 +213,7 @@ Release-specific recovery remains simple：capability-first v0.2 is the reposito
 ## Authority
 
 - **GitHub `main` / current code / PR / CI / tag / Release:** implementation and publication truth / canonical authority。
-- **`CAPABILITY_ROUTING.md`:** current routing / executor / operating policy, including Issue #48 / PR #49 Parent continuity and Act-or-Escalate correction。
+- **`CAPABILITY_ROUTING.md`:** current routing / executor / operating policy, including current Parent continuity and Act-or-Escalate semantics。
 - **`docs/rfc-v0.2-brain-continuity.md`:** Brain Continuity contract and historical design rationale；current implementation state is also reflected by GitHub code/tests/issues。
 - **`docs/architecture.md`:** current technical architecture facts。
 - **`docs/releases/v0.2.0.md`:** v0.2.0 release/operator contract, including upgrade/rollback and publication boundary。

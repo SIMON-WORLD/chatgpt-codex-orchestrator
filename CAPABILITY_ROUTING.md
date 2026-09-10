@@ -35,8 +35,8 @@ Project-level Parent 是持续的 logical role，不等于某一条 conversation
 
 - **Full Parent replacement**：新 session 被明确指定为 ongoing project Parent，并在需要时完成 overlapping writer / Local Governance reconciliation；之后它持续承担 project-level Parent role，直到后续明确 superseded。完成某一个 mission 本身不终止 ongoing Parent role。
 - **Bounded Parent delegation / takeover**：session 只在明确 Issue / mission / mutation scope 内临时使用 Parent authority；scope 完成后该授权结束，不因此自动成为 ongoing project Parent。
-- Conversation title、`ACTIVE/RETIRED` 标签或人类可读编号都不授予 authority。进入 Local Capability Plane 时，现有 durable Governance authority generation / fencing / execution-claim semantics 仍是 machine-enforced control truth。
-- 当前不建立新的 project-level `G01/G02` registry，也不把 task-scoped Governance generation 重新解释为 project Parent generation。Human-facing discoverability 不得制造第二套 authority source。
+- Conversation title、`Gnn`、`ACTIVE/RETIRED` 标签或其他人类可读编号都不授予 authority。进入 Local Capability Plane 时，现有 durable Governance authority generation / fencing / execution-claim semantics 仍是 machine-enforced control truth。
+- `Gnn` 只表示同一个 durable ongoing Parent 的 human-facing conversation continuity ordinal；当前采用从 `G01` 开始，不回溯计数 adoption 前的历史 conversation。它不是 project-level registry，也不把 task-scoped Governance generation 重新解释为 project Parent generation。Human-facing discoverability 不得制造第二套 authority source。
 
 ### Thin Parent / Strong Mission
 
@@ -82,10 +82,11 @@ Bounded implementation-session continuity 使用 execution claim 时，该 claim
 
 Session naming：
 
-- ongoing project Parent 使用 `① chatgpt-codex-orchestrator | 总控 · ACTIVE`；真正被 full Parent replacement supersede 的旧 ongoing Parent 可在方便时标为 `① chatgpt-codex-orchestrator | 总控 · RETIRED`。`ACTIVE/RETIRED` 只是 human-facing discoverability，不是 authority source；rename/archive 失败不影响 correctness。
-- 普通 bounded mission 继续使用 `chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>`，其中 `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`。
-- 明确授权的 bounded Parent delegation / takeover 使用 mission-style `chatgpt-codex-orchestrator | #<issue> · PARENT`；`PARENT` 只表示该 bounded scope 内的临时 Parent authority，不等于 ongoing project Parent。
-- 当前不使用 `G01/G02` 作为 canonical session naming；如果未来真实 dogfood 证明 `ACTIVE/RETIRED` 仍不足以让用户识别 current Parent，再基于本项目 authority model单独评估，而不是复制外部 generation-pointer architecture。
+- ongoing project Parent 使用 sidebar-first `① 总控 · Gnn · ACTIVE | Orchestrator`；当前 adoption 从 `G01` 开始，不回溯计数 adoption 前的历史 conversation。真正被 full Parent replacement supersede 的旧 ongoing Parent 可在方便时标为 `① 总控 · Gnn · RETIRED | Orchestrator`。
+- `Gnn` 只在同一个 durable ongoing Parent 的 legitimate **full Parent replacement** 按既有 authority / reconciliation contract 完成后递增（`G01 → G02 → G03 ...`）；任意新 conversation、普通 bounded mission/review/investigation 或 bounded Parent delegation 都不递增，也不使用 `Gnn`。
+- 普通 bounded mission 使用 sidebar-first、project-last `#<issue> · <MISSION_TYPE> | Orchestrator`，其中 `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`。
+- 明确授权的 bounded Parent delegation / takeover 使用 `#<issue> · PARENT | Orchestrator`；`PARENT` 只表示该 bounded scope 内的临时 Parent authority，不等于 ongoing project Parent，也不使用 `Gnn`。
+- Conversation title、`Gnn`、`ACTIVE/RETIRED` 与 rename/archive state 都只是 human-facing continuity/discoverability，不是 authority source；它们不替代 durable Governance authority generation/fencing，也不建立 generation registry、conversation pointer service、watcher、heartbeat、lease、scheduler 或 session manager。rename/archive 失败不影响 correctness。
 - 普通 bug 不新建 logical mission；replacement 仅发生在 context/capability/natural checkpoint 边界，并继续 SAME logical work。
 
 ## 2. Operating Loop
