@@ -67,6 +67,7 @@ test('config_safety returns booleans only and never returns raw config-derived v
     'pipe = "\\\\\\\\.\\\\pipe\\\\secret-pipe"',
     'endpoint = "http://127.0.0.1:5157"',
     'label = "ä¸­å›½"',
+    'freeform = "malicious-free-form-payload-should-never-cross-boundary"',
   ].join('\n'), 'utf8');
   const before = sha(configFile);
   const service = new CodexDiagnosticsService({ codexHome: home });
@@ -80,7 +81,7 @@ test('config_safety returns booleans only and never returns raw config-derived v
     localhostReference: true,
     mojibakeReference: true,
   });
-  for (const forbidden of ['sk-private-token', 'private.example', 'Users', 'session_123', 'secret-pipe']) {
+  for (const forbidden of ['sk-private-token', 'private.example', 'Users', 'session_123', 'secret-pipe', 'malicious-free-form-payload']) {
     assert.equal(serialized.includes(forbidden), false, `leaked ${forbidden}`);
   }
   assert.equal(sha(configFile), before, 'read-only diagnostics must not modify config');
@@ -100,7 +101,7 @@ test('missing, invalid schema, unexpected type, and oversize inputs fail closed 
   const invalid = service.run({ kind: 'stall_summary' });
   assert.equal(invalid.sourceStatus, 'invalid_schema');
   assert.equal(JSON.stringify(invalid).includes('Private'), false);
-  assert.equal(sha(dbFile), beforeBadDb);
+  assert.equal(sha(dbFile), beforeBadDb, 'invalid SQLite failure path must not modify the source');
 
   const configFile = path.join(home, 'config.toml');
   fs.mkdirSync(configFile);
@@ -108,14 +109,35 @@ test('missing, invalid schema, unexpected type, and oversize inputs fail closed 
   fs.rmSync(configFile, { recursive: true });
 
   fs.writeFileSync(configFile, 'x'.repeat(CODEX_DIAGNOSTIC_BOUNDS.maxConfigBytes + 1), 'utf8');
+  const beforeOversize = sha(configFile);
   assert.equal(service.run({ kind: 'config_safety' }).sourceStatus, 'oversize');
+  assert.equal(sha(configFile), beforeOversize, 'oversize failure path must not modify the source');
 });
 
-test('symlinked approved source is rejected without following it or leaking target data', (t) => {
+test('unreadable fixed source fails closed and remains unchanged', (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX mode-bit fixture');
+  const home = makeHome();
+  const configFile = path.join(home, 'config.toml');
+  fs.writeFileSync(configFile, 'token="sk-unreadable-secret"', 'utf8');
+  const before = sha(configFile);
+  fs.chmodSync(configFile, 0o000);
+  t.after(() => { try { fs.chmodSync(configFile, 0o600); } catch {} });
+
+  const result = new CodexDiagnosticsService({ codexHome: home }).run({ kind: 'config_safety' });
+  if (result.sourceStatus !== 'unreadable') return t.skip('runner can read mode-000 fixture');
+  assert.deepEqual(result, {
+    schemaVersion: 1, kind: 'config_safety', status: 'unavailable', source: 'config', sourceStatus: 'unreadable', completeness: 'none',
+  });
+  fs.chmodSync(configFile, 0o600);
+  assert.equal(sha(configFile), before, 'unreadable failure path must not modify the source');
+});
+
+test('symlinked approved source is rejected without following it or modifying target data', (t) => {
   const home = makeHome();
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-diag-outside-'));
   const target = path.join(outside, 'secret.toml');
   fs.writeFileSync(target, 'token="sk-outside-secret"', 'utf8');
+  const before = sha(target);
   try { fs.symlinkSync(target, path.join(home, 'config.toml')); }
   catch (e) {
     if (e && (e.code === 'EPERM' || e.code === 'EACCES')) return t.skip('symlink creation not permitted');
@@ -125,5 +147,5 @@ test('symlinked approved source is rejected without following it or leaking targ
   const result = new CodexDiagnosticsService({ codexHome: home }).run({ kind: 'config_safety' });
   assert.equal(result.sourceStatus, 'unsafe_link');
   assert.equal(JSON.stringify(result).includes('sk-outside-secret'), false);
-  assert.equal(sha(target), sha(target), 'target remains readable and unchanged by the test itself');
+  assert.equal(sha(target), before, 'rejected symlink target must remain unchanged');
 });
