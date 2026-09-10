@@ -115,7 +115,7 @@ export function loadV02Config(overrides = {}, { configPath = null } = {}) {
     };
   }
   cfg.diagnostics = {
-    codex: { enabled: cfg.diagnostics && cfg.diagnostics.codex && cfg.diagnostics.codex.enabled === true },
+    codex: { enabled: cfg.diagnostics?.codex?.enabled === true },
   };
   cfg.tunnel.external = cfg.tunnel.external === true;
   cfg.paths = runtimePaths(cfg.dataRoot);
