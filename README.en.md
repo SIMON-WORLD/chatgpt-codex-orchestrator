@@ -4,13 +4,13 @@ A **ChatGPT-centered Capability Orchestrator** with ChatGPT as the authoritative
 
 **Core idea:** ChatGPT decides. Capabilities execute. ChatGPT verifies.
 
-**Status:** v0.2 release line · repository operational default = **capability-first v0.2** · M8 release target `v0.2.0` · [简体中文](README.md)
+**Status:** formal release = **v0.2.0** · repository operational default = **capability-first v0.2** · M8 / Issue #46 = **CLOSED / DONE** · [简体中文](README.md)
 
-> Whether `v0.2.0` has been formally published is determined by actual GitHub tag / Release readback. Versioned files on an M8 Phase A RC branch are not themselves a release.
+> GitHub tag / Release readback is the formal publication truth. M8 / Issue #46 is complete and retained as historical release-control evidence, not a live gate or release authority.
 
 ## Why this project
 
-ChatGPT can already handle a large range of research, file, data-analysis, and connected-app work. Codex is strong at sustained local coding execution. The real orchestration problem is therefore not simply "how to make ChatGPT call Codex," but:
+ChatGPT can already handle a broad range of research, file/data, media/artifact, and connected plugin/app work. Codex is strong at sustained local coding execution. This repository does not maintain a static global inventory of ChatGPT product capabilities; availability is discovered from the current runtime's real tool/action/provider/resource/operation surface. The real orchestration problem is therefore not simply "how to make ChatGPT call Codex," but:
 
 - what capability the task actually requires;
 - whether ChatGPT can already perform it directly;
@@ -36,7 +36,7 @@ Evidence first
 
 - **ChatGPT as authoritative Brain** — investigation, planning, decisions, routing, acceptance, and final `DONE` remain under ChatGPT control.
 - **Runtime Capability Routing** — availability is determined by the current runtime, provider connection, resource authorization, and operation permission rather than static assumptions.
-- **Native-first** — when Web, Files, Python/Data Analysis, Images, Artifacts, GitHub, or other connected apps are already sufficient, the task is not redundantly delegated to Codex.
+- **Native-first** — when the built-in product capabilities and connected plugins/apps exposed by the current ChatGPT runtime are sufficient, the task is not redundantly delegated to Codex; availability is rediscovered at runtime.
 - **Local Capability Plane** — Custom MCP App + Secure Tunnel + Local MCP add Local Machine / Local Workspace capability.
 - **Direct Local** — for workspace read/search/status/diff, bounded edits, and focused verification.
 - **Codex delegation** — for multi-file implementation, debugging, refactoring, shell-heavy work, and iterative tests/builds.
@@ -70,16 +70,18 @@ flowchart TD
 
 In this model, **Executor does not mean Codex**. Codex is an important local coding executor, but it is not the default downstream for every task.
 
-Claude, DeepSeek, or other agents may later be attached as specialists, advisors, or executors when real requirements justify them; the current project keeps ChatGPT as the sole authoritative Parent Brain.
+Claude, DeepSeek, or other agents may later be attached as specialists, advisors, or executors when real requirements justify them; the current project keeps ChatGPT as the sole authoritative Brain.
 
 ## Current status
 
+- Formal GitHub publication: **`v0.2.0` RELEASED**; live tag / Release readback remains publication truth
 - Repository/default operational contract: **capability-first v0.2**
-- M8 release target: `v0.2.0`; formal publication status must be read from GitHub tags/Releases, not inferred from a candidate branch's version field
 - Alpha.3 legacy IAB Direct Brain Loop: feature-frozen, explicit compatibility/fallback only; capability failure never silently falls back to it
-- M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the default-policy review are complete and accepted
-- Issue #33 / PR #45: the operational default flip is accepted and materialized; it predates the formal v0.2 release
-- Issue #46: M8 Phase A RC/release-readiness; Phase B merge/tag/GitHub Release remains gated by explicit project-level Parent authorization
+- M0–M8, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, the default-policy review, and the operational-default flip are complete/accepted
+- Issue #46: **CLOSED / DONE / historical release-control evidence**; it is no longer a live release gate/authority
+- Issue #48 / PR #49: ongoing Parent / bounded Parent, No Human Relay, and Act-or-Escalate / no Continue Tax policy is accepted in current `CAPABILITY_ROUTING.md`
+
+The stable recovery order for a fresh session / replacement Brain is: **GitHub current `main` → `CAPABILITY_ROUTING.md` → `PROJECT_STATUS.md` → `ROADMAP.md` → active Issue/mission if any → runtime capability discovery → act or escalate**. ChatGPT Project Instructions / Sources are downstream convenience mirrors, not status databases that must be synchronized after every PR.
 
 See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the current development state, [`ROADMAP.md`](ROADMAP.md) for the accepted high-level path, and [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for the v0.2.0 release/operator contract.
 
@@ -102,7 +104,7 @@ npm test
 
 ### Operational workflow
 
-See [`skills/brain-command/SKILL.md`](skills/brain-command/SKILL.md) for current repository operational policy. [`SKILL.md`](SKILL.md) also records the v0.2 release line and Alpha.3 compatibility boundary.
+See [`skills/brain-command/SKILL.md`](skills/brain-command/SKILL.md) for current repository operational policy. [`SKILL.md`](SKILL.md) records the v0.2 release / Alpha.3 compatibility boundary.
 
 ### v0.2 local runtime
 
@@ -114,7 +116,7 @@ npm run start:v0.2
 
 ## Routing policy
 
-The current normative capability / executor policy lives in [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md).
+The current normative capability / executor / Parent-mission policy lives in [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md).
 
 The four top-level routes are:
 
@@ -123,17 +125,18 @@ The four top-level routes are:
 - `CODEX_DELEGATE`
 - `HYBRID`
 
-Route, Capability, and Provider are separate concepts. Connecting GitHub, Gmail, Notion, Figma, or future apps should not require adding a new top-level route enum for every provider.
+Route, Capability, and Provider are separate concepts. Product migrations or additions of plugins, apps, providers, or surfaces should not require a new top-level route enum or a static product-capability registry.
 
 ## Documentation
 
 - [`PROJECT_STATUS.md`](PROJECT_STATUS.md) — current project state and fast recovery entrypoint
 - [`ROADMAP.md`](ROADMAP.md) — accepted high-level path
-- [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md) — current routing / executor policy
-- [`docs/architecture.md`](docs/architecture.md) — current technical architecture and operational-default / release compatibility boundary
+- [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md) — current routing / executor / Parent-mission policy
+- [`docs/architecture.md`](docs/architecture.md) — current technical architecture and release / compatibility boundary
 - [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md) — accepted, implemented, and real-dogfood-complete Brain Continuity contract
-- [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) — v0.2.0 release notes, upgrade, Governance recovery, Stable Runtime rollback, and publication boundary
+- [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) — v0.2.0 release notes, upgrade, Governance recovery, Stable Runtime rollback, and historical publication-control contract
 - [`docs/README.md`](docs/README.md) — documentation authority and historical RFC index
+- [`docs/chatgpt-project-instructions.md`](docs/chatgpt-project-instructions.md) — slow-changing, low-maintenance ChatGPT Project bootstrap/constitution template
 - [`CHANGELOG.md`](CHANGELOG.md) — release and unreleased change history
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution guide
 - [`SKILL.md`](SKILL.md) — repository entry / Alpha.3 compatibility boundary
