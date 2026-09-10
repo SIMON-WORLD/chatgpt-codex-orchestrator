@@ -1,6 +1,6 @@
 # ROADMAP
 
-> 本文件只记录已经接受的高层路径，不预先发明尚无真实 evidence 支撑的未来实现阶段。新阶段由 ChatGPT Brain 在后续 PLAN / REPLAN 中定义。M8 的 exact live review/publication state 不在本文件静态快照；应读取 Issue #46 最新 authoritative Parent checkpoint 与 GitHub tag / Release truth。
+> 本文件只记录已经接受的高层路径和当前稳定 operating state，不预先发明尚无真实 evidence 支撑的未来实现阶段。`v0.2.0` 已正式发布，M8 / Issue #46 已 CLOSED / DONE；GitHub tag / Release readback 保持 publication truth。后续新阶段只能由新的真实 evidence 与 authoritative Issue/Parent decision 定义，不从已完成 milestone 自动推导。
 
 ## 已接受路径
 
@@ -22,7 +22,9 @@
 | Stable Runtime activation bootstrap | **CLOSED / ACCEPTED** | Issue #36；exact accepted revision activation path + real dogfood support |
 | Thin Parent / Strong Mission policy correction | **CLOSED / ACCEPTED** | Issue #43 / PR #44 merged |
 | v0.2 operational default flip | **ACCEPTED / MATERIALIZED** | Issue #33 / PR #45；capability-first v0.2 is repository operational default；Alpha.3 explicit compatibility only |
-| M8 — RC / Release | **LIVE AUTHORITY: ISSUE #46** | `v0.2.0` release-control state is read from latest Issue #46 Parent checkpoint; publication truth is GitHub tag/Release readback |
+| M8 — RC / Release | **CLOSED / RELEASED** | Issue #46 DONE；`v0.2.0` tag + matching GitHub Release formally published |
+| Parent continuity / no Continue Tax correction | **CLOSED / ACCEPTED** | Issue #48 / PR #49 merged；human-facing Parent naming、bounded Parent delegation、No Human Relay、Act-or-Escalate materialized |
+| Post-v0.2 stabilization / evidence-driven steady-state | **CURRENT OPERATING STATE** | no automatic v0.2.1/v0.3 scope；new implementation requires new P0/P1 evidence or separately accepted product/architecture outcome |
 
 ## N3 — 已接受基线
 
@@ -110,23 +112,23 @@ Formal isolated real-runtime dogfood 已 PASS：
 
 ### Issue #27 — Direct Local canonical-path hardening
 
-Issue #27 closed the canonical symlink/junction sensitive-path alias bypass and is no longer an operational-default blocker.
+Issue #27 closed the canonical symlink/junction sensitive-path alias bypass and is no longer an operational-default blocker。
 
 ### Issue #34 — bounded implementation-session continuity
 
-Issue #33 fresh-session dogfood exposed a control-plane gap: Parent fencing correctly protected project controls, but a disposable bounded non-Parent implementation session could not continue an already-authorized Direct Local step without the Parent token. Issue #34 added a narrow task/step/workspace-scoped execution continuation claim, kept Parent generation/control authority separate, fenced stale claims, and passed the required real dogfood on the preserved Issue #33 worktree.
+Issue #33 fresh-session dogfood exposed a control-plane gap：Parent fencing correctly protected project controls，but a disposable bounded non-Parent implementation session could not continue an already-authorized Direct Local step without the Parent token。Issue #34 added a narrow task/step/workspace-scoped execution continuation claim，kept Parent generation/control authority separate，fenced stale claims，and passed the required real dogfood on the preserved Issue #33 worktree。
 
 ### Issue #36 — Stable Runtime activation bootstrap
 
-Issue #34 real dogfood required activating the accepted runtime revision without manual shell choreography. Issue #36 added the bounded exact-revision Stable Runtime activation boundary, preserving stable profile/dataRoot/Governance namespace/tunnel identity and enabling the real #34/#33 path.
+Issue #34 real dogfood required activating the accepted runtime revision without manual shell choreography。Issue #36 added the bounded exact-revision Stable Runtime activation boundary，preserving stable profile/dataRoot/Governance namespace/tunnel identity and enabling the real #34/#33 path。
 
-## Operating-model correction — Issue #43
+## Operating-model corrections — Issue #43 and Issue #48
 
-Recent #33/#34/#36 dogfood proved the v0.2 technical substrate while exposing a workflow problem: Parent conversations repeatedly entered routine implementation/debug hot paths, ordinary bugs caused unnecessary Parent round-trips, and the user risked becoming a conversation message bus.
-
-Issue #43 materialized the bounded project-policy correction and is now **CLOSED / ACCEPTED / MERGED** through PR #44:
+Issue #43 materialized the foundational bounded project-policy correction and is **CLOSED / ACCEPTED / MERGED** through PR #44：
 
 `Thin Parent / Strong Mission / exception-based escalation`
+
+Issue #48 / PR #49 later added the smallest post-v0.2 clarification for Parent/session continuity and progression，without changing Brain Continuity runtime、durable Governance schema/API/generation/fencing、Stable Runtime、routing architecture、release/version，or single-writer semantics。
 
 ### Parent owns
 
@@ -138,15 +140,15 @@ Issue #43 materialized the bounded project-policy correction and is now **CLOSED
 - milestone independent acceptance；
 - operational default / release decisions。
 
-Parent does not enter routine implementation hot path.
+Parent does not enter routine implementation hot path。
 
 ### Bounded mission owns within contract
 
-Once outcome、scope、acceptance、escalation boundary 与 required capability are clear, bounded non-Parent mission continuously progresses：
+Once outcome、scope、acceptance、escalation boundary 与 required capability are clear，bounded non-Parent mission continuously progresses：
 
 `inspect → diagnose → implement → test → debug/retry → commit/push → PR → exact-head verification`
 
-A conversation turn, one tool-call boundary, or an ordinary in-scope implementation bug is not an escalation boundary.
+A conversation turn，one tool-call boundary，an ordinary in-scope implementation bug，or merely needing another user `continue` is not an escalation boundary。Known next safe action + unchanged acceptance + sufficient current capability means act。
 
 ### Escalate only on material conditions
 
@@ -158,67 +160,78 @@ A conversation turn, one tool-call boundary, or an ordinary in-scope implementat
 - material security / permission / long-term cost / breaking semantics；
 - project-level default / release decision。
 
+### Parent continuity / human-facing naming
+
+- ongoing project Parent：`① chatgpt-codex-orchestrator | 总控 · ACTIVE`；
+- a genuinely superseded ongoing Parent may be human-facing `① chatgpt-codex-orchestrator | 总控 · RETIRED`；
+- ordinary bounded mission：`chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>`，where `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`；
+- explicitly authorized bounded Parent delegation / takeover：`chatgpt-codex-orchestrator | #<issue> · PARENT`；its Parent authority ends with the bounded scope and does not make it the ongoing Parent；
+- titles、`ACTIVE/RETIRED`、numbers、rename/archive state are human-facing only and never grant machine/project authority；Local Governance generation/fencing remains the control truth when its plane is involved；
+- no project-level `G01/G02` registry、heartbeat、lease、session manager、Parent/Child topology or second authority source。
+
 ### Pointer-not-payload / acceptance discipline
 
 - GitHub Issue / PR / CI / current code = implementation/project truth；
 - durable Local Governance = live local control truth；
 - mission session writes material checkpoint / candidate SHA / PR / CI / residual material risk to durable surfaces；
-- user does not relay internal IDs、tokens、RESULT、routine error logs or shell/git/test output；
+- direct durable handoff is preferred；if Human Relay is genuinely unavoidable，request only the minimal verdict / material delta / durable evidence pointer，not full RESULT/review/CI dump/transcript/internal IDs；
 - Issue body + Parent durable decision define mandatory acceptance；mission prompt cannot silently add new gates；
 - dogfood friction is classified P0 / P1 / P2 before it is promoted into new Governance scope。
 
-Canonical session naming：Parent = `① chatgpt-codex-orchestrator | 总控`；others = `chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>` where `MISSION_TYPE` is `IMPLEMENT / DOGFOOD / REVIEW / RUNTIME / INVESTIGATE`。
-
-Issue #43 was **policy/docs only** and added no runtime/Governance feature.
+Issue #43 was policy/docs only；Issue #48 / PR #49 was also policy/docs only。Neither introduced a new runtime/Governance feature。
 
 ## Operational default flip — SAME Issue #33
 
-Issue #32 already issued explicit default-policy **ACCEPT** and opened Issue #33. The old roadmap state `DEFER until #27 closes` is therefore historical, not current.
+Issue #32 already issued explicit default-policy **ACCEPT** and opened Issue #33。The old roadmap state `DEFER until #27 closes` is therefore historical，not current。
 
-Issue #33 / PR #45 materialized the accepted v0.2 capability-first operating model as the repository operational default while retaining Alpha.3/IAB as explicit feature-frozen compatibility/fallback.
+Issue #33 / PR #45 materialized the accepted v0.2 capability-first operating model as the repository operational default while retaining Alpha.3/IAB as explicit feature-frozen compatibility/fallback。
 
-Post-merge state:
+Post-merge state：
 
 1. capability-first v0.2 operational default is **ACCEPTED / MATERIALIZED** through Issue #33 / PR #45；
 2. Alpha.3/IAB remains explicit feature-frozen compatibility/fallback only；
 3. Issue #33 is no longer an active operational-default gate；
-4. M8 remains a separate release boundary governed by its own authoritative Issue #46 Parent decisions and GitHub publication truth。
+4. M8 later completed as an independent release boundary through Issue #46 and GitHub publication truth。
 
-The completed #33 mission did not authorize a second Codex execution, Alpha.3 workaround, Parent takeover, manual durable JSON, user token/ID relay, M8/version/tag/release, or project-level self-acceptance. The original Issue #46 readiness kickoff authorized RC preparation only; any publication authority must be a later explicit Parent decision recorded durably in the SAME Issue #46 release-control surface.
+The completed #33 mission did not authorize a second Codex execution，Alpha.3 workaround，Parent takeover，manual durable JSON，user token/ID relay，or project-level self-acceptance。M8/version/tag/release remained a separate authority boundary until Issue #46 explicitly authorized and completed publication。
 
 ## Non-blocking observations
 
-以下 finding 保留，但当前不自动变成 blocking gate：
+以下 finding 保留，但当前不自动变成 blocking gate 或新 milestone：
 
 - **Codex Desktop thread visibility:** external App Server thread 的 Desktop sidebar live visibility 不可靠；作为独立 upstream/product investigation 处理，不回退 IAB。
-- **Passive execution observability:** long-running execution 缺少稳定用户 status/notification surface；后续作为 UX/observability candidate。
+- **Passive execution observability:** long-running execution 缺少稳定用户 status/notification surface；作为 UX/observability candidate，需真实 evidence 才升级。
 - **Custom App conversation capability volatility:** 部分 conversation 曾从可实际调用 Developer MCP 变为 `FORBIDDEN: This conversation does not support developer MCPs`，而 fresh conversation 在 SAME Local MCP/tunnel 上可恢复。availability 必须按 session/message boundary 重新发现。
 - **Node 24 executor test timing:** ownership/permission continuation tests 偶发 timing failure，same-head rerun 可 PASS；保留为 test-stability evidence，除非出现 reproducible correctness evidence。
-- **Branch protection:** current `main` 尚未强制 required checks；属于独立 delivery-hardening candidate，除非最新 Issue #46 Parent decision基于 material release evidence 明确把它提升为当前 release blocker。
+- **Branch protection:** current `main` 尚未强制 required checks；属于独立 delivery-hardening candidate，不因 v0.2 release 完成而自动成为新 scope。
 - **Parent direct-main mistake:** Issue #43 记录了两次 no-net-content direct-main commits；accepted correction 是 branch + PR discipline，不做 history rewrite，也不创建新 runtime feature。
 
-## M8 — RC / Release
+## M8 — RC / Release — CLOSED / RELEASED
 
-Issue #46 is the canonical M8 release-control surface for semantic version `0.2.0` / tag `v0.2.0`. This roadmap records the stable two-stage contract, not which stage is live at the moment.
+Issue #46 was the canonical M8 release-control surface for semantic version `0.2.0` / tag `v0.2.0`。Its two-stage readiness/publication contract is historical accepted release-control evidence，not current live authority。
 
-Release-readiness evidence includes:
+Completed publication evidence：
 
-- current code / docs / public release entry consistent with the v0.2 operational-default boundary；
-- package/version metadata and release/operator notes prepared for `0.2.0`；
-- required CI / regression green；
-- M7 real-project dogfood evidence complete；
-- Brain Continuity restart/re-entry dogfood PASS；
-- bounded mission continuity / Stable Runtime activation evidence closed；
-- operational default semantics genuinely switched while legacy IAB remains feature-frozen explicit compatibility only；
-- Governance state schema/migration/known-good-backup/future-schema fail-closed behavior reverified；
-- Stable Runtime exact-revision activation and no-guess rollback boundary reverified；
-- Node/runtime compatibility reverified；
-- Draft PR + exact candidate SHA + exact-head Node 22/24 CI + release-note pointer + residual P0/P1/P2 risk written durably for independent Parent review。
+- accepted release candidate was merged through PR #47；
+- exact post-merge Node 22.x / 24.x CI was verified；
+- exact tag `v0.2.0` points to release commit `f59930661379fec6ef8b327257f83ddcee015862`；
+- matching GitHub Release `v0.2.0` is published as non-draft / non-prerelease；
+- final bounded Parent reconciliation recorded `PARENT_FINAL — M8 DONE / v0.2.0 RELEASED` and closed Issue #46。
 
-Publication authority is separate from readiness. Only after the project-level Parent explicitly authorizes publication for the accepted exact candidate may the publication transaction merge with an exact-head guard, verify post-merge `main` CI, create `v0.2.0` at the accepted commit, create the matching GitHub Release, and independently read back publication truth. Whether that authorization or transaction has already occurred must be read from the latest Issue #46 Parent checkpoint and GitHub state, not inferred from this roadmap.
+Historical release-readiness evidence remains in Issue #46 / PR #47，including Governance migration/recovery，Stable Runtime exact-revision/no-guess rollback，Node compatibility，explicit Alpha.3 compatibility/no-silent-fallback，exact-head CI and residual P0/P1/P2 classification。Do not rewrite those historical checkpoints as if they were current live gates。
 
-See [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for the release/operator contract.
+See [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for the release/operator contract。Formal publication truth remains GitHub tag / Release readback。
 
-## M8 之后
+## Post-v0.2 stabilization / evidence-driven steady-state
 
-不在本文件预设 v0.3 / v0.4 固定阶段。未来方向必须由新的真实需求与 dogfood evidence 驱动，并通过后续 PLAN / RFC 决定。是否需要 multi-workstream / multi-Agent orchestration，也只由后续真实 portfolio evidence 决定；v0.2 不预先扩张为 multi-Parent、Child-Brain hierarchy、scheduler、consensus、generic RBAC/lease 或 workflow engine。
+M8 completion does **not** automatically open v0.2.1、v0.3、v0.4 or another implementation milestone。The project is now in stabilization / evidence-driven steady-state：
+
+- continue real-project dogfood under the capability-first v0.2 operational default；
+- treat P0 correctness / authority / safety evidence as blocking and eligible to create bounded corrective work；
+- treat P1 operability evidence as blocking only when it materially prevents normal use；
+- P2 UX / optional-capability observations remain non-blocking and do not automatically create Governance work；
+- new implementation scope requires a new authoritative Issue/mission driven by real P0/P1 evidence or a separately accepted product/architecture outcome；
+- historical milestone/RFC rationale remains evidence/history，not a latent backlog；
+- future multi-workstream / multi-Agent ideas require real portfolio evidence；v0.2 does not pre-expand into multi-Parent、Child-Brain hierarchy、scheduler、consensus、generic RBAC/lease or workflow engine。
+
+For recovery，a fresh Parent should follow the current bootstrap sequence in [`PROJECT_STATUS.md`](PROJECT_STATUS.md)：current `main` → `CAPABILITY_ROUTING.md` → `PROJECT_STATUS.md` → `ROADMAP.md` → current active Issue/mission if any → runtime capability discovery → act or escalate。
