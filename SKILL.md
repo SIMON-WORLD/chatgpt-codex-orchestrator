@@ -1,13 +1,13 @@
 ---
 name: chatgpt-codex-orchestrator
-description: "Compatibility entry for the ChatGPT-command orchestrator. Repository operational default = capability-first v0.2: discover current ChatGPT/runtime capability, prefer Native when sufficient, use Stable Runtime Direct Local for bounded local work, and use Codex only for sustained local coding when required. M8 release target = v0.2.0; actual publication is authoritative from GitHub tag/Release readback. Alpha.3 built-in-IAB Direct Brain Loop remains feature-frozen as an explicit compatibility/fallback path only, never a silent fallback."
+description: "Compatibility entry for the ChatGPT-command orchestrator. Repository operational default = capability-first v0.2: discover current ChatGPT/runtime capability, prefer Native when sufficient, use Stable Runtime Direct Local for bounded local work, and use Codex only for sustained local coding when required. Formal release = v0.2.0; publication truth is authoritative from live GitHub tag/Release readback. Issue #46/M8 is CLOSED/DONE historical release-control evidence. Alpha.3 built-in-IAB Direct Brain Loop remains feature-frozen as an explicit compatibility/fallback path only, never a silent fallback."
 ---
 
 # ChatGPT-command orchestrator (v0.2 release line)
 
-The repository's operational contract is capability-first v0.2. The user supplies the goal; ChatGPT remains the authoritative Brain and routes work from actual runtime/session capability. The M8 release target is `v0.2.0`; whether it has been formally published is determined by GitHub tag/Release state, not by a candidate branch alone.
+The repository's operational contract is capability-first v0.2. The user supplies the goal; ChatGPT remains the authoritative Brain and routes work from actual runtime/session capability. `v0.2.0` is formally published; publication truth is determined by live GitHub tag/Release state rather than package/version prose.
 
-> **Status boundary:** capability-first v0.2 is the repository operational default contract; Alpha.3/IAB is explicit feature-frozen compatibility only. M8 Phase A may prepare versioned RC files, but tag/GitHub Release creation remains a separate Parent-authorized publication transaction. See `PROJECT_STATUS.md`, `CAPABILITY_ROUTING.md`, `docs/architecture.md`, `docs/releases/v0.2.0.md`, and GitHub code/PR/CI for current truth.
+> **Status boundary:** capability-first v0.2 is the repository operational default contract; Alpha.3/IAB is explicit feature-frozen compatibility only. M8 / Issue #46 is CLOSED / DONE and retained as historical release-control evidence, not a live release gate or current release authority. See GitHub current `main`/PR/CI/tag/Release, `CAPABILITY_ROUTING.md`, `PROJECT_STATUS.md`, `ROADMAP.md`, and active Issue/mission for current truth.
 
 ## Default: capability-first v0.2
 
@@ -27,7 +27,7 @@ The repository operational default is **capability-first v0.2**. Native capabili
 - **M6** completed the structural isolation of the IAB / Alpha.4 implementation under `src/legacy/`.
 - **M7** real-project capability-routing dogfood is **COMPLETE / ACCEPTED**: Native-only, Codex-required, and Hybrid paths passed.
 - **Brain Continuity**, Direct Local canonical-path hardening, bounded execution claims, Stable Runtime activation, and the explicit operational-default policy review are **COMPLETE / ACCEPTED**.
-- Issue #33 / PR #45 materialized the authorized v0.2 default flip. Issue #46 is the separate M8 RC/release-readiness boundary; release target `v0.2.0` is prepared without granting this bounded mission publication authority.
+- Issue #33 / PR #45 materialized the authorized v0.2 default flip. Issue #46 later completed the separately gated M8 publication transaction; `v0.2.0` is formally released and Issue #46 is now historical release-control evidence.
 - The IAB path is **feature-frozen**, **not deleted**, and available only through explicit compatibility/fallback selection.
 
 ## Alpha.3 / legacy compatibility runtime (explicit opt-in only)
@@ -68,16 +68,22 @@ No user-visible port/token/node-REPL details are exposed.
 
 ## Release/operator boundary
 
-For the v0.2 release line, use [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for exact-revision Stable Runtime upgrade/rollback, Governance schema compatibility/recovery, Node support, and the gated publication transaction. Do not hand-edit durable Governance JSON and do not treat a package version field as proof that a tag/GitHub Release exists.
+For the v0.2 release line, use [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for exact-revision Stable Runtime upgrade/rollback, Governance schema compatibility/recovery, Node support, and the historical gated publication-control contract. Formal `v0.2.0` publication is already complete and remains proven by live GitHub tag/Release readback. Do not hand-edit durable Governance JSON and do not treat a package version field as release proof.
 
 ## Current development authority
 
-For current implementation and operating truth, use these sources rather than the legacy compatibility mechanics above:
+For a fresh session / replacement Brain, recover in this order:
 
-- `PROJECT_STATUS.md` — current phase / blocker / next action;
+`GitHub current main → CAPABILITY_ROUTING.md → PROJECT_STATUS.md → ROADMAP.md → active Issue/mission if any → runtime capability discovery → act or escalate`.
+
+Use these sources rather than the legacy compatibility mechanics above:
+
+- GitHub current `main` / code / PR / CI / tag / Release / active Issue — implementation/project/publication truth;
+- `CAPABILITY_ROUTING.md` — current routing/executor/Parent-mission policy;
+- `PROJECT_STATUS.md` — stable current status baseline;
 - `ROADMAP.md` — accepted high-level path;
-- `CAPABILITY_ROUTING.md` — current routing/executor policy;
 - `docs/architecture.md` — current technical architecture;
 - `docs/rfc-v0.2-brain-continuity.md` — accepted Brain Continuity contract and historical design rationale; implementation + real dogfood are complete;
-- `docs/releases/v0.2.0.md` — v0.2.0 release/operator contract and publication boundary;
-- GitHub current code / PR / CI / tag / Release — implementation and publication truth.
+- `docs/releases/v0.2.0.md` — v0.2.0 release/operator and historical publication-control contract.
+
+ChatGPT Project Instructions / Project Sources are downstream convenience mirrors, not live status databases or authority sources. Routine repository changes do not require manual mirror maintenance; when live GitHub capability is available, prefer current GitHub truth over stale mirrors.
