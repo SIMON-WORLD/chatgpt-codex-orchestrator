@@ -162,12 +162,12 @@ A conversation turn，one tool-call boundary，an ordinary in-scope implementati
 
 ### Parent continuity / human-facing naming
 
-- ongoing project Parent：`① chatgpt-codex-orchestrator | 总控 · ACTIVE`；
-- a genuinely superseded ongoing Parent may be human-facing `① chatgpt-codex-orchestrator | 总控 · RETIRED`；
-- ordinary bounded mission：`chatgpt-codex-orchestrator | #<issue> · <MISSION_TYPE>`，where `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`；
-- explicitly authorized bounded Parent delegation / takeover：`chatgpt-codex-orchestrator | #<issue> · PARENT`；its Parent authority ends with the bounded scope and does not make it the ongoing Parent；
-- titles、`ACTIVE/RETIRED`、numbers、rename/archive state are human-facing only and never grant machine/project authority；Local Governance generation/fencing remains the control truth when its plane is involved；
-- no project-level `G01/G02` registry、heartbeat、lease、session manager、Parent/Child topology or second authority source。
+- ongoing project Parent：`① 总控 · Gnn · ACTIVE | Orchestrator`；current adoption starts at `G01` and does not back-count pre-adoption historical conversations；
+- a genuinely superseded ongoing Parent may be human-facing `① 总控 · Gnn · RETIRED | Orchestrator`；
+- ordinary bounded mission：`#<issue> · <MISSION_TYPE> | Orchestrator`，where `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`；ordinary bounded sessions do not use `Gnn`；
+- explicitly authorized bounded Parent delegation / takeover：`#<issue> · PARENT | Orchestrator`；its Parent authority ends with the bounded scope and does not make it the ongoing Parent or use `Gnn`；
+- titles、`Gnn`、`ACTIVE/RETIRED`、numbers、rename/archive state are human-facing continuity/discoverability only and never grant machine/project authority；Local Governance generation/fencing remains the control truth when its plane is involved；
+- no project-level generation registry、conversation pointer service、heartbeat、watcher、lease、scheduler、session manager、Parent/Child topology or second authority source。
 
 ### Pointer-not-payload / acceptance discipline
 
@@ -204,7 +204,7 @@ The completed #33 mission did not authorize a second Codex execution，Alpha.3 w
 - **Custom App conversation capability volatility:** 部分 conversation 曾从可实际调用 Developer MCP 变为 `FORBIDDEN: This conversation does not support developer MCPs`，而 fresh conversation 在 SAME Local MCP/tunnel 上可恢复。availability 必须按 session/message boundary 重新发现。
 - **Node 24 executor test timing:** ownership/permission continuation tests 偶发 timing failure，same-head rerun 可 PASS；保留为 test-stability evidence，除非出现 reproducible correctness evidence。
 - **Branch protection:** current `main` 尚未强制 required checks；属于独立 delivery-hardening candidate，不因 v0.2 release 完成而自动成为新 scope。
-- **Parent direct-main mistake:** Issue #43 记录了两次 no-net-content direct-main commits；accepted correction 是 branch + PR discipline，不做 history rewrite，也不创建新 runtime feature。
+- **Parent direct-main mistake:** Issue #43 记录了两次 no-net-content direct-main commits；accepted correction 是 branch + PR discipline，不做 history rewrite，也不创建 new runtime feature。
 
 ## M8 — RC / Release — CLOSED / RELEASED
 
