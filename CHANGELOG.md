@@ -4,11 +4,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
-No changes yet. The next formal publication transaction remains gated by the project-level Parent and GitHub release state is authoritative for what has actually been published.
+- Documentation reconciliation after the formal `v0.2.0` release: current user/operator docs now point to live GitHub publication truth, current Parent/mission policy, and low-maintenance runtime-discovered capability semantics instead of retaining M8 release-candidate state.
+- No new release/version scope is implied by this documentation-only change; any future publication requires a separately accepted project-level contract.
 
 ## [0.2.0]
 
-Capability-first v0.2. M0–M7, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, the explicit default-policy review, and the repository operational-default flip are complete/accepted. The operational default changed before formal publication; this section is the versioned release candidate for `v0.2.0`. See [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for the operator upgrade/rollback and publication-boundary contract.
+Capability-first v0.2 formal release. M0–M8, Brain Continuity, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, the explicit default-policy review, the repository operational-default flip, and the gated `v0.2.0` publication are complete/accepted. GitHub tag / Release readback is authoritative for the formal publication state. See [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md) for the operator upgrade/rollback and release-control contract.
 
 ### Added
 
@@ -35,13 +36,13 @@ Capability-first v0.2. M0–M7, Brain Continuity, Direct Local canonical-path ha
 - Issue #33 makes `v0.2` the effective `brain-command` runtime family by default, keeps `alpha3` as an explicit compatibility opt-in, and fails closed rather than silently routing capability/provider failure into the legacy IAB path.
 - The Alpha.3/Alpha.4 IAB implementation is structurally isolated under `src/legacy/` and remains feature-frozen as an explicit compatibility/fallback path.
 - M7 real-project routing dogfood, Brain Continuity implementation/re-entry dogfood, Direct Local canonical-path hardening, bounded mission continuation, Stable Runtime activation, and the explicit default-policy review are complete and accepted.
-- Package/release metadata is prepared as semantic version `0.2.0`; formal publication remains a separate Parent-authorized tag/GitHub Release transaction.
+- Package/release metadata is semantic version `0.2.0`; formal publication is proven by the matching GitHub tag / Release rather than inferred from metadata alone.
 
 ### Release boundary
 
-- The v0.2 operational default was accepted/materialized through Issue #33 / PR #45 before this formal release candidate.
+- The v0.2 operational default was accepted/materialized through Issue #33 / PR #45 before formal publication.
 - Alpha.3 remains available as the explicit feature-frozen compatibility boundary; v0.2 capability/provider failure never silently enters it.
-- In M8 Phase A, versioned files are candidate state only. A formal `v0.2.0` release exists only after the gated Phase B tag/GitHub Release transaction and independent readback.
+- Issue #46 / M8 completed the separately gated publication transaction: accepted RC merge, post-merge verification, tag `v0.2.0`, matching non-draft/non-prerelease GitHub Release, independent readback, and final Parent `DONE`. Issue #46 is now historical release-control evidence, not live release authority.
 
 ## [0.1.0-alpha.3]
 
