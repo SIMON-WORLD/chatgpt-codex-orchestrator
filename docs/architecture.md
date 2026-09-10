@@ -2,13 +2,13 @@
 
 > **Current architecture / operational default:** capability-first v0.2.
 >
-> **Release distinction:** the latest tagged release remains `v0.1.0-alpha.3`; its legacy IAB Direct Brain Loop is retained feature-frozen as an explicit compatibility/fallback path, not the repository operational default. Issue #33 changes default semantics only; M8/version/tag/release remain separate.
+> **Release distinction:** `v0.2.0` is formally released; GitHub tag / Release readback is publication truth. The legacy `v0.1.0-alpha.3` IAB Direct Brain Loop is retained feature-frozen as an explicit compatibility/fallback path only, not the repository operational default and never a silent fallback.
 >
-> Current implementation truth is GitHub `main`; current phase/status is [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md); normative routing policy is [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md); the accepted post-M7 continuity contract is [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md). Historical IAB/worker engineering detail lives in [`development-history.md`](development-history.md).
+> Current implementation truth is GitHub `main`; normative routing / Parent-mission policy is [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md); current phase/status is [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md); accepted high-level path is [`../ROADMAP.md`](../ROADMAP.md); the accepted continuity contract is [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md). Historical IAB/worker engineering detail lives in [`development-history.md`](development-history.md).
 
 ## 1. Design model
 
-`chatgpt-codex-orchestrator` is a **Capability Orchestrator with ChatGPT as the authoritative Parent Brain**.
+`chatgpt-codex-orchestrator` is a **Capability Orchestrator with ChatGPT as the authoritative Brain**.
 
 The core control loop is:
 
@@ -24,7 +24,7 @@ Evidence first
 
 Responsibilities are deliberately separated:
 
-- **ChatGPT Parent Brain** — investigation, architecture, planning, routing, governance, independent verification, `ACCEPT / REVISE / DONE`.
+- **ChatGPT Brain** — investigation, architecture, planning, routing, governance, independent verification, `ACCEPT / REVISE / DONE`.
 - **Capabilities / Executors** — perform bounded work. They do not inherit final project-level acceptance authority.
 - **Codex** — sustained local coding executor for multi-file, iterative, shell-heavy, debugging, refactor, test/build work; not the default downstream for all tasks.
 - **Human** — principal / product owner / risk authority. The human supplies goals, preferences, strategic correction, and approvals for genuinely high-impact decisions; the human is not an internal-ID or RESULT message bus.
@@ -34,11 +34,13 @@ Two additional principles are part of the current operating model:
 - **Brain sessions are disposable; work state is durable.** A ChatGPT conversation is an interaction/context surface, not the durable identity of a project/task.
 - **Delegate outcomes, not keystrokes.** The Brain delegates milestone-sized outcomes, scope, constraints, and acceptance; an executor owns its local implementation tactics inside that boundary.
 
+Current session policy is **Thin Parent / Strong Mission / exception-based escalation**. The ongoing project Parent owns architecture/policy/mission acceptance/default-release decisions but does not sit in the routine implementation hot path; bounded mission sessions continuously progress inside an authorized contract and use direct durable handoff instead of Human Relay. Ongoing Parent, bounded Parent delegation, `ACTIVE`/`RETIRED` naming, No Human Relay, and Act-or-Escalate / no Continue Tax semantics are normative in [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md), not duplicated as a second authority model here.
+
 ## 2. Capability architecture
 
 ```mermaid
 flowchart TD
-    U[User Goal] --> B[ChatGPT Parent Brain]
+    U[User Goal] --> B[ChatGPT Brain]
     B --> E[Evidence / Decision / Capability Discovery]
     E --> R[Capability Routing]
 
@@ -61,9 +63,9 @@ flowchart TD
 
 ### ChatGPT Product Capability
 
-Capabilities already available to the current ChatGPT runtime, including built-in Web/Search, Files/PDF/vision, Python/Data Analysis, Images, Artifacts, Tasks, and connected Apps such as GitHub, Gmail, Calendar, Notion, Figma, etc.
+Capabilities exposed by the **current ChatGPT runtime**. Treat these as runtime-discovered categories rather than a static global product registry: built-in research/browsing, file/data/media/artifact/workspace capabilities, connected plugins/apps, and future product capabilities may vary by surface, rollout, plan/workspace settings, provider connection, resource authorization, and operation permission.
 
-These capabilities are **not reimplemented locally merely for architectural uniformity**.
+These capabilities are **not reimplemented locally merely for architectural uniformity**, and historical inventory observations are not treated as timeless availability guarantees.
 
 ### Local Capability Plane
 
@@ -85,7 +87,7 @@ The top-level routes are:
 - `CODEX_DELEGATE`
 - `HYBRID`
 
-A route is an executor family, not a provider name. GitHub, Gmail, Notion, Figma, Web, etc. do not each become a new route.
+A route is an executor family, not a provider name. Individual plugins, apps, providers, or product surfaces do not each become a new route.
 
 ### `CHATGPT_NATIVE`
 
@@ -120,10 +122,11 @@ Capability availability is a **runtime fact**, not a permanent project property.
 The Brain distinguishes at least:
 
 ```text
-tool exposed?
+tool / action exposed in this conversation?
 provider connected?
 resource authorized?
 operation permitted?
+execution constraints sufficient for this task?
 ```
 
 A successful capability observation is scoped by capability/provider/resource/operation and time. Prior availability is not timeless proof of current availability.
@@ -258,7 +261,7 @@ The accepted contract, now implemented and exercised in real restart/re-entry do
 - proof-reuse cache loss may only force conservative re-verification, never implicit PASS;
 - isolated restart/conversation-re-entry dogfood with zero manual internal-ID/RESULT relay.
 
-Implementation and real dogfood have passed. Capability observations remain ephemeral after re-entry, and the v0.2 operational default still fails closed on ambiguity; this completion does not authorize M8/release on its own.
+Implementation and real dogfood have passed. Capability observations remain ephemeral after re-entry, and the v0.2 operational default still fails closed on ambiguity. Brain Continuity completion did not itself authorize release; the later, separate Issue #46 / M8 release-control flow completed and formally published `v0.2.0`.
 
 ## 10. Mutation / authority scopes
 
@@ -272,13 +275,13 @@ Current safety policy remains: one authoritative writer per mutable resource. Re
 
 No distributed lock manager is part of the current v0.2 contract.
 
-## 11. Alpha.3 release / compatibility boundary
+## 11. Release / Alpha.3 compatibility boundary
 
-The latest formal tagged release is still `v0.1.0-alpha.3`.
+The latest formal release is **`v0.2.0`**, as proven by GitHub tag / Release readback.
 
-Its feature-frozen IAB Direct Brain Loop implementation remains isolated under `src/legacy/`. Under the current repository operating contract it is an **explicit compatibility/fallback path only**; capability/provider failure never silently routes into it.
+The historical `v0.1.0-alpha.3` feature-frozen IAB Direct Brain Loop implementation remains isolated under `src/legacy/`. Under the current repository operating contract it is an **explicit compatibility/fallback path only**; capability/provider failure never silently routes into it.
 
-The v0.2 default flip does not delete Alpha.3 and does not itself create a new version/tag/release. Those release decisions remain separate Parent/M8 work.
+Issue #33's v0.2 default flip and Issue #46's later release publication were separate control decisions. Issue #46 is now **CLOSED / DONE** and retained as historical release-control evidence; it is not current live release authority.
 
 Historical implementation detail is kept in [`development-history.md`](development-history.md).
 
@@ -292,19 +295,37 @@ For the current v0.2 operating model, these remain explicit non-goals:
 - distributed database/workflow service/lock manager;
 - Codex Desktop sidebar integration;
 - rich execution dashboard;
-- “resume most recent” recovery heuristics.
+- “resume most recent” recovery heuristics;
+- a static global registry of ChatGPT product capabilities/plans;
+- automatic synchronization of ChatGPT Project UI mirrors after routine repository changes.
 
 Future multi-workstream support, if justified by real long-running projects, should persist the **workstream** rather than treating a Child conversation as durable identity.
 
-## 13. Documentation authority
+## 13. Documentation authority and recovery
 
-Use the following order when determining current truth:
+For a fresh session / replacement Brain, use this stable recovery sequence:
 
-1. GitHub current code / PR / CI / release state — implementation truth.
-2. [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) — current project phase and active gate.
-3. [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md) — current normative routing/executor policy.
-4. This file — current technical architecture reference.
-5. [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md) — accepted continuity contract and historical design rationale; implementation + real dogfood are complete.
-6. Historical RFCs / [`development-history.md`](development-history.md) — design/evidence history, not automatic current operating truth.
+```text
+GitHub current main
+→ CAPABILITY_ROUTING.md
+→ PROJECT_STATUS.md
+→ ROADMAP.md
+→ active Issue / mission, if any
+→ runtime capability discovery
+→ act or escalate
+```
 
-See [`README.md`](README.md) for the complete docs index and supersession notes.
+Interpret the sources as follows:
+
+1. GitHub current `main`, code, PRs, CI, tags, Releases, and active Issue/mission — implementation/project/publication truth.
+2. [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md) — current normative routing/executor/Parent-mission policy.
+3. [`../PROJECT_STATUS.md`](../PROJECT_STATUS.md) — current stable project status baseline.
+4. [`../ROADMAP.md`](../ROADMAP.md) — accepted high-level path and current operating state.
+5. Durable Local Governance — live local control truth when the Local Capability Plane is involved.
+6. This file — current technical architecture reference.
+7. [`rfc-v0.2-brain-continuity.md`](rfc-v0.2-brain-continuity.md) — accepted continuity contract and historical design rationale; implementation + real dogfood are complete.
+8. Historical RFCs / [`development-history.md`](development-history.md) — dated design/evidence history, not automatic current operating truth.
+
+ChatGPT Project Instructions / static Project Sources are downstream convenience mirrors. They should remain slow-changing recovery aids, must not override newer GitHub evidence, and are not required to be byte-for-byte synchronized after routine PRs/issues/CI changes.
+
+See [`../README.md`](../README.md) for the complete docs index and supersession notes.
