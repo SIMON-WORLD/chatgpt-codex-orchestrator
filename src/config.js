@@ -44,7 +44,7 @@ export const DEFAULT_V02_CONFIG = {
   workspaceRoot: null,          // a single workspace root (allowedRoots derived)
   workspaceRoots: [],           // explicit allowlist
   worktree: {
-    poolRoot: null,             // dedicated worktree trust pool root (canonical layout: E:\src\chatgpt-codex-orchestrator-wt)
+    poolRoot: null,             // dedicated worktree trust pool root (canonical layout: E:\\src\\chatgpt-codex-orchestrator-wt)
     trustedRepos: [],           // explicit canonical repos allowed as `repo` for worktree_create (e.g. the main clone)
   },
   codex: {
@@ -58,15 +58,18 @@ export const DEFAULT_V02_CONFIG = {
     spawnArgs: null,            // override app-server argv after the binary (e.g. [codexJs, app-server, --listen, stdio://])
     extraArgs: [],
   },
+  diagnostics: {
+    codex: { enabled: false },  // opt-in structured read-only Codex diagnostics (no caller path)
+  },
   verify: {},                   // server-owned verify checks
   tunnel: {
     clientExecutable: null,     // tunnel-client binary path
     profile: null,              // tunnel profile filename
     profileDir: null,           // tunnel profile directory
     localMcpUrl: null,          // local MCP URL the tunnel forwards (e.g. http://127.0.0.1:8745/mcp)
-    spawnArgs: null,           // override tunnel-client argv after the executable (for tests)
-    healthUrl: null,           // full tunnel health /readyz URL used to probe real readiness
-    external: false,          // externally managed Secure Tunnel lifecycle: never spawn/kill tunnel-client here; readiness via healthUrl only
+    spawnArgs: null,            // override tunnel-client argv after the executable (for tests)
+    healthUrl: null,            // full tunnel health /readyz URL used to probe real readiness
+    external: false,            // externally managed Secure Tunnel lifecycle: never spawn/kill tunnel-client here; readiness via healthUrl only
   },
 };
 
@@ -111,6 +114,9 @@ export function loadV02Config(overrides = {}, { configPath = null } = {}) {
       trustedRepos: (Array.isArray(cfg.worktree.trustedRepos) ? cfg.worktree.trustedRepos : []).filter((r) => r).map((r) => path.resolve(String(r))),
     };
   }
+  cfg.diagnostics = {
+    codex: { enabled: cfg.diagnostics?.codex?.enabled === true },
+  };
   cfg.tunnel.external = cfg.tunnel.external === true;
   cfg.paths = runtimePaths(cfg.dataRoot);
   return cfg;

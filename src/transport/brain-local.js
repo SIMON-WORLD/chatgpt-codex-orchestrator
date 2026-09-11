@@ -18,6 +18,7 @@ import { MutationOwner } from '../state/mutation-owner.js';
 import { OperationState } from '../state/operation-state.js';
 import { ChangeSetService } from '../local/change-set.js';
 import { VerifyService } from '../local/verify.js';
+import { CodexDiagnosticsService } from '../local/codex-diagnostics.js';
 import { AppServerExecutor } from '../executor/app-server-executor.js';
 import { AppServerClient } from '../executor/app-server-client.js';
 import { startMcpServer } from '../mcp/server.js';
@@ -40,6 +41,7 @@ export class BrainLocalRuntime {
     this.operationState = this.activationPreflight ? null : new OperationState({ dataRoot: config.dataRoot });
     this.changeSetService = null;
     this.verifyService = null;
+    this.codexDiagnosticsService = null;
     this.capabilityRouter = createCapabilityRouter();
     // Brain Continuity core: canonical Governance is durable under the configured
     // dataRoot/namespace with one canonical writer, authority fencing, bounded
@@ -87,6 +89,9 @@ export class BrainLocalRuntime {
       });
       this.changeSetService = new ChangeSetService({ workspaceRegistry: this.registry, operationState: this.operationState, mutationOwner: this.mutationOwner });
       this.verifyService = new VerifyService({ workspaceRegistry: this.registry, mutationOwner: this.mutationOwner, verifyChecks: c.verify || {} });
+      if (c.diagnostics && c.diagnostics.codex && c.diagnostics.codex.enabled === true) {
+        this.codexDiagnosticsService = new CodexDiagnosticsService();
+      }
     }
 
     this.mcp = await startMcpServer({
@@ -100,6 +105,7 @@ export class BrainLocalRuntime {
       capabilityRouter: this.capabilityRouter,
       governanceService: this.governanceService,
       worktreeService: this.worktreeService,
+      codexDiagnosticsService: this.codexDiagnosticsService,
       host: c.host,
       port: c.port,
       allowedRoots,
