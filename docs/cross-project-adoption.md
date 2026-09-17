@@ -63,6 +63,8 @@ Workspace-global title search, recency/newest ranking, and another project's bus
 
 Use for a mature project whose durable truth exists (for example GitHub Issue/PR/strategy gates) but which lacks one stable project-local control surface.
 
+Materialization uses a `scoped_identity` locator: an exact already-existing provider container/root plus the stable identity of the control to be created. It must not encode a nonexistent future control object as `mode = existing`.
+
 One narrow Human authorization may create the minimal control from exact current durable truth pointers. Materialization must preserve existing work rather than inventing a new project state.
 
 It may not:
@@ -78,19 +80,28 @@ It may not:
 
 Two locator forms are sufficient:
 
-- `existing`: exact existing control object pointer;
-- `scoped_identity`: exact existing provider container pointer + stable control identity.
+- `existing`: exact **already-existing** control object pointer;
+- `scoped_identity`: exact existing provider container pointer + stable control identity, used whenever the final control object does not exist yet.
+
+For a GitHub repository container, the established container kind is `github_repo`. A typical materialization locator is:
+
+```text
+mode = scoped_identity
+container.kind = github_repo
+container.pointer = https://github.com/<OWNER>/<REPO>
+identity = PROJECT_CONTROL.md
+```
 
 Provider adapters return bounded observations for that locator. Recovery accepts exactly one matching current control. Zero matches means no control yet; multiple matches fail closed. No recency ranking is allowed.
 
-After first-control creation, the exact provider-created pointer is readback evidence stored downstream; it does not require a second Project Settings edit.
+After first-control creation, the exact provider-created pointer is readback evidence stored downstream; it does not require a second Project Settings edit or conversion of the stable locator to `existing`.
 
 ## Archetype mapping
 
 - **China-Demand-like:** existing `CONTROL.md` → `EXISTING_CONTROL`; preserve its Research Control Architecture, Paper Parent, privacy and next-safe-action semantics.
 - **Upstream-contribution-control-like:** existing `AGENTS.md` / `CASES.md` → `EXISTING_CONTROL`; preserve active Brain generation fencing and exact-action public-write JIT approval.
-- **Clash-like:** current GitHub Issues/stacked PRs but no stable control → `MATERIALIZE_CONTROL`; the minimal control points at current Issue/PR truth and real-device gates without changing them.
-- **DSH-like:** strategy-gated GitHub project without stable control → `MATERIALIZE_CONTROL`; the minimal control must preserve the owner decision gate and must not invent Recipe 002.
+- **Clash-like:** current GitHub Issues/stacked PRs but no stable control → `MATERIALIZE_CONTROL` with `scoped_identity:github_repo:<repo>#PROJECT_CONTROL.md`; the minimal control points at current Issue/PR truth and real-device gates without changing them.
+- **DSH-like:** strategy-gated GitHub project without stable control → `MATERIALIZE_CONTROL` with a scoped GitHub repository locator; the minimal control must preserve the owner decision gate and must not invent Recipe 002.
 - **Notion-like brand-new project:** exact Notion container + scoped control identity → `NEW_GENESIS`, then exact provider readback.
 
 These names are conformance archetypes, not dependencies. The orchestrator does not become their supervisor and does not own their business/project roadmaps.
