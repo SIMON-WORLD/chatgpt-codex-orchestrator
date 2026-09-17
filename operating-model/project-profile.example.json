@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "projectKey": "example-project",
+  "uiLabel": "Example",
+  "compatibleKernelSchemaMajor": 1,
+  "durableSources": [
+    {
+      "kind": "project_control",
+      "pointer": "https://github.com/example/project/blob/main/CONTROL.md"
+    }
+  ],
+  "overlays": [
+    {
+      "kind": "project_policy",
+      "pointer": "https://github.com/example/project/blob/main/PROJECT_POLICY.md"
+    }
+  ],
+  "referenceProjects": [
+    {
+      "projectKey": "reference-only-example",
+      "pointer": "https://github.com/example/reference-project",
+      "role": "dogfood_evidence_only"
+    }
+  ]
+}
