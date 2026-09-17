@@ -1,0 +1,33 @@
+{
+  "kernelSchemaVersion": 1,
+  "canonicalRepository": "SIMON-WORLD/chatgpt-codex-orchestrator",
+  "defaultRef": "main",
+  "normativeSources": [
+    "CAPABILITY_ROUTING.md"
+  ],
+  "recoverySources": [
+    "PROJECT_STATUS.md",
+    "ROADMAP.md"
+  ],
+  "semanticAssertions": [
+    "chatgpt_authoritative_brain",
+    "evidence_decision_discovery_routing_execute_verify",
+    "native_first",
+    "route_capability_provider_separation",
+    "thin_parent_strong_mission",
+    "act_or_escalate",
+    "pointer_not_payload",
+    "single_authoritative_writer",
+    "repository_identity_fence",
+    "capability_not_authority",
+    "no_silent_alpha3_fallback",
+    "current_main_first"
+  ],
+  "missionTypes": [
+    "IMPLEMENT",
+    "DOGFOOD",
+    "REVIEW",
+    "RUNTIME",
+    "INVESTIGATE"
+  ]
+}
