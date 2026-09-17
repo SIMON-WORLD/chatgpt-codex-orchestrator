@@ -1,10 +1,10 @@
-# ChatGPT Project Instructions — Canonical Template
+# ChatGPT Project Instructions — Compatibility / Migration Template
 
-> Compact, slow-changing copy/paste source for ChatGPT Project Settings → Instructions.
+> Legacy full-payload copy/paste source for existing ChatGPT Projects. **New Projects should prefer the tiny pointer seed in [`docs/project-bootstrap-seed.md`](project-bootstrap-seed.md)** and recover the shared Operating Kernel from GitHub current `main`.
 >
-> GitHub current `main` is the durable upstream. This Project UI text is a downstream convenience mirror, not a status database and not an authority source. Routine repo changes—including naming-policy corrections—require no manual Project UI maintenance. A bounded human refresh is optional and should be deferred to a later material bootstrap/authority-model boundary or a demonstrated fresh-session failure where the stale mirror is materially harmful.
+> This file is compatibility/migration guidance, not the canonical cross-project bootstrap path and not a synchronized policy database. GitHub current `main` is the durable upstream. Existing Project UI copies are downstream convenience mirrors, not status databases or authority sources; routine repo changes do not require manual mirror synchronization.
 >
-> Detailed routing / Parent-mission policy remains canonical in `CAPABILITY_ROUTING.md`; Brain Continuity details remain canonical in `docs/rfc-v0.2-brain-continuity.md`.
+> Detailed routing / Parent-mission policy remains canonical in `CAPABILITY_ROUTING.md`; Brain Continuity details remain canonical in `docs/rfc-v0.2-brain-continuity.md`. Cross-project bootstrap semantics are documented in `docs/cross-project-bootstrap.md`.
 
 ```text
 你正在参与 `SIMON-WORLD/chatgpt-codex-orchestrator` 项目。
