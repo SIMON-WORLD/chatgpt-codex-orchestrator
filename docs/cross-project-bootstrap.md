@@ -1,110 +1,116 @@
 # Cross-project Operating Model bootstrap
 
-This document defines the preferred onboarding/recovery path for a ChatGPT Project that wants to reuse the `chatgpt-codex-orchestrator` Operating Model without copying a large policy payload into every Project.
+This document defines the preferred onboarding and recovery path for a ChatGPT Project that reuses the `chatgpt-codex-orchestrator` Operating Model without copying a large or changing policy payload into every Project.
 
-`CAPABILITY_ROUTING.md` remains the normative shared operating/routing policy. The bootstrap manifest is only a compact versioned pointer/contract; it is not a second policy authority.
+`CAPABILITY_ROUTING.md` remains the normative shared operating/routing policy. The kernel manifest, stable project anchor, and project-local control are pointers/contracts with distinct ownership; none is a second shared policy authority.
 
 ## Four layers
 
 Keep these layers separate:
 
 1. **Operating Kernel** — current canonical `SIMON-WORLD/chatgpt-codex-orchestrator` policy and recovery sources.
-2. **Project Profile / Overlay** — project identity, UI label, durable truth pointers, and project-specific policy pointers.
-3. **Live Mission / Authority** — current destination-scoped Issue/Parent decision that defines scope, acceptance, and mutable repositories/resources.
+2. **Stable Project Anchor** — project identity, UI label, one stable `projectRoot`, one stable `controlRoot`, and stable project overlays.
+3. **Project-local Durable Control + Live Mission Authority** — downstream-owned evolving truth: control revision/provenance/lifecycle, exact active mission or `none + nextSafeAction`, plus project-specific resource/privacy/authority pointers. Live mutation authority remains destination-scoped and is not stored in the anchor.
 4. **Ephemeral Runtime Capability Envelope** — what the current ChatGPT session can actually execute now.
 
-A profile, repository mention, tool schema, provider connection, conversation title, memory, transcript, or reference project never grants mutation authority.
+A profile, repository mention, tool schema, provider connection, conversation title, memory, transcript, reference project, or capability observation never grants mutation authority.
 
-## Deterministic bootstrap order
+## Deterministic autonomous recovery
 
-A fresh or replacement Project/session should recover in this order:
+A fresh or replacement downstream Parent recovers in this order:
 
-`canonical orchestrator current main -> kernel manifest + CAPABILITY_ROUTING.md -> PROJECT_STATUS.md -> ROADMAP.md -> project profile/overlay -> current live mission/authority -> runtime capability discovery -> route or fail closed`
+`canonical orchestrator current main -> kernel manifest + CAPABILITY_ROUTING.md -> stable project anchor -> unique current project-local control head -> exact active mission OR nextSafeAction -> fresh runtime capability discovery -> route or fail closed`
 
-The bootstrap records the exact observed kernel commit SHA. Default recovery observes GitHub current `main`. An explicit exact-SHA pin is allowed only when the caller/mission deliberately requests reproducibility; it must remain visibly a pin and must not masquerade as current-main truth.
+The bootstrap records the exact observed kernel commit SHA. Default recovery observes GitHub current `main`; an explicit exact-SHA pin is allowed only when deliberately requested for reproducibility and must remain visibly a pin.
 
-If the canonical kernel, project profile, or live authority is missing/ambiguous, stay read-only/unbound and request only the minimum missing durable pointer/action. Do not guess from the latest Project, most recent conversation, transcript, memory, tool permission, repository mention, or a reference project.
+The stable anchor does not change when missions advance. It must not contain an active Issue/PR/mission, next action, mutable scope, runtime capability snapshot, route choice, device state, credentials/tokens, or task/job/thread/workspace IDs. Those facts belong to downstream durable control, live authority, or the current runtime.
 
-## Runtime capability doctor contract
+Provider adapters may return bounded observations from the designated `controlRoot`. The pure autonomous resolver accepts exactly one matching control head. It never ranks by recency, issue number, revision number, UI order, transcript, memory, or cross-project state. Zero matching observations means GENESIS is possible only when the durable control truly does not exist; a foreign-root observation, duplicate matching heads, stale control, or writer conflict fails closed.
 
-Capability availability is a task/session-scoped observation. For each required operation, distinguish at least:
+## Stable project anchor / preferred profile
 
-- `exposed` — the tool/action schema is visible;
-- `executable` — the operation can actually be invoked in this conversation;
-- `resourceAuthorized` — the target provider/resource is authorized;
-- `constraintsSufficient` — the operation's limits are enough for the current task.
+The preferred persistent contract is profile schema v2. Its stable fields are:
 
-Only when all four are true is that operation `AVAILABLE`.
-
-For example, `schema visible + invocation FORBIDDEN` is **UNAVAILABLE**. Capability observations never create Parent authority or mutable-repository scope.
-
-Native-first means: if the current ChatGPT runtime already exposes sufficient executable operations, use them directly. Local MCP / Direct Local / Codex are route families discovered only from actual current-session evidence. Local absence never silently falls back to Alpha.3.
-
-A Human Principal may need to provide an explicit local root/resource pointer when the local tool intentionally does not perform machine-wide discovery. That pointer is a resource binding/authorization fact, not Human Relay executor-state payload.
-
-## Project profile
-
-See `operating-model/project-profile.example.json` for the portable shape. Required fields are:
-
-- `schemaVersion`;
-- `projectKey`;
-- `uiLabel`;
+- `projectKey` and `uiLabel`;
 - `compatibleKernelSchemaMajor`;
-- `durableSources`;
-- `overlays` (may be empty).
+- one provider-neutral `projectRoot` pointer;
+- one provider-neutral `controlRoot` pointer;
+- stable `durableSources` and `overlays` only when needed;
+- optional evidence-only `referenceProjects`.
 
-Optional `referenceProjects` entries are dogfood/evidence-only pointers. A profile must not carry Parent authority, mission acceptance, mutable repositories, credentials/secrets, authority/execution tokens, or transient task/job/step/thread/workspace identifiers.
+Schema v1 remains compatibility input for #78-era callers, but new autonomous Projects should use the v2 stable-root shape. The one-time Project Settings seed uses the same stable facts and contains no live mission pointer.
 
-Project-specific scientific, privacy, publishing, content, device, or product authority stays in the project overlay/control. The shared kernel must not import those semantics from Academic Door, China Demand, or any other reference project.
+Project-specific scientific, privacy, publishing, content, device, or product rules stay in downstream control/overlays. The shared kernel does not import those semantics from Academic Door, China Demand, Notion Management, Clash Rules, or any other reference project.
 
-## Uniform UI naming
+## Project-local durable control
 
-All of the user's Projects should use the same display grammar so the sidebar is predictable even when the projects have very different capabilities and business rules:
+Downstream-owned control is provider-neutral and evolving. The minimal normalized contract contains:
+
+- `projectKey`, `controlId`, and a control `revision`;
+- `freshness=current` and a conflict-free single-writer observation;
+- Parent/control provenance;
+- lifecycle/control-state information and project-specific pointers;
+- exactly one of `activeMissionRef` or `nextSafeAction`.
+
+`activeMissionRef` is an exact project-local durable reference. GitHub Issues are one valid provider form, but Notion pages/databases or other durable provider-native references are equally valid. The orchestrator does not own a central project registry or downstream mission registry.
+
+When control has an active mission and live mission authority is bound, the two references must match exactly. When control says `none + nextSafeAction`, stale live mission authority is rejected rather than reused.
+
+## Bounded GENESIS
+
+A truly new Project may have a stable anchor but no durable control yet. In that case the downstream Project Parent may enter GENESIS only with one narrow Human Principal authorization containing:
+
+- minimal project identity/charter and hard boundaries;
+- the exact designated durable control root;
+- permission only for `CREATE_MINIMAL_PROJECT_CONTROL`.
+
+GENESIS does not grant general repository/resource mutation authority. Once project-local control exists, it supersedes GENESIS input for ordinary recovery. Existing control cannot be silently rebound, replaced, or overwritten by a seed or repeated GENESIS authorization.
+
+## Runtime capability doctor and routing
+
+Capability availability is task/session-scoped. For every required operation distinguish `exposed`, `executable`, `resourceAuthorized`, and `constraintsSufficient`; only when all four are true is the operation `AVAILABLE`.
+
+Native-first means use sufficient executable ChatGPT-native operations directly. Local MCP / Direct Local / Codex are selected only from current-session evidence. Local absence never silently falls back to Alpha.3. Runtime capability is rediscovered on replacement recovery; a prior session's capability snapshot is never inherited as current truth.
+
+Capability never creates Parent authority, mission scope, mutable-repository scope, or GENESIS authority.
+
+## Uniform provider-neutral UI naming
+
+All Projects use one visual grammar:
 
 - ongoing Parent: `① 总控 · Gnn · ACTIVE | <uiLabel>`
-- superseded ongoing Parent: `① 总控 · Gnn · RETIRED | <uiLabel>`
-- ordinary bounded mission: `#<issue> · <MISSION_TYPE> | <uiLabel>`
-- bounded Parent delegation: `#<issue> · PARENT | <uiLabel>`
+- superseded Parent: `① 总控 · Gnn · RETIRED | <uiLabel>`
+- ordinary mission: `<missionDisplayRef> · <MISSION_TYPE> | <uiLabel>`
+- bounded Parent: `<missionDisplayRef> · PARENT | <uiLabel>`
+
+For GitHub-backed missions, `<missionDisplayRef>` can remain the familiar `#42`. Provider-native projects may use a stable local reference such as `M-07`. Names are discoverability only and never grant authority.
 
 Current mission types are `IMPLEMENT`, `DOGFOOD`, `REVIEW`, `RUNTIME`, and `INVESTIGATE`.
 
-The display template is shared; project-specific role/topology belongs in the project overlay and does not create a second naming grammar. Names remain discoverability only and never grant authority.
+## Tiny Project Settings seed
 
-## Tiny ChatGPT Project seed
+Use `docs/project-bootstrap-seed.md`. The preferred seed contains only the shared-kernel adoption semantics and the stable project/control roots. It intentionally contains no changing mission pointer. Project Settings therefore stay unchanged while control progresses from one mission to the next.
 
-ChatGPT Project instructions are project-scoped, so a one-time seed/pointer is still required unless the product later provides native cross-project instruction distribution. Prefer a small seed like this instead of copying the entire operating policy:
+ChatGPT Project instructions are project-scoped today, so a brand-new Project may still need this one-time stable root/control binding and provider/resource connection. That is a product boundary, not a reason to make the Human relay changing Issue numbers, prompt templates, RESULT payloads, job IDs, or routine `continue` triggers.
 
-```text
-Use the shared Operating Model from GitHub current main of:
-SIMON-WORLD/chatgpt-codex-orchestrator
+## Dogfood authority boundary
 
-Bootstrap from operating-model/kernel-manifest.json and CAPABILITY_ROUTING.md.
-Record the exact observed kernel SHA.
+Real dogfood runs under the downstream Project Parent and downstream-owned control/authority. The orchestrator Parent may define shared-kernel conformance criteria, read durable evidence, and ACCEPT or REVISE the shared kernel. It must not create downstream business roadmap items or mutate downstream resources merely because a project is a dogfood target.
 
-This Project's profile/control pointer is:
-<PROJECT_PROFILE_OR_CONTROL_POINTER>
+Notion-native dogfood therefore stays Notion-native when native capability is sufficient. GitHub + Local + real-device projects keep their own device and mutation gates. Cross-project examples are evidence, not dependencies or authority.
 
-Optional current mission/Issue pointer:
-<ACTIVE_MISSION_POINTER_OR_NONE>
+## Operator conformance
 
-Recover in order:
-canonical current kernel -> project profile/overlay -> live mission/authority -> runtime capability discovery -> route.
+Deterministic tests cover both the accepted #78 invariants and the #82 autonomy correction:
 
-Capability does not grant authority. Native-first. Missing/ambiguous profile or authority stays read-only/unbound. Reference projects are evidence only, never dependencies.
-Use the kernel's uniform UI naming template with this profile's uiLabel.
-```
+- Notion-native brand-new GENESIS with no GitHub-repository requirement;
+- mature `none + nextSafeAction` recovery;
+- GitHub + Local/device-style recovery with multiple open work items and exact active-mission selection, never recency guessing;
+- unchanged stable anchor across mission progression;
+- fresh replacement recovery from the same root with capability rediscovery;
+- duplicate/stale/foreign-root control fail-closed behavior;
+- capability/authority separation;
+- no central registry or cross-project live-state dependency;
+- current-main-first kernel, exact observed SHA, Native-first routing, pointer-not-payload, one authoritative writer, Repository Identity Fence where repository mutation is involved, no Alpha.3 fallback, and fail-closed ambiguity.
 
-The older full Project Instructions template remains compatibility/migration guidance only. It is not a synchronized policy database.
-
-## Examples of project-specific overlays
-
-These examples illustrate capability diversity, not separate operating systems:
-
-- a GitHub-native contribution project can normally route directly through the GitHub connector and add only its own public-upstream JIT approval rule;
-- a research project can add scientific authority, privacy/admission, and Local/Codex rules without changing the shared Kernel;
-- a device/network project can add real-device acceptance and credential-isolation rules;
-- a Notion-management project can be Notion-native and keep its content-management rules in Notion itself, without creating a local Codex dependency merely for symmetry.
-
-## Conformance expectations
-
-Deterministic tests cover the Issue #78 scenarios: Native sufficiency, capability-gap-driven Codex selection, Repository Identity Fence, cross-repo read/write separation, current-main precedence, transcript-free replacement recovery, fail-closed missing authority/profile, schema-visible-but-unexecutable tools, no Alpha.3 fallback, uniform naming, reference-project isolation, and capability/authority separation.
+Normal-path UX targets are zero manual current-Issue relay, zero prompt-template relay, zero multiple-control-file recall, zero internal RESULT/task/job/thread/workspace-ID relay, zero routine `continue` trigger, and zero stale live pointer in Project Settings.

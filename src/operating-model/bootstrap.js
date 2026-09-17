@@ -8,6 +8,12 @@ const FORBIDDEN_PROFILE_KEYS = new Set([
   'parentAuthority',
   'missionAuthority',
   'acceptance',
+  'activeMission',
+  'activeMissionRef',
+  'currentMission',
+  'currentIssue',
+  'missionPointer',
+  'nextSafeAction',
   'authorityToken',
   'executionToken',
   'token',
@@ -81,25 +87,39 @@ function assertNoForbiddenProfileKeys(value, path = 'profile') {
   }
   for (const [key, entry] of Object.entries(value)) {
     if (FORBIDDEN_PROFILE_KEYS.has(key)) {
-      throw new BootstrapError(`project profile cannot carry authority, secrets, or transient execution state`, {
-        path: `${path}.${key}`,
-      });
+      throw new BootstrapError(
+        'project profile cannot carry authority, live mission, secrets, or transient execution state',
+        { path: `${path}.${key}` },
+      );
     }
     assertNoForbiddenProfileKeys(entry, `${path}.${key}`);
   }
+}
+
+function validatePointerRecord(value, label) {
+  const item = assertObject(value, label);
+  return {
+    kind: nonEmptyString(item.kind, `${label}.kind`),
+    pointer: nonEmptyString(item.pointer, `${label}.pointer`),
+  };
 }
 
 function validatePointerRecords(value, label, { allowEmpty = false } = {}) {
   if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) {
     throw new BootstrapError(`${label} must be ${allowEmpty ? 'an' : 'a non-empty'} array`);
   }
-  return value.map((entry, index) => {
-    const item = assertObject(entry, `${label}[${index}]`);
-    return {
-      kind: nonEmptyString(item.kind, `${label}[${index}].kind`),
-      pointer: nonEmptyString(item.pointer, `${label}[${index}].pointer`),
-    };
-  });
+  return value.map((entry, index) => validatePointerRecord(entry, `${label}[${index}]`));
+}
+
+function validateMissionRef(value, label = 'missionRef') {
+  const item = validatePointerRecord(value, label);
+  const result = { ...item };
+  if (value.displayRef !== undefined) {
+    const displayRef = nonEmptyString(value.displayRef, `${label}.displayRef`);
+    if (/\r|\n|\|/.test(displayRef)) throw new BootstrapError(`${label}.displayRef must be a safe single-line label`);
+    result.displayRef = displayRef;
+  }
+  return result;
 }
 
 export function validateKernelManifest(input) {
@@ -129,7 +149,7 @@ export function validateProjectProfile(input, { kernelSchemaMajor = null } = {})
   assertNoForbiddenProfileKeys(source);
 
   const schemaVersion = positiveInteger(source.schemaVersion, 'profile.schemaVersion');
-  if (schemaVersion !== 1) throw new BootstrapError('unsupported project profile schemaVersion');
+  if (![1, 2].includes(schemaVersion)) throw new BootstrapError('unsupported project profile schemaVersion');
 
   const compatibleKernelSchemaMajor = positiveInteger(
     source.compatibleKernelSchemaMajor,
@@ -147,9 +167,18 @@ export function validateProjectProfile(input, { kernelSchemaMajor = null } = {})
     projectKey: nonEmptyString(source.projectKey, 'profile.projectKey'),
     uiLabel: nonEmptyString(source.uiLabel, 'profile.uiLabel'),
     compatibleKernelSchemaMajor,
-    durableSources: validatePointerRecords(source.durableSources, 'profile.durableSources'),
+    durableSources: validatePointerRecords(
+      source.durableSources || [],
+      'profile.durableSources',
+      { allowEmpty: schemaVersion === 2 },
+    ),
     overlays: validatePointerRecords(source.overlays || [], 'profile.overlays', { allowEmpty: true }),
   };
+
+  if (schemaVersion === 2) {
+    result.projectRoot = validatePointerRecord(source.projectRoot, 'profile.projectRoot');
+    result.controlRoot = validatePointerRecord(source.controlRoot, 'profile.controlRoot');
+  }
 
   if (source.referenceProjects !== undefined) {
     if (!Array.isArray(source.referenceProjects)) throw new BootstrapError('profile.referenceProjects must be an array');
@@ -168,6 +197,52 @@ export function validateProjectProfile(input, { kernelSchemaMajor = null } = {})
   }
 
   return result;
+}
+
+export function validateProjectControl(input, { projectKey = null } = {}) {
+  const source = assertObject(input, 'project control');
+  const schemaVersion = positiveInteger(source.schemaVersion, 'projectControl.schemaVersion');
+  if (schemaVersion !== 1) throw new BootstrapError('unsupported project control schemaVersion');
+
+  const controlProjectKey = nonEmptyString(source.projectKey, 'projectControl.projectKey');
+  if (projectKey !== null && controlProjectKey !== projectKey) {
+    throw new BootstrapError('project control does not match project profile identity');
+  }
+
+  const freshness = nonEmptyString(source.freshness, 'projectControl.freshness');
+  const writerState = nonEmptyString(source.writerState, 'projectControl.writerState');
+  if (freshness !== 'current' || writerState !== 'clear') {
+    throw new BootstrapError('project control is not current and conflict-free', { freshness, writerState });
+  }
+
+  const parentBinding = assertObject(source.parentBinding, 'projectControl.parentBinding');
+  const activeMissionRef = source.activeMissionRef == null
+    ? null
+    : validateMissionRef(source.activeMissionRef, 'projectControl.activeMissionRef');
+  const nextSafeAction = source.nextSafeAction == null
+    ? null
+    : nonEmptyString(source.nextSafeAction, 'projectControl.nextSafeAction');
+
+  if ((activeMissionRef === null) === (nextSafeAction === null)) {
+    throw new BootstrapError('project control must expose exactly one of activeMissionRef or nextSafeAction');
+  }
+
+  return {
+    schemaVersion,
+    projectKey: controlProjectKey,
+    controlId: nonEmptyString(source.controlId, 'projectControl.controlId'),
+    revision: nonEmptyString(source.revision, 'projectControl.revision'),
+    freshness,
+    writerState,
+    parentBinding: {
+      status: nonEmptyString(parentBinding.status, 'projectControl.parentBinding.status'),
+      provenance: nonEmptyString(parentBinding.provenance, 'projectControl.parentBinding.provenance'),
+    },
+    lifecycle: nonEmptyString(source.lifecycle, 'projectControl.lifecycle'),
+    activeMissionRef,
+    nextSafeAction,
+    pointers: validatePointerRecords(source.pointers || [], 'projectControl.pointers', { allowEmpty: true }),
+  };
 }
 
 export function deriveCapabilityEnvelope(input) {
@@ -270,13 +345,71 @@ function normalizeMissionAuthority(input) {
   const repositories = Array.isArray(input.mutableRepositories)
     ? input.mutableRepositories.map((repo, index) => canonicalRepository(repo, `missionAuthority.mutableRepositories[${index}]`))
     : [];
+  const missionRef = input.missionRef || input.issuePointer || null;
 
   return {
     bound: true,
     readOnly: Boolean(input.readOnly) || repositories.length === 0,
     mutableRepositories: [...new Set(repositories)],
+    ...(missionRef ? { missionRef: nonEmptyString(missionRef, 'missionAuthority.missionRef') } : {}),
     ...(input.issuePointer ? { issuePointer: nonEmptyString(input.issuePointer, 'missionAuthority.issuePointer') } : {}),
   };
+}
+
+function normalizeGenesisAuthorization(input, project, hasControl) {
+  if (hasControl) {
+    if (input?.status === 'authorized') throw new BootstrapError('genesis cannot rebind existing project control');
+    return { required: false, authorized: false, reason: 'project_control_exists' };
+  }
+
+  if (project.schemaVersion !== 2) {
+    return { required: false, authorized: false, reason: 'legacy_profile_has_no_genesis_contract' };
+  }
+
+  if (!input || input.status !== 'authorized') {
+    return {
+      required: true,
+      authorized: false,
+      controlRootPointer: project.controlRoot.pointer,
+      reason: 'missing_genesis_authorization',
+    };
+  }
+
+  const source = assertObject(input, 'genesisAuthorization');
+  const projectKey = nonEmptyString(source.projectKey, 'genesisAuthorization.projectKey');
+  const controlRootPointer = nonEmptyString(source.controlRootPointer, 'genesisAuthorization.controlRootPointer');
+  if (projectKey !== project.projectKey || controlRootPointer !== project.controlRoot.pointer) {
+    throw new BootstrapError('genesis authorization does not match the stable project/control root');
+  }
+  if (nonEmptyString(source.grantedBy, 'genesisAuthorization.grantedBy') !== 'HUMAN_PRINCIPAL') {
+    throw new BootstrapError('genesis authorization must be granted by HUMAN_PRINCIPAL');
+  }
+  if (nonEmptyString(source.permittedAction, 'genesisAuthorization.permittedAction') !== 'CREATE_MINIMAL_PROJECT_CONTROL') {
+    throw new BootstrapError('genesis authorization is not limited to minimal project-control creation');
+  }
+
+  const charter = assertObject(source.charter, 'genesisAuthorization.charter');
+  const hardBoundaries = stringArray(charter.hardBoundaries, 'genesisAuthorization.charter.hardBoundaries');
+  return {
+    required: true,
+    authorized: true,
+    projectKey,
+    controlRootPointer,
+    grantedBy: 'HUMAN_PRINCIPAL',
+    permittedAction: 'CREATE_MINIMAL_PROJECT_CONTROL',
+    charter: {
+      purpose: nonEmptyString(charter.purpose, 'genesisAuthorization.charter.purpose'),
+      hardBoundaries,
+    },
+  };
+}
+
+function discoverMission(projectControl) {
+  if (!projectControl) return { mode: 'GENESIS_REQUIRED' };
+  if (projectControl.activeMissionRef) {
+    return { mode: 'ACTIVE_MISSION', activeMissionRef: projectControl.activeMissionRef };
+  }
+  return { mode: 'NEXT_SAFE_ACTION', nextSafeAction: projectControl.nextSafeAction };
 }
 
 export function resolveBootstrap({
@@ -286,6 +419,8 @@ export function resolveBootstrap({
   observedKernelSha,
   pinnedKernelSha = null,
   projectProfile,
+  projectControl = null,
+  genesisAuthorization = null,
   missionAuthority = null,
   capabilityInput,
 } = {}) {
@@ -308,8 +443,23 @@ export function resolveBootstrap({
   }
 
   const project = validateProjectProfile(projectProfile, { kernelSchemaMajor: kernel.kernelSchemaVersion });
+  const control = projectControl == null
+    ? null
+    : validateProjectControl(projectControl, { projectKey: project.projectKey });
+  const genesis = normalizeGenesisAuthorization(genesisAuthorization, project, control !== null);
+  const missionDiscovery = project.schemaVersion === 1 && control === null
+    ? { mode: 'LEGACY_CALLER_SUPPLIED' }
+    : discoverMission(control);
   const capabilities = deriveCapabilityEnvelope(capabilityInput);
   const authority = normalizeMissionAuthority(missionAuthority);
+
+  if (control?.activeMissionRef && authority.bound) {
+    if (!authority.missionRef || authority.missionRef !== control.activeMissionRef.pointer) {
+      throw new BootstrapError('bound mission authority does not match project control active mission');
+    }
+  } else if (control && !control.activeMissionRef && authority.bound) {
+    throw new BootstrapError('bound mission authority does not match project control active mission');
+  }
 
   return {
     kernel: {
@@ -323,6 +473,9 @@ export function resolveBootstrap({
       semanticAssertions: kernel.semanticAssertions,
     },
     project,
+    control,
+    genesis,
+    missionDiscovery,
     authority,
     capabilities,
     naming: {
@@ -360,6 +513,13 @@ function renderIssue(value) {
   return positiveInteger(value, 'issue');
 }
 
+function renderMissionDisplayRef(source) {
+  if (source.issue !== undefined) return `#${renderIssue(source.issue)}`;
+  const missionRef = nonEmptyString(source.missionRef, 'missionRef');
+  if (/\r|\n|\|/.test(missionRef)) throw new BootstrapError('missionRef must be a safe single-line display reference');
+  return missionRef;
+}
+
 function cleanUiLabel(value) {
   const label = nonEmptyString(value, 'uiLabel');
   if (/\r|\n/.test(label)) throw new BootstrapError('uiLabel must be a single line');
@@ -379,11 +539,11 @@ export function renderSessionName(input) {
   if (source.kind === 'mission') {
     const missionType = nonEmptyString(source.missionType, 'missionType');
     if (!MISSION_TYPES.includes(missionType)) throw new BootstrapError('unsupported missionType');
-    return `#${renderIssue(source.issue)} · ${missionType} | ${uiLabel}`;
+    return `${renderMissionDisplayRef(source)} · ${missionType} | ${uiLabel}`;
   }
 
   if (source.kind === 'bounded_parent') {
-    return `#${renderIssue(source.issue)} · PARENT | ${uiLabel}`;
+    return `${renderMissionDisplayRef(source)} · PARENT | ${uiLabel}`;
   }
 
   throw new BootstrapError('unsupported session naming kind');

@@ -1,18 +1,21 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "projectKey": "example-project",
   "uiLabel": "Example",
   "compatibleKernelSchemaMajor": 1,
-  "durableSources": [
-    {
-      "kind": "project_control",
-      "pointer": "https://github.com/example/project/blob/main/CONTROL.md"
-    }
-  ],
+  "projectRoot": {
+    "kind": "project_root",
+    "pointer": "provider://example-project"
+  },
+  "controlRoot": {
+    "kind": "project_control",
+    "pointer": "provider://example-project/control"
+  },
+  "durableSources": [],
   "overlays": [
     {
       "kind": "project_policy",
-      "pointer": "https://github.com/example/project/blob/main/PROJECT_POLICY.md"
+      "pointer": "provider://example-project/policy"
     }
   ],
   "referenceProjects": [
