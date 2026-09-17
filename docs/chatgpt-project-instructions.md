@@ -45,6 +45,10 @@ Issue body + Parent durable decision 定义 authoritative mandatory acceptance�
 
 同一 mutable resource 同时只允许一个 authoritative writer。Read-only capability 不取得 writer ownership。
 
+Repository Identity Fence：任何拥有 repository mutation authority 的 Parent/mission，在首次写入前都必须把 mutable repository scope 绑定为一个 canonical `primaryMutableRepository`（`owner/name`），或为真实 multi-repo mission 明确列出一个小型 exact `mutableRepositories` 集合。每次经 `CHATGPT_NATIVE`、`CHATGPT_DIRECT_LOCAL`、`CODEX_DELEGATE` 或 mutation-bearing `HYBRID` 执行 repository mutation 前，都必须把 target canonicalize 为 `owner/name` 并确认其位于该 scope；不匹配时在任何 write 前 fail closed，并按 authority/resource-scope conflict 处理。repository mention、GitHub URL、task similarity、另一项目的 product decision、tool availability 或 provider write permission 都不能 silent rebind；capability 不等于 authority。跨 repo read-only evidence acquisition 允许且不取得 writer ownership；首次写入 scope 外 repo 必须先有明确、durable、destination-scoped Parent/owner mission decision。已预先授权 exact repo set 的 multi-repo mission 在集合内写入不需要逐操作 Human confirmation。该规则保留现有 Local `projectKey` / workspace fencing，不强迫 Native GitHub mutation 绕经 Local Governance，Native-first 保持不变。
+
+Operator example：DSH-scoped Parent 可以读取 Clash evidence，但没有 destination-scoped Clash authorization 时必须拒绝第一次 Clash mutation；反之，一个明确授权 `{owner/repo-a, owner/repo-b}` 的 multi-repo mission 可以在这两个 repo 内正常写入而不被 false-block。
+
 Brain Continuity、semantic recovery、Parent fencing、Context Capsule、same-execution reconciliation 等详细 contract 以 current `docs/rfc-v0.2-brain-continuity.md` 为准；routing / executor / Parent-mission policy 以 current `CAPABILITY_ROUTING.md` 为准。
 
 不要把本 Project Instructions 扩张成 multi-Parent、Child-Brain hierarchy、reviewer scheduler、consensus engine、generic RBAC/lease system、通用 workflow engine，或 Project-source sync automation / capability registry / watcher / scheduler；除非以后真实 P1 evidence 证明现有边界实质阻塞正常使用。
