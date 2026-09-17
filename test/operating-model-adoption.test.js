@@ -163,10 +163,16 @@ test('new GENESIS remains authorized before first control exists without a secon
 });
 
 test('mature no-control project can only materialize minimal control under narrow authorization', () => {
+  const locator = {
+    mode: 'scoped_identity',
+    container: { kind: 'github_repo', pointer: 'https://github.com/example/project' },
+    identity: 'PROJECT_CONTROL.md',
+  };
   const result = resolveProjectAdoption(baseInput({
+    controlLocator: locator,
     adoptionAuthorization: {
       status: 'authorized', mode: 'materialize_control', projectKey: 'example-project',
-      locatorKey: stableControlLocatorKey(baseInput().controlLocator), grantedBy: 'HUMAN_PRINCIPAL',
+      locatorKey: stableControlLocatorKey(locator), grantedBy: 'HUMAN_PRINCIPAL',
       permittedAction: 'MATERIALIZE_MINIMAL_PROJECT_CONTROL',
       sourceTruthPointers: [
         'https://github.com/example/project/issues/7',
@@ -176,10 +182,27 @@ test('mature no-control project can only materialize minimal control under narro
   }));
   assert.equal(result.adoption.mode, 'MATERIALIZE_CONTROL');
   assert.equal(result.adoption.requiresGenesis, false);
+  assert.equal(result.adoption.locatorKey, 'scoped_identity:github_repo:https://github.com/example/project#PROJECT_CONTROL.md');
   assert.deepEqual(result.adoption.sourceTruthPointers, [
     'https://github.com/example/project/issues/7',
     'https://github.com/example/project/pull/8',
   ]);
+});
+
+test('materialize control rejects a nonexistent final-file locator encoded as existing', () => {
+  const locator = baseInput().controlLocator;
+  assert.throws(
+    () => resolveProjectAdoption(baseInput({
+      controlLocator: locator,
+      adoptionAuthorization: {
+        status: 'authorized', mode: 'materialize_control', projectKey: 'example-project',
+        locatorKey: stableControlLocatorKey(locator), grantedBy: 'HUMAN_PRINCIPAL',
+        permittedAction: 'MATERIALIZE_MINIMAL_PROJECT_CONTROL',
+        sourceTruthPointers: ['https://github.com/example/project/issues/7'],
+      },
+    })),
+    /materialize_control requires a provider-real scoped_identity locator/,
+  );
 });
 
 test('replacement candidate is read-only until destination takeover commits', () => {

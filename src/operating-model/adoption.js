@@ -163,6 +163,9 @@ function normalizeAdoptionAuthorization(input, { projectKey, locator, hasControl
   }
 
   if (mode === 'materialize_control') {
+    if (locator.mode !== 'scoped_identity') {
+      throw new BootstrapError('materialize_control requires a provider-real scoped_identity locator');
+    }
     if (nonEmptyString(source.permittedAction, 'adoptionAuthorization.permittedAction') !== 'MATERIALIZE_MINIMAL_PROJECT_CONTROL') {
       throw new BootstrapError('materialize_control is not limited to minimal project-control materialization');
     }

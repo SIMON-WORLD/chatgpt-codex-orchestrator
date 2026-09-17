@@ -45,11 +45,28 @@ Use the kernel's uniform UI naming template with this project's uiLabel.
 
 Use one stable locator, chosen once for the Project:
 
-- **Existing mature project with durable control:** point directly at that already-existing control surface (for example an exact repository file or provider object). This is `EXISTING_CONTROL`; do **not** GENESIS or reset the existing Parent/control.
-- **Brand-new provider-native project:** point at an already-existing provider container/root plus a stable scoped control identity. The final child control object does not need to exist yet. Bounded GENESIS may create exactly one minimal control inside that container and must read back its exact provider identity. The Project Settings seed remains unchanged after creation.
-- **Mature project without project-local control:** use a stable destination locator and a separate one-time `MATERIALIZE_MINIMAL_PROJECT_CONTROL` authorization. Materialization records pointers to current durable truth; it must not invent work, reset the Parent, change active Issues/PRs, or bypass an existing strategy/acceptance gate.
+- **Existing mature project with durable control:** use `mode = existing` and point directly at that already-existing exact control object (for example an exact repository file or provider object). This is `EXISTING_CONTROL`; do **not** GENESIS or reset the existing Parent/control.
+- **Brand-new provider-native project:** use `mode = scoped_identity`: an already-existing provider container/root plus a stable scoped control identity. The final child control object does not need to exist yet. Bounded GENESIS may create exactly one minimal control inside that container and must read back its exact provider identity. The Project Settings seed remains unchanged after creation.
+- **Mature project without project-local control:** also use `mode = scoped_identity`, never `existing` for a nonexistent final object. Pair the already-existing provider container/root with a stable identity for the control that will be created, and provide a separate one-time `MATERIALIZE_MINIMAL_PROJECT_CONTROL` authorization. Materialization records pointers to current durable truth; it must not invent work, reset the Parent, change active Issues/PRs, or bypass an existing strategy/acceptance gate.
 
-Legacy #82 seeds used the exact final-control placeholder `<PROJECT_CONTROL_ROOT_POINTER>`. Existing exact pointers remain valid and map to the new `existing` control-locator form; new provider-native Projects should prefer container + scoped identity so the final child object need not exist before GENESIS.
+For a GitHub-backed mature project whose control file does not exist yet, the canonical locator shape is:
+
+```text
+mode = scoped_identity
+container.kind = github_repo
+container.pointer = https://github.com/<OWNER>/<REPO>
+identity = PROJECT_CONTROL.md
+```
+
+Its stable locator key is:
+
+```text
+scoped_identity:github_repo:https://github.com/<OWNER>/<REPO>#PROJECT_CONTROL.md
+```
+
+After creation, the exact file/provider pointer is readback evidence. Do not switch the Project Settings locator to `existing`; no second Settings edit is required.
+
+Legacy #82 seeds used the exact final-control placeholder `<PROJECT_CONTROL_ROOT_POINTER>`. A pointer that truly already resolves to an existing control remains valid and maps to the `existing` control-locator form. A nonexistent future control object must not be represented as `existing`.
 
 Never use workspace-global title search, newest/most-recent ranking, chat history, or another project's control to choose the control surface.
 
@@ -65,16 +82,17 @@ Existing project-specific control remains authoritative for that project's Paren
 
 ## Bounded materialize-control authorization template
 
-Use only for a mature project that has real durable project truth but no stable project-local control yet:
+Use only for a mature project that has real durable project truth but no stable project-local control yet. Its Project Settings locator must already be the matching `scoped_identity` locator.
 
 ```text
 One-time bounded adoption authorization:
+status = authorized
 mode = materialize_control
 projectKey = <PROJECT_KEY>
-control locator = <THE SAME STABLE CONTROL LOCATOR FROM PROJECT SETTINGS>
+locatorKey = scoped_identity:<PROVIDER_CONTAINER_KIND>:<EXACT_EXISTING_CONTAINER_POINTER>#<STABLE_CONTROL_IDENTITY>
 grantedBy = HUMAN_PRINCIPAL
 permittedAction = MATERIALIZE_MINIMAL_PROJECT_CONTROL
-source truth = <EXACT CURRENT DURABLE PROJECT TRUTH POINTERS>
+sourceTruthPointers = [<EXACT CURRENT DURABLE PROJECT TRUTH POINTERS>]
 
 This authorization permits only creation of the minimal project-local control needed to point at and preserve the existing project state. It does not authorize GENESIS, Parent replacement, new roadmap/work, Issue/PR changes, downstream business mutation, release/default changes, or authority expansion.
 ```
