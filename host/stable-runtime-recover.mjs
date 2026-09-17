@@ -14,18 +14,12 @@ import {
 
 const STATE_FILE = 'stable-runtime-active.json';
 const MAX_CAUSE_CHARS = 512;
-const SENSITIVE_ASSIGNMENT_RE = /\b([a-z0-9_-]*(?:api[_-]?key|authorization|cookie|credential|password|secret|token)[a-z0-9_-]*)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi;
 const CRITICAL_BINDING_ENV_VARS = [
-  'V02_PORT',
-  'V02_HOST',
-  'V02_WORKSPACE_ROOT',
-  'CODEX_BIN',
-  'TUNNEL_CLIENT_EXECUTABLE',
-  'TUNNEL_PROFILE',
-  'TUNNEL_PROFILE_DIR',
-  'TUNNEL_LOCAL_MCP_URL',
-  'TUNNEL_HEALTH_URL',
+  'V02_PORT', 'V02_HOST', 'V02_WORKSPACE_ROOT', 'CODEX_BIN',
+  'TUNNEL_CLIENT_EXECUTABLE', 'TUNNEL_PROFILE', 'TUNNEL_PROFILE_DIR',
+  'TUNNEL_LOCAL_MCP_URL', 'TUNNEL_HEALTH_URL',
 ];
+const SENSITIVE_ASSIGNMENT_RE = /\b([a-z0-9_-]*(?:api[_-]?key|authorization|cookie|credential|password|secret|token)[a-z0-9_-]*)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi;
 
 export class StableRuntimeRecoveryError extends Error {
   constructor(message, details = {}) {
@@ -42,8 +36,8 @@ function redact(value) {
 }
 
 function boundedCause(error) {
-  const value = redact(error?.message || String(error)).replace(/\s+/g, ' ').trim();
-  return value.length <= MAX_CAUSE_CHARS ? value : `${value.slice(0, MAX_CAUSE_CHARS - 3)}...`;
+  const text = redact(error?.message || String(error)).replace(/\s+/g, ' ').trim();
+  return text.length <= MAX_CAUSE_CHARS ? text : `${text.slice(0, MAX_CAUSE_CHARS - 3)}...`;
 }
 
 function safeDetails(value, depth = 0) {
@@ -86,6 +80,12 @@ function normalizeUrl(value) {
   return String(value || '').replace(/\/$/, '');
 }
 
+function summaryUrls(summary) {
+  return (String(summary || '').match(/https?:\/\/[^\s"'<>]+/gi) || [])
+    .map((candidate) => candidate.replace(/[),.;]+$/, ''))
+    .map(normalizeUrl);
+}
+
 function assertNoCriticalBindingEnv(env) {
   const present = CRITICAL_BINDING_ENV_VARS.filter((name) => env?.[name] !== undefined && String(env[name]).length > 0);
   if (present.length) {
@@ -123,8 +123,8 @@ function assertDoctorBinding(report, config) {
   const checks = Array.isArray(report.checks) ? report.checks : [];
   const mcpCheck = checks.find((check) => check?.id === 'mcp_server_reachable');
   const expected = normalizeUrl(config.tunnel.localMcpUrl);
-  const summary = normalizeUrl(mcpCheck?.summary || '');
-  if (!mcpCheck || mcpCheck.status !== 'pass' || !summary.includes(expected)) {
+  const exactUrlProven = summaryUrls(mcpCheck?.summary).includes(expected);
+  if (!mcpCheck || mcpCheck.status !== 'pass' || !exactUrlProven) {
     throw new StableRuntimeRecoveryError('tunnel profile does not prove the exact configured Local MCP endpoint', {
       phase: 'tunnel_profile_binding', expectedLocalMcpUrl: expected,
     });
@@ -133,23 +133,14 @@ function assertDoctorBinding(report, config) {
 
 async function defaultSpawnTunnel({ executable, args, env = process.env }) {
   const child = spawn(executable, args, {
-    env,
-    shell: false,
-    windowsHide: true,
-    detached: true,
-    stdio: 'ignore',
+    env, shell: false, windowsHide: true, detached: true, stdio: 'ignore',
   });
   await new Promise((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', reject);
   });
   child.unref();
-  return {
-    pid: child.pid,
-    stop: () => {
-      try { child.kill('SIGTERM'); } catch {}
-    },
-  };
+  return { pid: child.pid, stop: () => { try { child.kill('SIGTERM'); } catch {} } };
 }
 
 function localExact(local, sha) {
@@ -346,40 +337,20 @@ export class StableRuntimeRecoveryCoordinator {
 
       if (prepared && startedRuntimePid) {
         writeJsonAtomic(this.activator.fs, statePath, {
-          version: 1,
-          sha,
-          checkout: prepared.checkout,
-          pid: startedRuntimePid,
-          configPath: absoluteConfigPath,
-          profileFingerprint: fingerprint,
-          activatedAt: this.now(),
+          version: 1, sha, checkout: prepared.checkout, pid: startedRuntimePid,
+          configPath: absoluteConfigPath, profileFingerprint: fingerprint, activatedAt: this.now(),
         });
       }
 
       return {
-        status: 'PASS',
-        sha,
-        repo,
-        configPath: absoluteConfigPath,
-        profileFingerprint: fingerprint,
-        runtime,
-        tunnel,
-        tunnelPreflight,
-        evidence: {
-          healthz: finalLocal.health.body,
-          readyz: finalLocal.ready.body,
-          tunnel: { status: finalTunnel.status },
-        },
-        tunnelLifecycle: 'external-preserved',
-        statePath,
+        status: 'PASS', sha, repo, configPath: absoluteConfigPath, profileFingerprint: fingerprint,
+        runtime, tunnel, tunnelPreflight,
+        evidence: { healthz: finalLocal.health.body, readyz: finalLocal.ready.body, tunnel: { status: finalTunnel.status } },
+        tunnelLifecycle: 'external-preserved', statePath,
       };
     } catch (error) {
-      if (startedTunnel?.stop) {
-        try { startedTunnel.stop(); } catch {}
-      }
-      if (startedRuntimePid) {
-        try { this.activator.stopPid(startedRuntimePid); } catch {}
-      }
+      if (startedTunnel?.stop) { try { startedTunnel.stop(); } catch {} }
+      if (startedRuntimePid) { try { this.activator.stopPid(startedRuntimePid); } catch {} }
       if (error instanceof StableRuntimeRecoveryError) throw error;
       if (error instanceof StableRuntimeActivationError) {
         throw new StableRuntimeRecoveryError(error.message, { ...safeDetails(error.details), cause: boundedCause(error) });
@@ -404,11 +375,8 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    'Stable Runtime deterministic reboot/login recovery',
-    '',
-    'Usage:',
-    '  node host/stable-runtime-recover.mjs --config <stable-v0.2-config.json> [--sha <exact-40-hex-commit>] [--repo <trusted-canonical-repo>]',
-    '',
+    'Stable Runtime deterministic reboot/login recovery', '', 'Usage:',
+    '  node host/stable-runtime-recover.mjs --config <stable-v0.2-config.json> [--sha <exact-40-hex-commit>] [--repo <trusted-canonical-repo>]', '',
     'When --sha is omitted, recovery uses only a validated same-profile/same-config exact last-active revision. It never guesses latest/main/newest.',
     'Tunnel credentials remain in the existing profile reference (for example env:CONTROL_PLANE_API_KEY); this command has no raw-secret CLI argument.',
   ].join('\n');
@@ -422,15 +390,8 @@ async function main() {
     process.exitCode = 2;
     return;
   }
-  if (args.help) {
-    process.stdout.write(`${usage()}\n`);
-    return;
-  }
-  if (!args.configPath) {
-    process.stderr.write(`${usage()}\n`);
-    process.exitCode = 2;
-    return;
-  }
+  if (args.help) { process.stdout.write(`${usage()}\n`); return; }
+  if (!args.configPath) { process.stderr.write(`${usage()}\n`); process.exitCode = 2; return; }
   try {
     const result = await new StableRuntimeRecoveryCoordinator().recover(args);
     process.stdout.write(`STABLE_RUNTIME_RECOVERY ${JSON.stringify(result)}\n`);
