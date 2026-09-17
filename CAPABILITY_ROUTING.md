@@ -388,6 +388,23 @@ v0.2 当前实现的 `MutationOwner` 主要保护 local workspace single-writer�
 
 Read-only capability 不应取得 writer mutation ownership。
 
+### Repository Identity Fence
+
+Repository mutation authority is bound to the current Parent/mission resource scope; provider reachability is not authority. Before the first repository mutation, the authoritative mission contract MUST name either one canonical `primaryMutableRepository` (`owner/name`) or, for a genuinely multi-repo mission, a small exact `mutableRepositories` set. This is mission/resource scope, not a project-global repository registry.
+
+Before **every** repository mutation — whether the mutating leg is `CHATGPT_NATIVE`, `CHATGPT_DIRECT_LOCAL`, `CODEX_DELEGATE`, or a mutation-bearing `HYBRID` composition — the Brain MUST canonicalize the target repository to `owner/name` and assert that it is inside the current authorized mutable-repository scope. A mismatch fails closed **before any write** and is treated as an authority/resource-scope conflict.
+
+The mutable-repository scope does **not** rebind because a prompt mentions another repository, contains a GitHub URL, resembles work from another project, carries a product decision about another project, exposes a tool that can write another repository, or because the connected provider has broader write permission. Capability facts remain separate from authority.
+
+Cross-repository read-only investigation remains allowed when useful. Reading another repository does not acquire writer ownership and does not expand mutable scope. The first mutation in a repository outside the current scope requires an explicit durable destination-scoped Parent/owner mission decision that names that repository before the write. A legitimate multi-repo mission may declare its exact repository set up front and then mutate within that set without per-operation Human confirmation / Continue Tax.
+
+This Brain/mission fence composes with — and does not replace or weaken — existing Local `projectKey` / canonical workspace / writer fencing. Native GitHub writes are not forced through Local Governance; Native-first routing remains intact. v0.2 does not add a provider-scoping service, generic RBAC/registry/lease/scheduler/workflow layer, or second authority source for this rule.
+
+Operator examples:
+
+- A DSH-scoped Parent may read Clash repository evidence, but must refuse the first Clash mutation unless a durable destination-scoped Clash authorization is established.
+- A mission explicitly authorized for `{owner/repo-a, owner/repo-b}` does not false-block mutations to either declared repository and does not ask the Human again for each operation.
+
 ## 11. Failure / Reroute Policy
 
 Capability execution 失败时，Brain 基于真实失败原因决定：
