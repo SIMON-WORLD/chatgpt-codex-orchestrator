@@ -15,6 +15,17 @@ import {
 const STATE_FILE = 'stable-runtime-active.json';
 const MAX_CAUSE_CHARS = 512;
 const SENSITIVE_ASSIGNMENT_RE = /\b([a-z0-9_-]*(?:api[_-]?key|authorization|cookie|credential|password|secret|token)[a-z0-9_-]*)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi;
+const CRITICAL_BINDING_ENV_VARS = [
+  'V02_PORT',
+  'V02_HOST',
+  'V02_WORKSPACE_ROOT',
+  'CODEX_BIN',
+  'TUNNEL_CLIENT_EXECUTABLE',
+  'TUNNEL_PROFILE',
+  'TUNNEL_PROFILE_DIR',
+  'TUNNEL_LOCAL_MCP_URL',
+  'TUNNEL_HEALTH_URL',
+];
 
 export class StableRuntimeRecoveryError extends Error {
   constructor(message, details = {}) {
@@ -73,6 +84,15 @@ function writeJsonAtomic(fsImpl, filename, value) {
 
 function normalizeUrl(value) {
   return String(value || '').replace(/\/$/, '');
+}
+
+function assertNoCriticalBindingEnv(env) {
+  const present = CRITICAL_BINDING_ENV_VARS.filter((name) => env?.[name] !== undefined && String(env[name]).length > 0);
+  if (present.length) {
+    throw new StableRuntimeRecoveryError('critical Stable Runtime binding environment overrides are not allowed during deterministic recovery', {
+      phase: 'profile_binding', envOverrides: present,
+    });
+  }
 }
 
 function tunnelProfileArgs(config, command) {
@@ -147,6 +167,7 @@ export class StableRuntimeRecoveryCoordinator {
     spawnTunnel = defaultSpawnTunnel,
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now = () => new Date().toISOString(),
+    env = process.env,
   } = {}) {
     this.activator = activator;
     this.run = run;
@@ -154,6 +175,7 @@ export class StableRuntimeRecoveryCoordinator {
     this.spawnTunnel = spawnTunnel;
     this.sleep = sleep;
     this.now = now;
+    this.env = env;
   }
 
   _requireRecoveryProfile(config) {
@@ -200,7 +222,7 @@ export class StableRuntimeRecoveryCoordinator {
     const args = [...tunnelProfileArgs(config, 'doctor'), '--json'];
     let result;
     try {
-      result = await this.run(config.tunnel.clientExecutable, args, { env: process.env });
+      result = await this.run(config.tunnel.clientExecutable, args, { env: this.env });
     } catch (error) {
       let failedChecks = [];
       try {
@@ -240,6 +262,7 @@ export class StableRuntimeRecoveryCoordinator {
     let startedRuntimePid = null;
     let startedTunnel = null;
     try {
+      assertNoCriticalBindingEnv(this.env);
       const config = this.activator.loadConfig(absoluteConfigPath);
       const { baseUrl } = this._requireRecoveryProfile(config);
       const repo = this.activator._resolveTrustedRepo(config, repoPath);
@@ -300,7 +323,7 @@ export class StableRuntimeRecoveryCoordinator {
         }
         const args = tunnelProfileArgs(config, 'run');
         try {
-          startedTunnel = await this.spawnTunnel({ executable: config.tunnel.clientExecutable, args, env: process.env });
+          startedTunnel = await this.spawnTunnel({ executable: config.tunnel.clientExecutable, args, env: this.env });
         } catch (error) {
           throw new StableRuntimeRecoveryError('failed to launch configured external Secure Tunnel', { phase: 'tunnel_start', cause: boundedCause(error) });
         }
