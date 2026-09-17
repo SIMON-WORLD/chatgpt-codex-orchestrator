@@ -77,8 +77,12 @@ test('Upstream-like control adoption preserves active generation and does not re
   assert.equal(result.authority.bound, false);
 });
 
-function materializeProject({ projectKey, uiLabel, root, controlPointer, sourceTruthPointers }) {
-  const locator = { mode: 'existing', kind: 'github_file', pointer: controlPointer };
+function materializeProject({ projectKey, uiLabel, root, sourceTruthPointers }) {
+  const locator = {
+    mode: 'scoped_identity',
+    container: { kind: 'github_repo', pointer: root },
+    identity: 'PROJECT_CONTROL.md',
+  };
   return resolveProjectAdoption({
     kernelManifest: manifest,
     observedKernelRepository: 'SIMON-WORLD/chatgpt-codex-orchestrator',
@@ -102,17 +106,22 @@ function materializeProject({ projectKey, uiLabel, root, controlPointer, sourceT
 test('Clash-like adoption materializes pointers to current Issue/PR truth without inventing work', () => {
   const pointers = [
     'https://github.com/SIMON-WORLD/clash-rules-collab/issues/7',
-    'https://github.com/SIMON-WORLD/clash-rules-collab/issues/9',
     'https://github.com/SIMON-WORLD/clash-rules-collab/pull/8',
+    'https://github.com/SIMON-WORLD/clash-rules-collab/issues/9',
     'https://github.com/SIMON-WORLD/clash-rules-collab/pull/10',
+    'https://github.com/SIMON-WORLD/clash-rules-collab/issues/11',
+    'https://github.com/SIMON-WORLD/clash-rules-collab/pull/12',
+    'https://github.com/SIMON-WORLD/clash-rules-collab/pull/12#issuecomment-5716511194',
   ];
   const result = materializeProject({
     projectKey: 'clash-rules-collab', uiLabel: 'Clash',
     root: 'https://github.com/SIMON-WORLD/clash-rules-collab',
-    controlPointer: 'https://github.com/SIMON-WORLD/clash-rules-collab/blob/main/PROJECT_CONTROL.md',
     sourceTruthPointers: pointers,
   });
   assert.equal(result.adoption.mode, 'MATERIALIZE_CONTROL');
+  assert.equal(result.controlLocator.mode, 'scoped_identity');
+  assert.equal(result.controlLocator.container.kind, 'github_repo');
+  assert.equal(result.controlLocator.identity, 'PROJECT_CONTROL.md');
   assert.deepEqual(result.adoption.sourceTruthPointers, pointers);
   assert.equal(result.missionDiscovery.mode, 'CONTROL_MATERIALIZATION_REQUIRED');
 });
@@ -122,10 +131,10 @@ test('DSH-like adoption preserves strategy gate and cannot silently start Recipe
   const result = materializeProject({
     projectKey: 'dsh-research-handbook', uiLabel: 'DSH Research Handbook',
     root: 'https://github.com/SIMON-WORLD/dsh-research-handbook',
-    controlPointer: 'https://github.com/SIMON-WORLD/dsh-research-handbook/blob/main/PROJECT_CONTROL.md',
     sourceTruthPointers: [gate],
   });
   assert.equal(result.adoption.mode, 'MATERIALIZE_CONTROL');
+  assert.equal(result.controlLocator.mode, 'scoped_identity');
   assert.deepEqual(result.adoption.sourceTruthPointers, [gate]);
   assert.equal(result.authority.bound, false);
   assert.equal(result.sessionRole.role, 'unbound');
