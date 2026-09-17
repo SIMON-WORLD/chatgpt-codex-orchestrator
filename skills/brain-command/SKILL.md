@@ -54,6 +54,7 @@ Established once per mission; routine implementation stays inside the bounded mi
 
 - ChatGPT owns `PLAN` / architecture / review / `DONE`.
 - Any selected executor stays within Brain-approved / mission-authorized scope.
+- **Repository Identity Fence:** before any repository mutation, resolve the current mission's authorized mutable-repository scope as one canonical `primaryMutableRepository` (`owner/name`) or a small exact `mutableRepositories` set, canonicalize the mutation target to `owner/name`, and assert membership. A mismatch fails closed before any write as an authority/resource-scope conflict. Repository mentions, URLs, task similarity, another project's product decision, tool availability, or provider permission do not rebind scope; capability is not authority. Cross-repository reads remain allowed without writer ownership. The first out-of-scope mutation requires an explicit durable destination-scoped Parent/owner mission decision; a predeclared multi-repo set may proceed within the set without per-operation Human confirmation. Existing Local `projectKey` / workspace fencing remains intact and Native GitHub mutation is not forced through Local Governance.
 - When Codex is selected for sustained coding, it may run normal edit/debug/test iterations inside one milestone TASK.
 - Mandatory verification applies.
 - Protect secrets; fail closed on ambiguity.
