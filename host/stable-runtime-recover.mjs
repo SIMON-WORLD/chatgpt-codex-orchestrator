@@ -14,7 +14,7 @@ import {
 
 const STATE_FILE = 'stable-runtime-active.json';
 const MAX_CAUSE_CHARS = 512;
-const SENSITIVE_ASSIGNMENT_RE = /\b(api[_-]?key|authorization|cookie|credential|password|secret|token)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi;
+const SENSITIVE_ASSIGNMENT_RE = /\b([a-z0-9_-]*(?:api[_-]?key|authorization|cookie|credential|password|secret|token)[a-z0-9_-]*)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi;
 
 export class StableRuntimeRecoveryError extends Error {
   constructor(message, details = {}) {
