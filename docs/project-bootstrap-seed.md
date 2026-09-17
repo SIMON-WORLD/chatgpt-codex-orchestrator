@@ -49,6 +49,8 @@ Use one stable locator, chosen once for the Project:
 - **Brand-new provider-native project:** point at an already-existing provider container/root plus a stable scoped control identity. The final child control object does not need to exist yet. Bounded GENESIS may create exactly one minimal control inside that container and must read back its exact provider identity. The Project Settings seed remains unchanged after creation.
 - **Mature project without project-local control:** use a stable destination locator and a separate one-time `MATERIALIZE_MINIMAL_PROJECT_CONTROL` authorization. Materialization records pointers to current durable truth; it must not invent work, reset the Parent, change active Issues/PRs, or bypass an existing strategy/acceptance gate.
 
+Legacy #82 seeds used the exact final-control placeholder `<PROJECT_CONTROL_ROOT_POINTER>`. Existing exact pointers remain valid and map to the new `existing` control-locator form; new provider-native Projects should prefer container + scoped identity so the final child object need not exist before GENESIS.
+
 Never use workspace-global title search, newest/most-recent ranking, chat history, or another project's control to choose the control surface.
 
 ## Existing-project adoption — one-time UI action
