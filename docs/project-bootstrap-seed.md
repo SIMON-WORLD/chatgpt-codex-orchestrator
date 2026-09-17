@@ -9,21 +9,25 @@ SIMON-WORLD/chatgpt-codex-orchestrator
 Bootstrap from operating-model/kernel-manifest.json and CAPABILITY_ROUTING.md.
 Record the exact observed kernel SHA.
 
-This Project's profile/control pointer is:
-<PROJECT_PROFILE_OR_CONTROL_POINTER>
+This Project's stable project root is:
+<PROJECT_ROOT_POINTER>
 
-Optional current mission/Issue pointer:
-<ACTIVE_MISSION_POINTER_OR_NONE>
+This Project's stable project-local control root is:
+<PROJECT_CONTROL_ROOT_POINTER>
 
 Recover in order:
-canonical current kernel -> project profile/overlay -> live mission/authority -> runtime capability discovery -> route.
+canonical current kernel -> stable project root -> project-local durable control -> active mission OR next safe action -> runtime capability discovery -> route.
 
-Capability does not grant authority. Native-first. Missing/ambiguous profile or authority stays read-only/unbound. Reference projects are evidence only, never dependencies.
-Use the kernel's uniform UI naming template with this profile's uiLabel.
+Do not store changing mission/Issue/PR pointers, runtime capability snapshots, route choice, device state, or executor IDs in Project Settings. Discover live mission/control from project-local durable control each time.
+
+Capability does not grant authority. Native-first. Missing/ambiguous/stale control or authority fails closed. Reference projects are evidence only, never dependencies.
+Use the kernel's uniform UI naming template with this project's uiLabel.
 ```
 
 ## One-time product boundary
 
-ChatGPT Project instructions are currently project-scoped, so a new Project still needs this one-time seed/pointer unless the product later provides native cross-project instruction distribution. Do not claim zero-touch inheritance.
+ChatGPT Project instructions are currently project-scoped, so a new Project still needs this one-time stable root/control binding unless the product later provides native cross-project instruction distribution. Do not claim zero-touch inheritance.
 
-The seed is a pointer, not a policy payload. Shared policy changes come from orchestrator current `main`; project-specific rules come from the project's own profile/control; live mutation authority comes only from the current destination-scoped mission/Parent decision.
+For a brand-new project with no durable control yet, the Human Principal may additionally provide one bounded GENESIS authorization: minimal charter/identity + hard boundaries, exact designated durable surface/root, and permission only to create the minimal project-local control. After that control exists, it supersedes GENESIS input for normal recovery and cannot be silently rebound by Project Settings.
+
+The seed is a pointer, not a policy payload. Shared policy changes come from orchestrator current `main`; project-specific evolving truth comes from the project's own durable control; live mutation authority comes only from the current destination-scoped mission/Parent decision.
