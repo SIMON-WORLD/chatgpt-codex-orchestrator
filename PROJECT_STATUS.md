@@ -26,6 +26,12 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 - **Issue #33 / PR #45:** **ACCEPTED / MATERIALIZED**；capability-first v0.2 operational-default flip 已闭环。
 - **Issue #46 / M8:** **CLOSED / DONE / RELEASED**；`v0.2.0` publication 已完成，GitHub tag/Release 为 publication truth，Issue #46 的 final Parent checkpoint 为 release-control 历史证据。
 - **Issue #48 / PR #49:** **CLOSED / ACCEPTED / MERGED**；human-facing Parent discoverability、full Parent replacement vs bounded Parent delegation、No Human Relay fallback、Act-or-Escalate / no Continue Tax 已 materialize 到 current `CAPABILITY_ROUTING.md`。
+- **Issue #61:** **CLOSED / PASS**；fresh-session bootstrap recovery 从 current GitHub truth 成功恢复 current policy/state；stale ChatGPT Project mirrors 被证明是 non-authoritative / non-blocking convenience mirrors。
+- **Issue #64 / PR #65:** **CLOSED / ACCEPTED / MERGED**；default-off、fixed-schema、privacy-minimized、read-only Codex diagnostics 已作为 narrow `CHATGPT_DIRECT_LOCAL` capability 进入 `main`，不扩大普通 workspace trust、shell 或 mutation authority。
+- **Issue #66 / #67:** **CLOSED / FAIL-CLOSED SECURITY DECISION**；real-machine activation dogfood 证明 bounded serving-revision proof / invocation authorization 仍有 P1 operability gap；在缺少可 enforce 的 caller authorization boundary 时，不暴露 always-available one-shot diagnostic read，不为此引入 OAuth/RBAC/session registry/supervisor/generic runtime control plane。
+- **Issue #69 / #70 / PR #71:** **P0 INCIDENT CLOSED / CORRECTION ACCEPTED**；cross-repo Parent context contamination 暴露 capability ≠ authority 的 repository mutation gap；Repository Identity Fence 已 materialize：repository mutation 绑定 canonical `owner/name` mutable scope，mutation-time target mismatch 在第一笔写入前 fail closed；cross-repo read-only evidence acquisition 仍允许。
+- **Post-#70 reconciliation baseline:** `main@0484f6689032b44da7ebf49bd974b33eaa72ef0e` 包含 accepted Repository Identity Fence；后续 current truth 仍以 live `main` 为准。
+- **Observed Windows reboot P1:** real reboot/recovery 暴露 Local Capability Plane deployment operability friction：Stable Runtime + externally managed Secure Tunnel 缺少 deterministic reboot/login recovery entrypoint，并出现过 stale checkout/config/profile/port drift。该 finding 是 separate bounded P1 candidate，不由本状态 reconcile 自动授权实现。
 - **Version metadata:** release line 使用 `0.2.0` metadata；metadata 本身不证明 publication，formal release 仍由 GitHub tag / Release readback 证明。
 
 当前规范性 routing / executor / operating policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。Brain Continuity contract 见 [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md)。v0.2.0 release/operator contract 见 [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md)。
@@ -52,6 +58,10 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 | v0.2 operational default flip | **ACCEPTED / MATERIALIZED** | Issue #33 / PR #45；capability-first v0.2 is repository operational default；Alpha.3 explicit compatibility only |
 | M8 RC / Release | **CLOSED / RELEASED** | Issue #46 DONE；`v0.2.0` tag + GitHub Release formally published |
 | Parent continuity / no Continue Tax correction | **CLOSED / ACCEPTED** | Issue #48 / PR #49 merged；human-facing naming + bounded Parent delegation + direct durable handoff + Act-or-Escalate |
+| Fresh-session bootstrap recovery | **CLOSED / PASS** | Issue #61；current `main` recovery path works without transcript relay or stale Project-mirror dependence |
+| Structured Codex diagnostics | **CLOSED / ACCEPTED** | Issue #64 / PR #65；default-off fixed-schema read-only diagnostics under Direct Local |
+| Diagnostic activation authorization review | **CLOSED / FAIL-CLOSED** | Issue #66 / #67；no always-available sensitive diagnostic invocation without enforceable caller authorization boundary |
+| Repository Identity Fence | **CLOSED / ACCEPTED** | Issue #69 / #70 / PR #71；canonical repo mutation scope + mutation-time assertion + cross-repo read preservation |
 
 ## M7 — Real-Project Capability Routing Dogfood
 
@@ -120,6 +130,14 @@ Issue #33 fresh-session dogfood exposed that Parent fencing alone did not let a 
 
 Issue #34 dogfood required activating the accepted exact runtime revision without manual shell choreography. Issue #36 added the bounded exact-revision Stable Runtime activation boundary and completed the real activation path while preserving the stable profile/dataRoot/Governance namespace/tunnel identity.
 
+## Post-v0.2 evidence / authority hardening — current accepted corrections
+
+- **Issue #61:** fresh bounded session recovered current release/operating state from durable GitHub truth without transcript relay；stale Project Instructions/Sources did not override current `main` and were non-blocking。
+- **Issue #64 / PR #65:** added only the narrow default-off structured Codex diagnostic surface；caller cannot choose arbitrary paths/commands/raw output，and diagnostics remain read-only/privacy-minimized。
+- **Issue #66 / #67:** real-machine activation path correctly failed closed。Final security decision rejects an always-available diagnostic one-shot under the current stateless/no-caller-identity transport because mission prose or caller booleans are not an authorization boundary。No generic auth/control architecture was added。
+- **Issue #69 / #70 / PR #71:** real cross-repo authority incident established that broad GitHub provider capability must never silently rebind project mutation authority。Repository Identity Fence now requires explicit canonical mutable-repository scope and mutation-time target assertion across Native/Local/Codex-backed repository writes；read-only cross-repo investigation remains allowed。
+- **Windows reboot evidence:** current Local Capability Plane can be restored safely, but reboot/login recovery still depends on externally managed tunnel lifecycle and historically drifted local checkout/config/profile state。Treat this as a separate P1 operability candidate requiring its own bounded Issue/decision；do not infer a generic supervisor/service-manager project from this evidence。
+
 ## Current operating model — Issue #43 + Issue #48 accepted; Issue #33 default flip materialized
 
 Issue #43 was a **project-policy correction**, not another runtime prerequisite. It is **CLOSED / ACCEPTED / MERGED** through PR #44. Issue #48 / PR #49 subsequently applied the smallest post-v0.2 policy correction without changing runtime/Governance schema, fencing, release/version, or routing architecture。
@@ -134,18 +152,18 @@ Key operating rules:
 - bounded mission owns continuous progression inside its contract：`inspect → diagnose → implement → test → debug/retry → commit/push → PR → exact-head verification`；
 - ordinary bugs/tool boundaries are not Parent escalation points；known next safe action + unchanged acceptance + sufficient current capability means act, not wait for another user `continue`；
 - GitHub Issue/PR/CI/current code remain implementation/project truth；durable Local Governance remains live local control truth；
-- direct durable handoff is preferred；only when direct durable read/write is genuinely unavailable may Human Relay be used, and then only for the minimal verdict / material delta / durable evidence pointer；
+- direct durable handoff is preferred；only when direct durable read/write is genuinely unavailable may Human Relay be used，and then only for the minimal verdict / material delta / durable evidence pointer；
 - Issue body + Parent durable decision define mandatory acceptance；ordinary prompts may not add hidden gates；
 - dogfood friction uses P0/P1/P2 classification before creating new Governance work。
 
 Parent continuity / naming rules：
 
 - ongoing project Parent uses sidebar-first `① 总控 · Gnn · ACTIVE | Orchestrator`；current adoption starts at `G01` and does not back-count pre-adoption historical conversations；a genuinely superseded ongoing Parent may be labeled `① 总控 · Gnn · RETIRED | Orchestrator` for human discoverability；
-- `Gnn` increments only after a legitimate full replacement of the same durable ongoing Parent completes under the existing authority/reconciliation contract；arbitrary new conversations, ordinary bounded missions/reviews/investigations, and bounded Parent delegation do not increment or use `Gnn`；
-- ordinary bounded missions use sidebar-first, project-last `#<issue> · <MISSION_TYPE> | Orchestrator` where `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`；
-- an explicitly authorized bounded Parent delegation / takeover uses `#<issue> · PARENT | Orchestrator`, ends with that bounded scope, and does not use `Gnn`；
+- `Gnn` increments only after a legitimate full replacement of the same durable ongoing Parent completes under the existing authority/reconciliation contract；arbitrary new conversations、ordinary bounded missions/reviews/investigations，and bounded Parent delegation do not increment or use `Gnn`；
+- ordinary bounded missions use sidebar-first、project-last `#<issue> · <MISSION_TYPE> | Orchestrator` where `MISSION_TYPE ∈ {IMPLEMENT, DOGFOOD, REVIEW, RUNTIME, INVESTIGATE}`；
+- an explicitly authorized bounded Parent delegation / takeover uses `#<issue> · PARENT | Orchestrator`，ends with that bounded scope，and does not use `Gnn`；
 - conversation title、`Gnn`、`ACTIVE/RETIRED`、human-readable numbering and rename/archive state are human-facing continuity/discoverability only；they do **not** grant authority or replace durable Governance generation/fencing when Local Capability Plane control is involved；
-- no project-level generation registry, conversation pointer service, heartbeat, watcher, lease, scheduler, session manager, Parent/Child topology, or parallel authority source is introduced。
+- no project-level generation registry、conversation pointer service、heartbeat、watcher、lease、scheduler、session manager、Parent/Child topology、or parallel authority source is introduced。
 
 Issue #43 acceptance unblocked the SAME Issue #33 implementation mission. Issue #33 / PR #45 subsequently materialized the accepted capability-first v0.2 default under Strong Mission rules without creating a second Codex execution or new project-level scope. Issue #48 / PR #49 then corrected post-release Parent/session operating policy only。
 
@@ -153,7 +171,7 @@ Issue #43 acceptance unblocked the SAME Issue #33 implementation mission. Issue 
 
 Issue #32 already completed the explicit operational-default review with **ACCEPT** and authorized Issue #33. Therefore the old `DEFER until #27 closes` statement is historical and no longer current policy。
 
-Issue #33 / PR #45 materialized the accepted v0.2 capability-first model as the repository operational default while keeping Alpha.3 legacy IAB explicit, feature-frozen compatibility/fallback。
+Issue #33 / PR #45 materialized the accepted v0.2 capability-first model as the repository operational default while keeping Alpha.3 legacy IAB explicit，feature-frozen compatibility/fallback。
 
 Accepted/materialized semantics include：
 
@@ -176,12 +194,12 @@ Historical release-readiness evidence included：
 - Draft PR to `main`；
 - semantic version/tag contract (`0.2.0` / `v0.2.0`)；
 - release/operator notes distinguishing operational-default state from formal publication；
-- release-hardening regressions for Governance migration/recovery, Stable Runtime exact-revision rollback, and runtime-default/no-silent-fallback behavior；
+- release-hardening regressions for Governance migration/recovery，Stable Runtime exact-revision rollback，and runtime-default/no-silent-fallback behavior；
 - normal deterministic suite；
 - exact-head GitHub CI on Node 22.x and 24.x；
 - residual P0/P1/P2 risk classification。
 
-That history remains durable in Issue #46 / PR #47, but it is no longer a live project gate. GitHub tag/Release remains the publication truth。
+That history remains durable in Issue #46 / PR #47，but it is no longer a live project gate. GitHub tag/Release remains the publication truth。
 
 ## Non-blocking observations retained
 
@@ -190,33 +208,33 @@ That history remains durable in Issue #46 / PR #47, but it is no longer a live p
 3. **Developer MCP conversation volatility:** per-conversation invocation may disappear even when the SAME local transport is healthy；availability must be rediscovered rather than assumed。
 4. **Node 24 executor test timing:** ownership/permission continuation tests have shown transient timing failures that pass on same-head rerun；retain as test-stability evidence unless reproducible correctness evidence emerges。
 5. **Branch protection:** current `main` is not protected by required checks；delivery-hardening candidate，not an automatically authorized new milestone。
-6. **Parent direct-main process mistake:** Issue #43 records two no-net-content direct-main commits from Parent preparation；accepted response is branch + PR discipline, not history rewrite or a new runtime feature。
+6. **Parent direct-main process mistake:** Issue #43 records two no-net-content direct-main commits from Parent preparation；accepted response is branch + PR discipline，not history rewrite or a new runtime feature。
 
 ## Fresh-Parent bootstrap / recovery
 
-Fresh Parent / replacement / bounded mission recovery starts from authoritative pointers, not from transcript reconstruction：
+Fresh Parent / replacement / bounded mission recovery starts from authoritative pointers，not from transcript reconstruction：
 
 `current main → CAPABILITY_ROUTING.md → PROJECT_STATUS.md → ROADMAP.md → current active Issue/mission if any → runtime capability discovery → act or escalate`
 
 Use that sequence as follows：
 
 1. **Current `main`:** establish current repository/code/merged-policy truth before relying on mirrors。
-2. **`CAPABILITY_ROUTING.md`:** load current authoritative routing/executor/operating policy, including Parent continuity, mission escalation, No Human Relay and Act-or-Escalate semantics。
+2. **`CAPABILITY_ROUTING.md`:** load current authoritative routing/executor/operating policy，including Parent continuity，mission escalation，No Human Relay and Act-or-Escalate semantics。
 3. **`PROJECT_STATUS.md`:** recover the stable accepted baseline and completed publication state without treating this mirror as live control truth。
 4. **`ROADMAP.md`:** recover the accepted high-level sequence and current post-v0.2 stabilization / evidence-driven steady-state；do not infer a new v0.2.1/v0.3 milestone。
-5. **Current active Issue/mission, if any:** use its body + latest durable Parent decision/checkpoint as the mission outcome/scope/acceptance contract；if none exists, do not invent work from old milestones。
+5. **Current active Issue/mission，if any:** use its body + latest durable Parent decision/checkpoint as the mission outcome/scope/acceptance contract；if none exists，do not invent work from old milestones。
 6. **Runtime capability discovery:** treat capability availability as current-session fact and prove required operations before routing。
-7. **Act or escalate:** if the next safe action is known, acceptance is unchanged, and required capability is available, act；otherwise escalate only the material blocker through the existing durable surface。
+7. **Act or escalate:** if the next safe action is known，acceptance is unchanged，and required capability is available，act；otherwise escalate only the material blocker through the existing durable surface。
 
 Release-specific recovery remains simple：capability-first v0.2 is the repository operational default；Alpha.3 remains explicit compatibility/fallback only；`v0.2.0` is formally released and M8 / Issue #46 is DONE；formal publication truth remains GitHub `main` + exact tag / Release readback rather than package metadata or prose。
 
 ## Authority
 
 - **GitHub `main` / current code / PR / CI / tag / Release:** implementation and publication truth / canonical authority。
-- **`CAPABILITY_ROUTING.md`:** current routing / executor / operating policy, including current Parent continuity and Act-or-Escalate semantics。
+- **`CAPABILITY_ROUTING.md`:** current routing / executor / operating policy，including current Parent continuity and Act-or-Escalate semantics。
 - **`docs/rfc-v0.2-brain-continuity.md`:** Brain Continuity contract and historical design rationale；current implementation state is also reflected by GitHub code/tests/issues。
 - **`docs/architecture.md`:** current technical architecture facts。
-- **`docs/releases/v0.2.0.md`:** v0.2.0 release/operator contract, including upgrade/rollback and publication boundary。
+- **`docs/releases/v0.2.0.md`:** v0.2.0 release/operator contract，including upgrade/rollback and publication boundary。
 - **`ROADMAP.md`:** accepted high-level sequence and post-v0.2 stabilization / evidence-driven steady-state。
 - **GitHub Issues / PR comments:** durable mission/checkpoint/review surfaces；Issue #46 is closed release history，while any current active Issue/mission supplies its own durable contract/checkpoints；these surfaces do not replace live Local Governance authority for mutating local control state。
 - **Durable Local Governance:** live local control truth when Local Capability Plane execution is involved；human-facing conversation names do not replace its authority generation/fencing semantics。

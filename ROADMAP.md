@@ -24,6 +24,10 @@
 | v0.2 operational default flip | **ACCEPTED / MATERIALIZED** | Issue #33 / PR #45；capability-first v0.2 is repository operational default；Alpha.3 explicit compatibility only |
 | M8 — RC / Release | **CLOSED / RELEASED** | Issue #46 DONE；`v0.2.0` tag + matching GitHub Release formally published |
 | Parent continuity / no Continue Tax correction | **CLOSED / ACCEPTED** | Issue #48 / PR #49 merged；human-facing Parent naming、bounded Parent delegation、No Human Relay、Act-or-Escalate materialized |
+| Fresh-session bootstrap recovery | **CLOSED / PASS** | Issue #61；fresh bounded session recovered current truth from GitHub without transcript relay or stale Project-mirror dependence |
+| Structured Codex diagnostics | **CLOSED / ACCEPTED** | Issue #64 / PR #65；default-off fixed-schema privacy-minimized read-only Direct Local diagnostics |
+| Diagnostic activation authorization review | **CLOSED / FAIL-CLOSED** | Issue #66 / #67；no always-available sensitive diagnostic invocation without enforceable caller authorization boundary |
+| Repository Identity Fence | **CLOSED / ACCEPTED** | Issue #69 / #70 / PR #71；canonical `owner/name` mutation scope + mutation-time assertion + cross-repo read preservation |
 | Post-v0.2 stabilization / evidence-driven steady-state | **CURRENT OPERATING STATE** | no automatic v0.2.1/v0.3 scope；new implementation requires new P0/P1 evidence or separately accepted product/architecture outcome |
 
 ## N3 — 已接受基线
@@ -121,6 +125,14 @@ Issue #33 fresh-session dogfood exposed a control-plane gap：Parent fencing cor
 ### Issue #36 — Stable Runtime activation bootstrap
 
 Issue #34 real dogfood required activating the accepted runtime revision without manual shell choreography。Issue #36 added the bounded exact-revision Stable Runtime activation boundary，preserving stable profile/dataRoot/Governance namespace/tunnel identity and enabling the real #34/#33 path。
+
+## Post-v0.2 accepted evidence / authority hardening
+
+- **Issue #61 — fresh-session bootstrap:** PASS. A fresh bounded session recovered current release/operating state from GitHub current truth without transcript relay；stale Project Instructions/Sources were proven non-authoritative and non-blocking。
+- **Issue #64 / PR #65 — structured Codex diagnostics:** accepted as a narrow default-off Direct Local capability with fixed selectors/schema, server-owned sources, privacy-minimized output and read-only semantics；it does not expand ordinary workspace trust, shell or mutation authority。
+- **Issue #66 / #67 — real activation/security review:** activation correctly failed closed。The final security decision rejects an always-available one-shot diagnostic read under the current stateless/no-caller-identity transport because mission prose or caller booleans are not an enforceable authorization boundary。No OAuth/RBAC/session registry/supervisor/generic runtime control plane was added。
+- **Issue #69 / #70 / PR #71 — Repository Identity Fence:** a real P0 cross-repo authority incident established that broad provider capability must not rebind mutation authority。Repository writes now require canonical `owner/name` mutable scope plus mutation-time target assertion across Native/Local/Codex-backed repository mutation；mismatch fails closed before the first write，while cross-repo read-only investigation remains allowed。
+- **Windows reboot/local-capability-plane recovery:** the 2026-09-17 real reboot exposed a P1 operability problem: deterministic login/reboot recovery is missing for the Stable Runtime + externally managed Secure Tunnel deployment, and historical checkout/config/profile/port drift made recovery uncertain。This is observed evidence only until a separate authoritative Issue defines scope/acceptance；do not infer a generic supervisor/service-manager project from it。
 
 ## Operating-model corrections — Issue #43 and Issue #48
 
