@@ -98,3 +98,30 @@ test('externally managed tunnel lifecycle: runtime never spawns/kills the tunnel
     await new Promise((resolve) => external.close(resolve));
   }
 });
+
+test('configured local read-only fixture is wired into WorkspaceRegistry without widening workspaceRoots', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bl-fixture-'));
+  const allowedRoot = path.join(dataRoot, 'allowed');
+  const fixture = path.join(allowedRoot, 'read-only-smoke');
+  fs.mkdirSync(path.join(fixture, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(fixture, 'smoke.txt'), 'fixture marker\n', 'utf8');
+
+  const config = withCleanEnv(() => loadV02Config({
+    port: 0,
+    workspaceRoot: allowedRoot,
+    dataRoot,
+    diagnostics: { localReadOnlyFixture: fixture },
+  }));
+  assert.equal(config.diagnostics.localReadOnlyFixture, path.resolve(fixture));
+  assert.deepEqual(config.workspaceRoots, [path.resolve(allowedRoot)]);
+
+  const runtime = createBrainLocalRuntime(config);
+  try {
+    await runtime.start();
+    const opened = runtime.registry.open({ fixture: 'read_only_smoke' });
+    assert.equal(opened.fixture, 'read_only_smoke');
+    assert.equal(opened.root, fs.realpathSync.native(fixture));
+  } finally {
+    await runtime.close();
+  }
+});
