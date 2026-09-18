@@ -6,7 +6,6 @@ import path from 'node:path';
 import {
   StableRuntimeRecoveryCoordinator,
   StableRuntimeRecoveryError,
-  recoveryFailurePayload,
 } from '../../host/stable-runtime-recover.mjs';
 import {
   StableRuntimeActivationError,
@@ -38,33 +37,16 @@ function fixture() {
     },
     tunnel: {
       external: true,
-      clientExecutable: path.join(root, 'tunnel-client.exe'),
-      profile: 'stable-v02',
+      clientExecutable: null,
+      profile: null,
       profileFile: null,
-      profileDir: path.join(root, 'profiles'),
+      profileDir: null,
       localMcpUrl: 'http://127.0.0.1:8745/mcp',
       healthUrl: 'http://127.0.0.1:8081/readyz',
       spawnArgs: null,
     },
   };
-  fs.writeFileSync(config.tunnel.clientExecutable, 'binary-placeholder');
   return { root, repo, activationRoot, checkout, configPath, config };
-}
-
-function doctorOk(url = 'http://127.0.0.1:8745/mcp') {
-  return {
-    code: 0,
-    stdout: JSON.stringify({
-      result: 'ok',
-      checks: [
-        { id: 'profile_load', status: 'pass', summary: 'profile stable-v02 loaded' },
-        { id: 'control_plane_api_key', status: 'pass', summary: 'runtime key reference resolved' },
-        { id: 'mcp_server_reachable', status: 'pass', summary: `HTTP 200 from ${url}` },
-      ],
-      failed_checks: [],
-    }),
-    stderr: '',
-  };
 }
 
 function makeActivator({ config, repo, checkout, runtime = 'down', pids = null, onValidateTarget = null } = {}) {
@@ -77,7 +59,24 @@ function makeActivator({ config, repo, checkout, runtime = 'down', pids = null, 
     probeJson: async () => ({ ok: false, status: 0, body: null }),
     sleep: async () => {},
     stopPid: (pid) => { calls.stopPid.push(pid); if (pid === 222) runtimeState = 'down'; },
-    _requireBoundedProfile: () => ({ baseUrl: 'http://127.0.0.1:8745', trusted: [repo] }),
+    _requireBoundedProfile: () => {
+      const baseUrl = 'http://127.0.0.1:8745';
+      if (config.tunnel?.external !== true) {
+        throw new StableRuntimeActivationError('activation requires the existing Secure Tunnel lifecycle to remain externally managed', { phase: 'profile_binding' });
+      }
+      if (!config.tunnel?.healthUrl) {
+        throw new StableRuntimeActivationError('activation requires the existing external tunnel healthUrl for readiness proof', { phase: 'profile_binding' });
+      }
+      const expected = `${baseUrl}/mcp`;
+      if (config.tunnel?.localMcpUrl !== expected) {
+        throw new StableRuntimeActivationError('Stable Runtime tunnel profile must bind the exact configured local MCP endpoint', {
+          phase: 'profile_binding',
+          expectedMcpUrl: expected,
+          actualMcpUrl: config.tunnel?.localMcpUrl || null,
+        });
+      }
+      return { baseUrl, trusted: [repo] };
+    },
     _resolveTrustedRepo: () => repo,
     _validateTarget: async (_repo, sha) => {
       calls.validateTarget.push(sha);
@@ -126,30 +125,19 @@ function makeActivator({ config, repo, checkout, runtime = 'down', pids = null, 
   return { activator, calls, getRuntimeState: () => runtimeState };
 }
 
-test('both-down recovery cold-starts exact runtime, validates tunnel profile, starts tunnel, and proves joint READY', async () => {
+test('cold-starts exact runtime and only verifies externally managed tunnel readiness', async () => {
   const { repo, checkout, configPath, config } = fixture();
   const { activator, calls } = makeActivator({ config, repo, checkout, runtime: 'down', pids: (state) => state === 'down' ? [] : [222] });
-  let tunnelReady = false;
+  let runCalls = 0;
   let tunnelStarts = 0;
   const coordinator = new StableRuntimeRecoveryCoordinator({
     activator,
-    run: async (file, args) => {
-      assert.equal(file, config.tunnel.clientExecutable);
-      assert.deepEqual(args, ['doctor', '--profile', 'stable-v02', '--profile-dir', config.tunnel.profileDir, '--json']);
-      return doctorOk();
-    },
+    run: async () => { runCalls += 1; throw new Error('tunnel doctor must not run'); },
     probeJson: async (url) => {
       assert.equal(url, config.tunnel.healthUrl);
-      return tunnelReady ? { ok: true, status: 200, body: { status: 'ready' } } : { ok: false, status: 0, body: null };
+      return { ok: true, status: 200, body: { status: 'ready' } };
     },
-    spawnTunnel: async ({ executable, args, env }) => {
-      tunnelStarts += 1;
-      assert.equal(executable, config.tunnel.clientExecutable);
-      assert.deepEqual(args, ['run', '--profile', 'stable-v02', '--profile-dir', config.tunnel.profileDir]);
-      assert.equal(env.CONTROL_PLANE_API_KEY, undefined, 'coordinator must not synthesize raw credentials');
-      tunnelReady = true;
-      return { pid: 333, stop: () => { tunnelReady = false; } };
-    },
+    spawnTunnel: async () => { tunnelStarts += 1; return { pid: 333, stop() {} }; },
     sleep: async () => {},
   });
 
@@ -158,23 +146,26 @@ test('both-down recovery cold-starts exact runtime, validates tunnel profile, st
   assert.equal(result.sha, SHA);
   assert.equal(result.runtime.action, 'started');
   assert.equal(result.runtime.pid, 222);
-  assert.equal(result.tunnel.action, 'started');
-  assert.equal(result.tunnel.pid, 333);
+  assert.deepEqual(result.tunnel, { action: 'reused', status: 200 });
+  assert.deepEqual(result.tunnelPreflight, {
+    mode: 'external-readiness-only',
+    checkedLocalMcpUrl: config.tunnel.localMcpUrl,
+  });
   assert.equal(result.evidence.healthz.revision, SHA);
   assert.equal(result.evidence.readyz.revision, SHA);
   assert.equal(result.evidence.tunnel.status, 200);
   assert.equal(calls.prepare, 1);
   assert.equal(calls.spawnRuntime, 1);
-  assert.equal(tunnelStarts, 1);
+  assert.equal(runCalls, 0);
+  assert.equal(tunnelStarts, 0);
 });
 
-test('retry reuses one exact runtime and one ready tunnel without spawning duplicates', async () => {
+test('retry reuses one exact runtime and one ready external tunnel without spawning duplicates', async () => {
   const { repo, checkout, configPath, config } = fixture();
   const { activator, calls } = makeActivator({ config, repo, checkout, runtime: 'exact', pids: [111] });
   let tunnelStarts = 0;
   const coordinator = new StableRuntimeRecoveryCoordinator({
     activator,
-    run: async () => doctorOk(),
     probeJson: async () => ({ ok: true, status: 200, body: { status: 'ready' } }),
     spawnTunnel: async () => { tunnelStarts += 1; return { pid: 333, stop() {} }; },
     sleep: async () => {},
@@ -193,7 +184,11 @@ test('retry reuses one exact runtime and one ready tunnel without spawning dupli
 test('wrong healthy runtime revision fails closed without stopping or starting any process', async () => {
   const { repo, checkout, configPath, config } = fixture();
   const { activator, calls } = makeActivator({ config, repo, checkout, runtime: 'wrong', pids: [111] });
-  const coordinator = new StableRuntimeRecoveryCoordinator({ activator, run: async () => doctorOk(), probeJson: async () => ({ ok: false, status: 0 }), sleep: async () => {} });
+  const coordinator = new StableRuntimeRecoveryCoordinator({
+    activator,
+    probeJson: async () => ({ ok: true, status: 200 }),
+    sleep: async () => {},
+  });
 
   await assert.rejects(
     () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
@@ -206,7 +201,11 @@ test('wrong healthy runtime revision fails closed without stopping or starting a
 test('ambiguous listener fails closed without broad process kill', async () => {
   const { repo, checkout, configPath, config } = fixture();
   const { activator, calls } = makeActivator({ config, repo, checkout, runtime: 'down', pids: [111, 222] });
-  const coordinator = new StableRuntimeRecoveryCoordinator({ activator, run: async () => doctorOk(), probeJson: async () => ({ ok: false, status: 0 }), sleep: async () => {} });
+  const coordinator = new StableRuntimeRecoveryCoordinator({
+    activator,
+    probeJson: async () => ({ ok: true, status: 200 }),
+    sleep: async () => {},
+  });
 
   await assert.rejects(
     () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
@@ -232,7 +231,6 @@ test('omitted target uses only a validated exact same-profile last-active state'
   const { activator, calls } = makeActivator({ config, repo, checkout, runtime: 'exact', pids: [111] });
   const coordinator = new StableRuntimeRecoveryCoordinator({
     activator,
-    run: async () => doctorOk(),
     probeJson: async () => ({ ok: true, status: 200, body: { status: 'ready' } }),
     sleep: async () => {},
   });
@@ -245,7 +243,11 @@ test('omitted target uses only a validated exact same-profile last-active state'
 test('omitted target fails closed when last-active state cannot be validated', async () => {
   const { repo, checkout, configPath, config } = fixture();
   const { activator } = makeActivator({ config, repo, checkout, runtime: 'down' });
-  const coordinator = new StableRuntimeRecoveryCoordinator({ activator, run: async () => doctorOk(), probeJson: async () => ({ ok: false, status: 0 }), sleep: async () => {} });
+  const coordinator = new StableRuntimeRecoveryCoordinator({
+    activator,
+    probeJson: async () => ({ ok: true, status: 200 }),
+    sleep: async () => {},
+  });
 
   await assert.rejects(
     () => coordinator.recover({ configPath, repoPath: repo }),
@@ -253,13 +255,33 @@ test('omitted target fails closed when last-active state cannot be validated', a
   );
 });
 
-test('tunnel doctor profile binding drift fails before tunnel launch', async () => {
+test('external tunnel local MCP binding drift fails at profile binding without doctor or launch', async () => {
   const { repo, checkout, configPath, config } = fixture();
+  config.tunnel.localMcpUrl = 'http://127.0.0.1:8765/mcp';
   const { activator } = makeActivator({ config, repo, checkout, runtime: 'exact', pids: [111] });
+  let runCalls = 0;
   let tunnelStarts = 0;
   const coordinator = new StableRuntimeRecoveryCoordinator({
     activator,
-    run: async () => doctorOk('http://127.0.0.1:8765/mcp'),
+    run: async () => { runCalls += 1; return { code: 0, stdout: '{}', stderr: '' }; },
+    probeJson: async () => ({ ok: true, status: 200 }),
+    spawnTunnel: async () => { tunnelStarts += 1; return { pid: 333, stop() {} }; },
+  });
+
+  await assert.rejects(
+    () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
+    (error) => error instanceof StableRuntimeRecoveryError && error.details.phase === 'profile_binding',
+  );
+  assert.equal(runCalls, 0);
+  assert.equal(tunnelStarts, 0);
+});
+
+test('external tunnel readiness failure after starting runtime cleans up only that runtime', async () => {
+  const { repo, checkout, configPath, config } = fixture();
+  const { activator, calls } = makeActivator({ config, repo, checkout, runtime: 'down', pids: (state) => state === 'down' ? [] : [222] });
+  let tunnelStarts = 0;
+  const coordinator = new StableRuntimeRecoveryCoordinator({
+    activator,
     probeJson: async () => ({ ok: false, status: 0, body: null }),
     spawnTunnel: async () => { tunnelStarts += 1; return { pid: 333, stop() {} }; },
     sleep: async () => {},
@@ -267,44 +289,10 @@ test('tunnel doctor profile binding drift fails before tunnel launch', async () 
 
   await assert.rejects(
     () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
-    (error) => error instanceof StableRuntimeRecoveryError && error.details.phase === 'tunnel_profile_binding',
+    (error) => error instanceof StableRuntimeRecoveryError && error.details.phase === 'tunnel_readiness',
   );
-  assert.equal(tunnelStarts, 0);
-});
-
-test('tunnel doctor failure preserves a bounded redacted cause and never emits raw secret values', async () => {
-  const { repo, checkout, configPath, config } = fixture();
-  const { activator } = makeActivator({ config, repo, checkout, runtime: 'exact', pids: [111] });
-  const coordinator = new StableRuntimeRecoveryCoordinator({
-    activator,
-    run: async () => { throw new Error('CONTROL_PLANE_API_KEY=top-secret-value is missing or rejected'); },
-    probeJson: async () => ({ ok: false, status: 0, body: null }),
-    sleep: async () => {},
-  });
-
-  let thrown;
-  try { await coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }); } catch (error) { thrown = error; }
-  assert.ok(thrown instanceof StableRuntimeRecoveryError);
-  assert.equal(thrown.details.phase, 'tunnel_preflight');
-  const payload = recoveryFailurePayload(thrown);
-  const serialized = JSON.stringify(payload);
-  assert.equal(serialized.includes('top-secret-value'), false);
-  assert.equal(serialized.includes('[REDACTED]'), true);
-});
-
-test('tunnel launch failure cleans up only the runtime process started by this recovery attempt', async () => {
-  const { repo, checkout, configPath, config } = fixture();
-  const { activator, calls } = makeActivator({ config, repo, checkout, runtime: 'down', pids: (state) => state === 'down' ? [] : [222] });
-  const coordinator = new StableRuntimeRecoveryCoordinator({
-    activator,
-    run: async () => doctorOk(),
-    probeJson: async () => ({ ok: false, status: 0, body: null }),
-    spawnTunnel: async () => { throw new Error('launch failed'); },
-    sleep: async () => {},
-  });
-
-  await assert.rejects(() => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }), StableRuntimeRecoveryError);
   assert.deepEqual(calls.stopPid, [222]);
+  assert.equal(tunnelStarts, 0);
 });
 
 test('target validation failure remains fail-closed and does not prepare or start runtime', async () => {
@@ -313,7 +301,11 @@ test('target validation failure remains fail-closed and does not prepare or star
     config, repo, checkout, runtime: 'down',
     onValidateTarget: async () => { throw new StableRuntimeActivationError('target unavailable', { phase: 'target_binding' }); },
   });
-  const coordinator = new StableRuntimeRecoveryCoordinator({ activator, run: async () => doctorOk(), probeJson: async () => ({ ok: false, status: 0 }), sleep: async () => {} });
+  const coordinator = new StableRuntimeRecoveryCoordinator({
+    activator,
+    probeJson: async () => ({ ok: true, status: 200 }),
+    sleep: async () => {},
+  });
 
   await assert.rejects(
     () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
