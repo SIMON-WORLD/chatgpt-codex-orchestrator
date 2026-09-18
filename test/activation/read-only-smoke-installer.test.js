@@ -62,7 +62,7 @@ test('installer updates config and requires a non-reused recovery when config ch
   const installer = new ReadOnlySmokeInstaller({
     fsImpl: fs,
     probeCurrent: async () => ({ sha: PREVIOUS, pid: 101 }),
-    stopCurrent: async (args) => { calls.push({ stop: args }); },
+    stopCurrent: async (args) => { calls.push({ stop: args }); return { stopped: true }; },
     recoverTarget: async (args) => {
       calls.push(args);
       return { status: 'PASS', sha: TARGET, runtime: { action: 'started', pid: 202 } };
@@ -102,7 +102,7 @@ test('activation failure restores original config and recovers the previously pr
   const installer = new ReadOnlySmokeInstaller({
     fsImpl: fs,
     probeCurrent: async () => ({ sha: PREVIOUS, pid: 101 }),
-    stopCurrent: async () => { calls.push({ stop: true }); },
+    stopCurrent: async () => { calls.push({ stop: true }); return { stopped: true }; },
     recoverTarget: async (args) => {
       calls.push(args);
       if (args.targetSha === TARGET) throw new Error('target activation failed');
@@ -135,7 +135,7 @@ test('rollback recovery failure is fail-closed and leaves original config restor
   const installer = new ReadOnlySmokeInstaller({
     fsImpl: fs,
     probeCurrent: async () => ({ sha: PREVIOUS, pid: 101 }),
-    stopCurrent: async () => {},
+    stopCurrent: async () => ({ stopped: true }),
     recoverTarget: async ({ targetSha }) => {
       if (targetSha === TARGET) throw new Error('target activation failed');
       throw new Error('rollback recovery failed');
@@ -151,6 +151,42 @@ test('rollback recovery failure is fail-closed and leaves original config restor
     },
   );
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
+});
+
+test('partial stop failure restores original config and recovers previous revision when the exact PID was already stopped', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'read-only-smoke-partial-stop-'));
+  const fixture = path.join(root, 'fixture');
+  fs.mkdirSync(fixture);
+  const configPath = path.join(root, 'stable.json');
+  const original = '{"workspaceRoots":[],"diagnostics":{"codex":{"enabled":false}}}\n';
+  fs.writeFileSync(configPath, original);
+
+  const recovered = [];
+  const installer = new ReadOnlySmokeInstaller({
+    fsImpl: fs,
+    probeCurrent: async () => ({ sha: PREVIOUS, pid: 505 }),
+    stopCurrent: async () => {
+      const error = new Error('listener release timed out');
+      error.details = { currentStopped: true };
+      throw error;
+    },
+    recoverTarget: async ({ targetSha }) => {
+      recovered.push(targetSha);
+      return { status: 'PASS', sha: targetSha, runtime: { action: 'started', pid: 506 } };
+    },
+  });
+
+  await assert.rejects(
+    () => installer.install({ fixturePath: fixture, configPath, targetSha: TARGET, repoPath: root }),
+    (error) => {
+      assert.ok(error instanceof ReadOnlySmokeInstallError);
+      assert.equal(error.details.rollback.status, 'restored');
+      assert.equal(error.details.rollback.sha, PREVIOUS);
+      return true;
+    },
+  );
+  assert.equal(fs.readFileSync(configPath, 'utf8'), original);
+  assert.deepEqual(recovered, [PREVIOUS]);
 });
 
 test('installer restarts even when the target revision already equals the serving revision so the profile reload is proven', async () => {
@@ -172,6 +208,7 @@ test('installer restarts even when the target revision already equals the servin
       assert.equal(pid, 404);
       assert.equal(sha, TARGET);
       stopped += 1;
+      return { stopped: true };
     },
     recoverTarget: async ({ targetSha }) => {
       assert.equal(targetSha, TARGET);
@@ -198,7 +235,7 @@ test('installer rejects a non-directory fixture before config mutation', async (
   const installer = new ReadOnlySmokeInstaller({
     fsImpl: fs,
     probeCurrent: async () => { probes += 1; return { sha: PREVIOUS, pid: 101 }; },
-    stopCurrent: async () => {},
+    stopCurrent: async () => ({ stopped: true }),
     recoverTarget: async () => ({ status: 'PASS' }),
   });
 
