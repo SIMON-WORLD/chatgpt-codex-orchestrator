@@ -20,26 +20,31 @@ Use `--repo <trusted-canonical-repo>` only when the Stable Runtime config declar
 
 ## One-time shared read-only smoke fixture install
 
-When the Human Principal has already chosen one exact disposable directory for the shared Local read-only smoke fixture, the same bounded recovery entrypoint can install that path and activate an exact accepted runtime revision in one host action:
+When the Human Principal has already chosen one exact disposable directory for the shared Local read-only smoke fixture, use the **standalone first-bootstrap artifact** as the one trusted host action.
+
+The bootstrap may be executed from outside a stale canonical checkout. For this fixture-install mode, `--config` is optional on the Windows dogfood host: when omitted, the bootstrap binds only to the single exact listener on the configured stable port (default 8745), reads that serving process's explicit `--config` argument, and verifies that config before any mutation. It does **not** scan the filesystem for config files.
+
+Conceptual invocation:
 
 ```powershell
-npm run recover:v0.2 -- --config <stable-v0.2-config.json> --sha <exact-40-hex-commit> --read-only-smoke-fixture <exact-human-approved-directory>
+node <standalone-stable-runtime-first-bootstrap.mjs> --sha <exact-40-hex-commit> --repo <trusted-canonical-repo> --read-only-smoke-fixture <exact-human-approved-directory>
 ```
 
-This mode is intentionally narrow:
+The bootstrap then materializes the exact target checkout and enters that revision's bounded recovery/fixture installer. The installer:
 
-- the fixture path must be supplied explicitly; the host does not scan, enumerate, infer, rank, or substitute directories;
-- the path must already exist and resolve to a directory;
-- if existing `workspaceRoot/workspaceRoots` already contain it, those roots are left unchanged;
-- otherwise only that exact canonical directory is added to `workspaceRoots`; its parent is not authorized;
-- `diagnostics.localReadOnlyFixture` is set to that same exact canonical directory;
-- unrelated Stable Runtime config values are preserved;
-- config replacement is atomic and the original config is kept only in memory for rollback;
-- activation uses the existing exact-revision recovery path;
-- if activation fails after the config change, the original config is restored and the previously proven serving revision is recovered under that original profile where safe proof is available;
-- this operation does not authorize any downstream project's real workspace and does not create a generic config/root management API.
+- requires the fixture path to be supplied explicitly; it never scans, enumerates, infers, ranks, or substitutes directories;
+- requires the path to already exist and resolve to a directory;
+- if existing `workspaceRoot/workspaceRoots` already contain it, leaves those roots unchanged;
+- otherwise adds only that exact canonical directory to `workspaceRoots`, never its parent;
+- sets `diagnostics.localReadOnlyFixture` to that same exact canonical directory;
+- preserves unrelated Stable Runtime config values;
+- atomically replaces the config;
+- proves the exact currently serving revision/PID, stops only that exact PID, and cold-starts the exact accepted target revision under the updated profile;
+- on failure restores the original config and recovers the previously proven serving revision where safe proof remains available;
+- does not authorize any downstream project's real workspace and does not create a generic config/root/process management API.
 
 Do not publish private machine paths in GitHub checkpoints. Durable evidence should record only that the Human-approved exact path was used and whether containment/activation/smoke verification passed.
+
 
 ## Deterministic target semantics
 
