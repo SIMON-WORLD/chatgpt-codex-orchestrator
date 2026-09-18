@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -84,12 +83,6 @@ function normalizeUrl(value) {
   return String(value || '').replace(/\/$/, '');
 }
 
-function summaryUrls(summary) {
-  return (String(summary || '').match(/https?:\/\/[^\s"'<>]+/gi) || [])
-    .map((candidate) => candidate.replace(/[),.;]+$/, ''))
-    .map(normalizeUrl);
-}
-
 function assertNoCriticalBindingEnv(env) {
   const present = CRITICAL_BINDING_ENV_VARS.filter((name) => env?.[name] !== undefined && String(env[name]).length > 0);
   if (present.length) {
@@ -97,54 +90,6 @@ function assertNoCriticalBindingEnv(env) {
       phase: 'profile_binding', envOverrides: present,
     });
   }
-}
-
-function tunnelProfileArgs(config, command) {
-  const tunnel = config.tunnel || {};
-  if (tunnel.profileFile) return [command, '--profile-file', tunnel.profileFile];
-  if (tunnel.profile && tunnel.profileDir) return [command, '--profile', tunnel.profile, '--profile-dir', tunnel.profileDir];
-  if (tunnel.profile) return [command, '--profile', tunnel.profile];
-  throw new StableRuntimeRecoveryError('Stable Runtime recovery requires one exact tunnel profile or profileFile', { phase: 'tunnel_profile_binding' });
-}
-
-function parseDoctorReport(stdout) {
-  try {
-    const report = JSON.parse(String(stdout || '').trim());
-    if (!report || typeof report !== 'object' || Array.isArray(report)) throw new Error('not an object');
-    return report;
-  } catch {
-    throw new StableRuntimeRecoveryError('tunnel-client doctor did not emit valid JSON', { phase: 'tunnel_preflight' });
-  }
-}
-
-function assertDoctorBinding(report, config) {
-  if (report.result !== 'ok') {
-    throw new StableRuntimeRecoveryError('tunnel-client doctor did not pass', {
-      phase: 'tunnel_preflight',
-      failedChecks: Array.isArray(report.failed_checks) ? report.failed_checks.slice(0, 20) : [],
-    });
-  }
-  const checks = Array.isArray(report.checks) ? report.checks : [];
-  const mcpCheck = checks.find((check) => check?.id === 'mcp_server_reachable');
-  const expected = normalizeUrl(config.tunnel.localMcpUrl);
-  const exactUrlProven = summaryUrls(mcpCheck?.summary).includes(expected);
-  if (!mcpCheck || mcpCheck.status !== 'pass' || !exactUrlProven) {
-    throw new StableRuntimeRecoveryError('tunnel profile does not prove the exact configured Local MCP endpoint', {
-      phase: 'tunnel_profile_binding', expectedLocalMcpUrl: expected,
-    });
-  }
-}
-
-async function defaultSpawnTunnel({ executable, args, env = process.env }) {
-  const child = spawn(executable, args, {
-    env, shell: false, windowsHide: true, detached: true, stdio: 'ignore',
-  });
-  await new Promise((resolve, reject) => {
-    child.once('spawn', resolve);
-    child.once('error', reject);
-  });
-  child.unref();
-  return { pid: child.pid, stop: () => { try { child.kill('SIGTERM'); } catch {} } };
 }
 
 function localExact(local, sha) {
@@ -167,7 +112,6 @@ export class StableRuntimeRecoveryCoordinator {
     activator = new StableRuntimeActivator(),
     run = runCommand,
     probeJson = null,
-    spawnTunnel = defaultSpawnTunnel,
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now = () => new Date().toISOString(),
     env = process.env,
@@ -175,7 +119,6 @@ export class StableRuntimeRecoveryCoordinator {
     this.activator = activator;
     this.run = run;
     this.probeJson = probeJson || activator.probeJson;
-    this.spawnTunnel = spawnTunnel;
     this.sleep = sleep;
     this.now = now;
     this.env = env;
@@ -254,41 +197,6 @@ export class StableRuntimeRecoveryCoordinator {
       await this.sleep(150);
     }
     throw new StableRuntimeRecoveryError('Stable Runtime did not become ready at the exact recovery revision', { phase: 'runtime_readiness', sha });
-  }
-
-  async _doctorTunnel(config) {
-    const args = [...tunnelProfileArgs(config, 'doctor'), '--json'];
-    let result;
-    try {
-      result = await this.run(config.tunnel.clientExecutable, args, { env: this.env });
-    } catch (error) {
-      let failedChecks = [];
-      try {
-        const report = JSON.parse(String(error?.result?.stdout || '').trim());
-        failedChecks = Array.isArray(report?.failed_checks) ? report.failed_checks.slice(0, 20) : [];
-      } catch {}
-      throw new StableRuntimeRecoveryError('tunnel-client doctor failed', {
-        phase: 'tunnel_preflight', failedChecks, cause: boundedCause(error),
-      });
-    }
-    const report = parseDoctorReport(result.stdout);
-    assertDoctorBinding(report, config);
-    return { result: 'ok', checkedLocalMcpUrl: normalizeUrl(config.tunnel.localMcpUrl) };
-  }
-
-  async _waitForTunnel(config, timeoutMs = 15000) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const tunnel = await this.probeJson(config.tunnel.healthUrl);
-      if (tunnel.ok) return { ok: true, status: tunnel.status };
-      if (tunnel.status && tunnel.status !== 0) {
-        throw new StableRuntimeRecoveryError('existing tunnel health endpoint is reachable but not ready; refusing duplicate launch', {
-          phase: 'tunnel_conflict', status: tunnel.status,
-        });
-      }
-      await this.sleep(150);
-    }
-    throw new StableRuntimeRecoveryError('external Secure Tunnel did not become ready at the configured health endpoint', { phase: 'tunnel_readiness' });
   }
 
   async recover({ targetSha = null, configPath, repoPath = null }) {
