@@ -14,6 +14,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { WorkspaceRegistry } from '../local/workspace.js';
+import { READ_ONLY_SMOKE_FIXTURE_NAME, readOnlySmokeFixtureContract } from '../local/read-only-smoke.js';
 import { MutationOwner } from '../state/mutation-owner.js';
 import { OperationState } from '../state/operation-state.js';
 import { ChangeSetService } from '../local/change-set.js';
@@ -79,7 +80,12 @@ export class BrainLocalRuntime {
     const allowedRoots = c.workspaceRoots.length ? c.workspaceRoots : (c.workspaceRoot ? [c.workspaceRoot] : []);
     if (!allowedRoots.length) throw new Error('v0.2 runtime requires a workspaceRoot / workspaceRoots');
     const fixtures = c.diagnostics?.localReadOnlyFixture
-      ? { read_only_smoke: c.diagnostics.localReadOnlyFixture }
+      ? {
+          [READ_ONLY_SMOKE_FIXTURE_NAME]: {
+            path: c.diagnostics.localReadOnlyFixture,
+            contract: readOnlySmokeFixtureContract(),
+          },
+        }
       : null;
     this.registry = new WorkspaceRegistry({ allowedRoots, fixtures });
 
