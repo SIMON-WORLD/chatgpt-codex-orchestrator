@@ -240,8 +240,10 @@ export class StableRuntimeRecoveryCoordinator {
           throw new StableRuntimeRecoveryError('serving runtime did not release the configured endpoint', {
             phase: 'cutover',
             pid,
+            currentStopped: true,
           });
         }
+        return { stopped: true };
       },
       recoverTarget: (args) => this.recover(args),
     });
