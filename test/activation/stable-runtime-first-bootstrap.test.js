@@ -35,6 +35,7 @@ function materializeTargetActivator(checkout) {
   fs.mkdirSync(path.join(checkout, 'host'), { recursive: true });
   fs.writeFileSync(path.join(checkout, 'host', 'stable-runtime-recover.mjs'), '// target recovery\n');
   fs.writeFileSync(path.join(checkout, 'src', 'activation', 'read-only-smoke-installer.js'), '// target fixture installer\n');
+  fs.writeFileSync(path.join(checkout, 'src', 'activation', 'authorized-workspace-root-installer.js'), '// target workspace root installer\n');
   fs.mkdirSync(path.join(checkout, 'src', 'local'), { recursive: true });
   fs.writeFileSync(path.join(checkout, 'src', 'local', 'read-only-smoke.js'), '// target fixture payload contract\n');
 }
@@ -144,6 +145,60 @@ test('first bootstrap fixture mode enters exact target recovery installer withou
   assert.equal(result.status, 'PASS');
   assert.equal(result.fixtureInstall, true);
   assert.equal(result.targetRecovery.activation.sha, SHA);
+});
+
+test('first bootstrap authorized-root mode enters exact target installer and returns no authorized path', async () => {
+  const { repo, configPath, checkout } = createBinding('stable-first-bootstrap-authorized-root-');
+  const authorizedRoot = path.join(path.dirname(repo), 'downstream-workspace');
+  fs.mkdirSync(authorizedRoot);
+
+  const run = async (file, args, options = {}) => {
+    if (file === 'netstat.exe') {
+      return { code: 0, stdout: '  TCP    127.0.0.1:8745       0.0.0.0:0      LISTENING       6161\r\n', stderr: '' };
+    }
+    if (file === 'powershell.exe') {
+      return { code: 0, stdout: `node scripts/v0.2-start.mjs --config "${configPath}"`, stderr: '' };
+    }
+    if (file === 'git' && args.includes('fetch')) return { code: 0, stdout: '', stderr: '' };
+    if (file === 'git' && args.includes('merge-base')) return { code: 0, stdout: '', stderr: '' };
+    if (file === 'git' && args.includes('worktree')) {
+      materializeTargetActivator(checkout);
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (file === 'git' && args.includes('rev-parse')) return { code: 0, stdout: `${SHA}\n`, stderr: '' };
+    if (file === 'git' && args.includes('status')) return { code: 0, stdout: '', stderr: '' };
+    if (file === process.execPath && args[0] === 'host/stable-runtime-recover.mjs') {
+      assert.equal(options.cwd, checkout);
+      assert.deepEqual(args.slice(1), [
+        '--sha', SHA,
+        '--config', configPath,
+        '--repo', repo,
+        '--authorized-workspace-root', authorizedRoot,
+      ]);
+      return {
+        code: 0,
+        stdout: `STABLE_RUNTIME_RECOVERY {"status":"PASS","operation":"authorized_workspace_root_install","rootAuthorized":true,"rootAdded":true,"configChanged":true,"previousSha":"${'b'.repeat(40)}","activation":{"status":"PASS","sha":"${SHA}","alreadyActive":false,"readiness":{"healthStatus":"ok","readyStatus":"ready","loopback":true,"hasAllowedRoots":true,"tunnelOk":true,"tunnelStatus":200},"tunnelLifecycle":"external-preserved"}}\n`,
+        stderr: '',
+      };
+    }
+    throw new Error(`unexpected command: ${file} ${args.join(' ')}`);
+  };
+
+  const result = await firstBootstrap(
+    { targetSha: SHA, repoPath: repo, authorizedWorkspaceRoot: authorizedRoot },
+    { run, fsImpl: fs, platform: 'win32' },
+  );
+
+  assert.equal(result.status, 'PASS');
+  assert.equal(result.sha, SHA);
+  assert.equal(result.workspaceRootAuthorization, true);
+  assert.equal(result.targetRecovery.rootAuthorized, true);
+  assert.equal(result.targetRecovery.activation.sha, SHA);
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes(authorizedRoot), false);
+  assert.equal('repo' in result, false);
+  assert.equal('configPath' in result, false);
+  assert.equal('checkout' in result, false);
 });
 
 test('first bootstrap starts from a stale canonical checkout with no activator source and enters the exact target activator', async () => {
