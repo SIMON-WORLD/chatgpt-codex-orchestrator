@@ -187,13 +187,18 @@ export class ReadOnlySmokeInstaller {
 
     let currentStopped = false;
     try {
-      await this.stopCurrent({
+      const stopResult = await this.stopCurrent({
         pid: previous?.pid,
         sha: previousSha,
         configPath: absoluteConfigPath,
         repoPath,
       });
-      currentStopped = true;
+      currentStopped = stopResult?.stopped === true;
+      if (!currentStopped) {
+        throw new ReadOnlySmokeInstallError('fixture installer could not prove that the exact serving runtime stopped', {
+          phase: 'stop_current_runtime',
+        });
+      }
 
       const recovery = await this.recoverTarget({
         targetSha: target,
@@ -217,6 +222,7 @@ export class ReadOnlySmokeInstaller {
       };
     } catch (error) {
       if (prepared.changed) writeTextAtomic(this.fs, absoluteConfigPath, originalText);
+      currentStopped = currentStopped || error?.details?.currentStopped === true;
 
       if (!currentStopped) {
         throw new ReadOnlySmokeInstallError('read-only smoke fixture activation failed before cutover', {
