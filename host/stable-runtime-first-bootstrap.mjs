@@ -308,6 +308,7 @@ export async function firstBootstrap(
         ...REQUIRED_TARGET_FILES,
         'host/stable-runtime-recover.mjs',
         'src/activation/read-only-smoke-installer.js',
+        'src/local/read-only-smoke.js',
       ]
     : REQUIRED_TARGET_FILES;
   const missing = requiredTargetFiles.filter((relative) => !fsImpl.existsSync(path.join(checkout, relative)));
