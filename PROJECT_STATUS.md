@@ -30,8 +30,14 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 - **Issue #64 / PR #65:** **CLOSED / ACCEPTED / MERGED**；default-off、fixed-schema、privacy-minimized、read-only Codex diagnostics 已作为 narrow `CHATGPT_DIRECT_LOCAL` capability 进入 `main`，不扩大普通 workspace trust、shell 或 mutation authority。
 - **Issue #66 / #67:** **CLOSED / FAIL-CLOSED SECURITY DECISION**；real-machine activation dogfood 证明 bounded serving-revision proof / invocation authorization 仍有 P1 operability gap；在缺少可 enforce 的 caller authorization boundary 时，不暴露 always-available one-shot diagnostic read，不为此引入 OAuth/RBAC/session registry/supervisor/generic runtime control plane。
 - **Issue #69 / #70 / PR #71:** **P0 INCIDENT CLOSED / CORRECTION ACCEPTED**；cross-repo Parent context contamination 暴露 capability ≠ authority 的 repository mutation gap；Repository Identity Fence 已 materialize：repository mutation 绑定 canonical `owner/name` mutable scope，mutation-time target mismatch 在第一笔写入前 fail closed；cross-repo read-only evidence acquisition 仍允许。
-- **Post-#70 reconciliation baseline:** `main@0484f6689032b44da7ebf49bd974b33eaa72ef0e` 包含 accepted Repository Identity Fence；后续 current truth 仍以 live `main` 为准。
-- **Observed Windows reboot P1:** real reboot/recovery 暴露 Local Capability Plane deployment operability friction：Stable Runtime + externally managed Secure Tunnel 缺少 deterministic reboot/login recovery entrypoint，并出现过 stale checkout/config/profile/port drift。该 finding 是 separate bounded P1 candidate，不由本状态 reconcile 自动授权实现。
+- **Post-#70 accepted maintenance lineage:** live `main` remains the repository truth; this recovery summary records accepted lineage only and intentionally does not carry a live mission pointer or pretend to be a second authority source.
+- **Issue #74 / #75 / PR #76:** **CLOSED / ACCEPTED / MERGED**；deterministic Windows reboot/login recovery entrypoint 已实现并合并。Task Scheduler / Startup 的真实安装与实际 reboot/logon dogfood 仍属于 Human Principal / host boundary；该实现不自动改变 release/default。
+- **Issue #77 / #78 / PR #79:** **CLOSED / ACCEPTED / MERGED**；reusable cross-project Operating Kernel/bootstrap foundation 已进入 `main`，提供 stable Project anchor、current-main-first、Native-first、capability ≠ authority 与 Repository Identity Fence 基线。
+- **Issue #81 / #82 / PR #83:** independent review 结论为 **CORRECTION_NEEDED**，随后 correction **CLOSED / ACCEPTED / MERGED**；恢复顺序被固化为 stable Project seed/anchor → project-local durable control → active mission **OR** next safe action → fresh runtime capability discovery → route/act；bounded GENESIS 仅用于 brand-new project，且不引入 central registry/supervisor。
+- **Issue #85 / #86 → #87 / PR #88:** **CLOSED / ACCEPTED / MERGED**；Project-wide seed 明确 role-neutral，session role 与 mutation authority 分离；现有成熟项目采用 `existing_control` / `materialize_control`，新项目使用 `new_genesis`，均保持 destination-project 自有 Parent/control/mission/privacy/writer 语义。
+- **Issue #89 / PR #91:** **CLOSED / ACCEPTED / MERGED**；first creation/materialization 必须使用 `scoped_identity`（exact existing provider container/root + stable control identity），而 `existing` 只表示已经存在的 exact control；创建后 exact provider pointer 是 readback evidence，不要求第二次 Project Settings 编辑。
+- **Issue #90 / PR #92:** **CLOSED / ACCEPTED / MERGED**；Local E1 获得显式 `read_only_smoke` fixture alias，真实路径由 Local owner 配置且必须仍处于既有 `workspaceRoots` 内；missing/outside-root fail closed，不做 filesystem/root enumeration，不 silent widen trust boundary。
+- **Downstream ownership boundary:** Notion Management、China Demand、Clash、upstream-contribution-control、DSH 等只作为 shared-kernel dogfood/archetype evidence；实际 durable control、Parent authority、mission/roadmap 与业务 acceptance 由各自 downstream Parent/owner 持有，orchestrator 不成为 central downstream supervisor。
 - **Version metadata:** release line 使用 `0.2.0` metadata；metadata 本身不证明 publication，formal release 仍由 GitHub tag / Release readback 证明。
 
 当前规范性 routing / executor / operating policy 见 [`CAPABILITY_ROUTING.md`](CAPABILITY_ROUTING.md)。Brain Continuity contract 见 [`docs/rfc-v0.2-brain-continuity.md`](docs/rfc-v0.2-brain-continuity.md)。v0.2.0 release/operator contract 见 [`docs/releases/v0.2.0.md`](docs/releases/v0.2.0.md)。
@@ -62,6 +68,25 @@ ChatGPT 负责调查、架构、决策、路由与最终验收。Codex 是 susta
 | Structured Codex diagnostics | **CLOSED / ACCEPTED** | Issue #64 / PR #65；default-off fixed-schema read-only diagnostics under Direct Local |
 | Diagnostic activation authorization review | **CLOSED / FAIL-CLOSED** | Issue #66 / #67；no always-available sensitive diagnostic invocation without enforceable caller authorization boundary |
 | Repository Identity Fence | **CLOSED / ACCEPTED** | Issue #69 / #70 / PR #71；canonical repo mutation scope + mutation-time assertion + cross-repo read preservation |
+| Deterministic Windows reboot recovery | **CLOSED / ACCEPTED** | Issue #74 / #75 / PR #76；deterministic reboot/login recovery entrypoint merged；real host install/reboot dogfood remains external boundary |
+| Reusable cross-project Operating Kernel bootstrap | **CLOSED / ACCEPTED** | Issue #77 / #78 / PR #79；stable cross-project kernel/bootstrap foundation |
+| Autonomous project-local control bootstrap | **CLOSED / ACCEPTED** | Issue #81 / #82 / PR #83；stable anchor → downstream-owned durable control → mission/nextSafeAction → fresh capability discovery；bounded GENESIS |
+| Role-neutral existing-project adoption | **CLOSED / ACCEPTED** | Issue #85 / #86 / #87 / PR #88；role-neutral Project seed + per-conversation role separation + new/existing/materialize adoption modes |
+| Scoped materialization locator semantics | **CLOSED / ACCEPTED** | Issue #89 / PR #91；first creation uses scoped identity under exact existing provider container；`existing` reserved for existing exact control |
+| Authorized Local E1 read-only fixture | **CLOSED / ACCEPTED** | Issue #90 / PR #92；`read_only_smoke` alias under preauthorized roots，no enumeration/no trust widening |
+
+## Cross-project Operating Kernel / adoption — ACCEPTED
+
+Current accepted bootstrap/adoption contract is deliberately split into stable shared facts, downstream-owned live control, and ephemeral runtime capability:
+
+- **Stable Project seed/anchor:** points to current shared kernel plus project/control discovery locators and fail-closed recovery rules only. It stores no live Issue/mission pointer, current Parent claim, runtime capability snapshot, transient executor IDs, or reusable mutation grant.
+- **Project-local durable control:** downstream project owns its Parent/mission/privacy/writer/acceptance truth. Recovery resolves active mission **or** `nextSafeAction` from that destination control, never by newest-Issue/recency guessing.
+- **Role-neutral conversations:** Project membership/instructions/title/memory/tool access never grant Parent authority. Fresh conversations are unbound/read-only unless a destination-specific ongoing/bounded/replacement binding is valid.
+- **Creation/adoption modes:** `new_genesis` is bounded first-control creation only；`existing_control` preserves a mature exact control without reset；`materialize_control` is a separately authorized minimal migration for mature projects lacking a stable control surface.
+- **Provider-real locator semantics:** first creation uses an exact already-existing container/root plus stable scoped identity and exact post-create readback；zero/multiple matches fail closed；no global title search or recency ranking.
+- **Runtime capability is ephemeral:** every session rediscovers current capability after durable recovery；Native-first routing remains separate from authority.
+- **No central downstream plane:** no project/session registry、watcher、scheduler、multi-Parent hierarchy、generic workflow engine or orchestrator-owned downstream supervisor.
+- **Dogfood ownership:** Notion Management、China Demand、Clash、upstream-contribution-control 与 DSH remain destination-owned evidence sources. Shared-kernel corrections may respond to their evidence, but their business/control decisions remain downstream-authoritative.
 
 ## M7 — Real-Project Capability Routing Dogfood
 
