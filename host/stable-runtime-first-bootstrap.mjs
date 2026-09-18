@@ -403,14 +403,22 @@ export async function firstBootstrap(
     });
   }
 
+  if (authorizedWorkspaceRoot) {
+    return {
+      status: 'PASS',
+      sha,
+      bootstrapArtifactIndependentOfCanonicalCheckout: true,
+      workspaceRootAuthorization: true,
+      targetRecovery: targetResult,
+    };
+  }
+
   return {
-    status: 'PASS', sha,
+    status: 'PASS', sha, repo, configPath: absoluteConfigPath, checkout,
     bootstrapArtifactIndependentOfCanonicalCheckout: true,
     ...(readOnlySmokeFixture
       ? { fixtureInstall: true, targetRecovery: targetResult }
-      : authorizedWorkspaceRoot
-        ? { workspaceRootAuthorization: true, targetRecovery: targetResult }
-        : { targetActivation: targetResult }),
+      : { targetActivation: targetResult }),
   };
 }
 
