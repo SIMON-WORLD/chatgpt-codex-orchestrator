@@ -73,6 +73,45 @@ test('MCP server binds loopback / healthz / readyz / initialize / tools / clean 
   assert.ok(typeof JSON.parse(textOf(gd)).diff === 'string');
 });
 
+test('workspace_open MCP schema exposes configured fixture alias and preserves exactly-one fail-closed semantics', async (t) => {
+  const { root, repo } = makeWorkspace();
+  const registry = new WorkspaceRegistry({
+    allowedRoots: [root],
+    fixtures: { read_only_smoke: repo },
+  });
+  const srv = await startMcpServer({ workspaceRegistry: registry, host: '127.0.0.1', port: 0, allowedRoots: [root] });
+  t.after(() => srv.close());
+
+  const client = new Client({ name: 'fixture-schema-test', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(srv.url));
+  t.after(() => client.close());
+
+  const tools = await client.listTools();
+  const workspaceOpen = tools.tools.find((tool) => tool.name === 'workspace_open');
+  assert.ok(workspaceOpen, 'workspace_open must be exposed');
+  assert.ok(workspaceOpen.inputSchema?.properties?.path, 'workspace_open schema must expose path');
+  assert.ok(workspaceOpen.inputSchema?.properties?.fixture, 'workspace_open schema must expose fixture');
+  assert.equal((workspaceOpen.inputSchema?.required || []).includes('path'), false, 'path must not be unconditionally required when fixture is supported');
+  assert.equal((workspaceOpen.inputSchema?.required || []).includes('fixture'), false, 'fixture must remain optional when explicit path is used');
+
+  const byFixture = await client.callTool({ name: 'workspace_open', arguments: { fixture: 'read_only_smoke' } });
+  const ws = JSON.parse(textOf(byFixture));
+  assert.ok(ws.workspaceId);
+  assert.equal(ws.fixture, 'read_only_smoke');
+  assert.equal(ws.root, fs.realpathSync.native(repo));
+
+  const neither = await client.callTool({ name: 'workspace_open', arguments: {} });
+  assert.equal(neither.isError, true);
+  assert.match(textOf(neither), /exactly one of path or fixture/i);
+
+  const both = await client.callTool({
+    name: 'workspace_open',
+    arguments: { path: repo, fixture: 'read_only_smoke' },
+  });
+  assert.equal(both.isError, true);
+  assert.match(textOf(both), /exactly one of path or fixture/i);
+});
+
 test('rejects malicious Host and non-local Origin, allows localhost', async (t) => {
   const { root, repo } = makeWorkspace();
   const registry = new WorkspaceRegistry({ allowedRoots: [root] });
