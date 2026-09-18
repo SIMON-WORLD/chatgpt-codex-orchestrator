@@ -14,6 +14,10 @@ import {
   ReadOnlySmokeInstallError,
   ReadOnlySmokeInstaller,
 } from '../src/activation/read-only-smoke-installer.js';
+import {
+  AuthorizedWorkspaceRootInstallError,
+  AuthorizedWorkspaceRootInstaller,
+} from '../src/activation/authorized-workspace-root-installer.js';
 
 const STATE_FILE = 'stable-runtime-active.json';
 const MAX_CAUSE_CHARS = 512;
@@ -172,6 +176,24 @@ export class StableRuntimeRecoveryCoordinator {
     }
   }
 
+  async installAuthorizedWorkspaceRoot({ workspaceRootPath, targetSha, configPath, repoPath = null }) {
+    const installer = new AuthorizedWorkspaceRootInstaller({
+      fsImpl: this.activator.fs,
+      platform: this.activator.platform,
+      probeCurrent: (args) => this._probeCurrentServing(args),
+      activateTarget: (args) => this.activator.activate(args),
+    });
+    try {
+      return await installer.install({ workspaceRootPath, targetSha, configPath, repoPath });
+    } catch (error) {
+      if (error instanceof StableRuntimeRecoveryError) throw error;
+      if (error instanceof AuthorizedWorkspaceRootInstallError) {
+        throw new StableRuntimeRecoveryError(error.message, safeDetails(error.details));
+      }
+      throw new StableRuntimeRecoveryError('authorized workspace root installation failed', { phase: 'workspace_root_install' });
+    }
+  }
+
   async _selectTarget({ targetSha, statePath, fingerprint, configPath }) {
     if (targetSha) return assertExactCommitSha(targetSha);
     const state = readJsonIfPresent(this.activator.fs, statePath);
@@ -311,6 +333,7 @@ function parseArgs(argv) {
     else if (arg === '--config') out.configPath = argv[++i];
     else if (arg === '--repo') out.repoPath = argv[++i];
     else if (arg === '--read-only-smoke-fixture') out.readOnlySmokeFixture = argv[++i];
+    else if (arg === '--authorized-workspace-root') out.authorizedWorkspaceRoot = argv[++i];
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
@@ -321,9 +344,10 @@ function usage() {
   return [
     'Stable Runtime deterministic reboot/login recovery', '', 'Usage:',
     '  node host/stable-runtime-recover.mjs --config <stable-v0.2-config.json> [--sha <exact-40-hex-commit>] [--repo <trusted-canonical-repo>]', 
-    '  node host/stable-runtime-recover.mjs --config <stable-v0.2-config.json> --sha <exact-40-hex-commit> --read-only-smoke-fixture <exact-human-approved-directory> [--repo <trusted-canonical-repo>]', '',
+    '  node host/stable-runtime-recover.mjs --config <stable-v0.2-config.json> --sha <exact-40-hex-commit> --read-only-smoke-fixture <exact-human-approved-directory> [--repo <trusted-canonical-repo>]',
+    '  node host/stable-runtime-recover.mjs --config <stable-v0.2-config.json> --sha <exact-40-hex-commit> --authorized-workspace-root <exact-human-approved-directory> [--repo <trusted-canonical-repo>]', '',
     'When --sha is omitted, normal recovery uses only a validated same-profile/same-config exact last-active revision. It never guesses latest/main/newest.',
-    'Fixture installation always requires an explicit exact --sha and exact Human-approved path; it never discovers or substitutes a directory.',
+    'Host authorization mutations always require an explicit exact --sha and exact Human-approved path; they never discover or substitute a directory.',
     'Tunnel credentials remain in the existing profile reference (for example env:CONTROL_PLANE_API_KEY); this command has no raw-secret CLI argument.',
   ].join('\n');
 }
@@ -339,7 +363,8 @@ async function main() {
   if (args.help) { process.stdout.write(`${usage()}\n`); return; }
   args.configPath ||= process.env.STABLE_RUNTIME_CONFIG;
   args.repoPath ||= process.env.STABLE_RUNTIME_REPO || null;
-  if (!args.configPath || (args.readOnlySmokeFixture && !args.targetSha)) {
+  const hostMutationModes = Number(Boolean(args.readOnlySmokeFixture)) + Number(Boolean(args.authorizedWorkspaceRoot));
+  if (!args.configPath || hostMutationModes > 1 || (hostMutationModes === 1 && !args.targetSha)) {
     process.stderr.write(`${usage()}\n`);
     process.exitCode = 2;
     return;
@@ -353,7 +378,14 @@ async function main() {
           configPath: args.configPath,
           repoPath: args.repoPath,
         })
-      : await coordinator.recover(args);
+      : args.authorizedWorkspaceRoot
+        ? await coordinator.installAuthorizedWorkspaceRoot({
+            workspaceRootPath: args.authorizedWorkspaceRoot,
+            targetSha: args.targetSha,
+            configPath: args.configPath,
+            repoPath: args.repoPath,
+          })
+        : await coordinator.recover(args);
     process.stdout.write(`STABLE_RUNTIME_RECOVERY ${JSON.stringify(result)}\n`);
   } catch (error) {
     process.stderr.write(`STABLE_RUNTIME_RECOVERY ${JSON.stringify(recoveryFailurePayload(error))}\n`);

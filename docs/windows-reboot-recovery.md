@@ -52,6 +52,27 @@ The bootstrap then materializes the exact target checkout and enters that revisi
 Do not publish private machine paths in GitHub checkpoints. Durable evidence should record only that the Human-approved exact path was used and whether containment/activation/smoke verification passed.
 
 
+## Exact Human-authorized workspace-root activation
+
+When a downstream Parent has already obtained Human authorization for one exact existing local workspace root, use the standalone first-bootstrap artifact with the dedicated authorized-root mode:
+
+```powershell
+node <standalone-stable-runtime-first-bootstrap.mjs> --sha <exact-40-hex-commit> --repo <trusted-canonical-repo> --authorized-workspace-root <exact-human-approved-directory>
+```
+
+This mode is deliberately separate from the shared smoke-fixture installer. It:
+
+- resolves only the exact supplied directory and verifies that it exists; it does not enumerate directory contents, scan parents, infer alternatives, or inspect downstream data;
+- ensures the exact canonical directory is present in `workspaceRoots`;
+- preserves existing effective root authorization, including legacy single `workspaceRoot` profiles;
+- preserves `diagnostics.localReadOnlyFixture` and all other unrelated profile settings;
+- atomically updates config only when needed;
+- force-reloads the exact accepted Stable Runtime through the existing prepare-before-cutover activator;
+- restores the original config and previously proven serving revision on activation failure when safe;
+- returns sanitized structured evidence only. The authorized workspace path is never echoed in the PASS payload.
+
+This host action authorizes Local MCP containment only. It does not itself inspect or mutate the downstream workspace and does not grant downstream mission/Parent authority.
+
 ## Deterministic target semantics
 
 Recovery accepts only:

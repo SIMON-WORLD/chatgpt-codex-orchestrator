@@ -256,10 +256,20 @@ export function firstBootstrapFailurePayload(error) {
 }
 
 export async function firstBootstrap(
-  { targetSha, configPath = null, repoPath = null, readOnlySmokeFixture = null, servingPort = DEFAULT_STABLE_PORT },
+  {
+    targetSha,
+    configPath = null,
+    repoPath = null,
+    readOnlySmokeFixture = null,
+    authorizedWorkspaceRoot = null,
+    servingPort = DEFAULT_STABLE_PORT,
+  },
   { fsImpl = fs, run = runCommand, platform = process.platform } = {},
 ) {
   const sha = exactSha(targetSha);
+  if (readOnlySmokeFixture && authorizedWorkspaceRoot) {
+    throw new StableRuntimeFirstBootstrapError('select only one host mutation mode', { phase: 'target_binding' });
+  }
   let resolvedConfigPath = configPath;
   if (!resolvedConfigPath) {
     resolvedConfigPath = (await discoverServingConfigPath(
@@ -303,12 +313,17 @@ export async function firstBootstrap(
     });
   }
 
-  const requiredTargetFiles = readOnlySmokeFixture
+  const hostMutationMode = Boolean(readOnlySmokeFixture || authorizedWorkspaceRoot);
+  const requiredTargetFiles = hostMutationMode
     ? [
         ...REQUIRED_TARGET_FILES,
         'host/stable-runtime-recover.mjs',
-        'src/activation/read-only-smoke-installer.js',
-        'src/local/read-only-smoke.js',
+        ...(readOnlySmokeFixture
+          ? ['src/activation/read-only-smoke-installer.js', 'src/local/read-only-smoke.js']
+          : []),
+        ...(authorizedWorkspaceRoot
+          ? ['src/activation/authorized-workspace-root-installer.js']
+          : []),
       ]
     : REQUIRED_TARGET_FILES;
   const missing = requiredTargetFiles.filter((relative) => !fsImpl.existsSync(path.join(checkout, relative)));
@@ -326,8 +341,16 @@ export async function firstBootstrap(
         '--repo', repo,
         '--read-only-smoke-fixture', readOnlySmokeFixture,
       ]
-    : ['scripts/stable-runtime-activate.mjs', '--sha', sha, '--config', absoluteConfigPath, '--repo', repo];
-  const evidencePrefix = readOnlySmokeFixture ? RECOVERY_EVIDENCE_PREFIX : ACTIVATION_EVIDENCE_PREFIX;
+    : authorizedWorkspaceRoot
+      ? [
+          'host/stable-runtime-recover.mjs',
+          '--sha', sha,
+          '--config', absoluteConfigPath,
+          '--repo', repo,
+          '--authorized-workspace-root', authorizedWorkspaceRoot,
+        ]
+      : ['scripts/stable-runtime-activate.mjs', '--sha', sha, '--config', absoluteConfigPath, '--repo', repo];
+  const evidencePrefix = hostMutationMode ? RECOVERY_EVIDENCE_PREFIX : ACTIVATION_EVIDENCE_PREFIX;
 
   let targetRun;
   try {
@@ -338,7 +361,7 @@ export async function firstBootstrap(
     );
   } catch (error) {
     const childResult = error?.result && typeof error.result === 'object' ? error.result : null;
-    const childFailure = readOnlySmokeFixture
+    const childFailure = hostMutationMode
       ? parseStructuredFailureEvidence(childResult?.stderr, childResult?.stdout, RECOVERY_EVIDENCE_PREFIX)
       : parseActivationFailureEvidence(childResult?.stderr, childResult?.stdout);
     if (childFailure) {
@@ -369,7 +392,7 @@ export async function firstBootstrap(
   const targetResult = parseTargetResult(
     targetRun.stdout,
     evidencePrefix,
-    readOnlySmokeFixture ? 'target recovery/fixture installer' : 'target activator',
+    hostMutationMode ? 'target recovery/host installer' : 'target activator',
   );
   const resultSha = targetResult?.sha || targetResult?.activation?.sha || targetResult?.recovery?.sha;
   if (targetResult?.status !== 'PASS' || resultSha !== sha) {
@@ -378,6 +401,16 @@ export async function firstBootstrap(
       sha,
       checkout,
     });
+  }
+
+  if (authorizedWorkspaceRoot) {
+    return {
+      status: 'PASS',
+      sha,
+      bootstrapArtifactIndependentOfCanonicalCheckout: true,
+      workspaceRootAuthorization: true,
+      targetRecovery: targetResult,
+    };
   }
 
   return {
@@ -397,6 +430,7 @@ function parseArgs(argv) {
     else if (arg === '--config') out.configPath = argv[++i];
     else if (arg === '--repo') out.repoPath = argv[++i];
     else if (arg === '--read-only-smoke-fixture') out.readOnlySmokeFixture = argv[++i];
+    else if (arg === '--authorized-workspace-root') out.authorizedWorkspaceRoot = argv[++i];
     else if (arg === '--serving-port') out.servingPort = Number(argv[++i]);
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`unknown argument: ${arg}`);
@@ -413,6 +447,7 @@ function usage() {
     '',
     'Normal activation: --sha <exact-40-hex-commit> [--config <stable-config>] [--repo <trusted-canonical-repo>]',
     'Fixture install: --sha <exact-40-hex-commit> --read-only-smoke-fixture <exact-human-approved-directory> [--repo <trusted-canonical-repo>] [--serving-port 8745]',
+    'Workspace-root authorization: --sha <exact-40-hex-commit> --authorized-workspace-root <exact-human-approved-directory> [--repo <trusted-canonical-repo>] [--serving-port 8745]',
     'When --config is omitted on Windows, the bootstrap binds only to the single exact serving Stable Runtime listener and reads its explicit process --config argument. It does not scan the filesystem.',
     'Equivalent host-launcher environment: STABLE_RUNTIME_TARGET_SHA, optional STABLE_RUNTIME_CONFIG / STABLE_RUNTIME_REPO.',
   ].join('\n');
