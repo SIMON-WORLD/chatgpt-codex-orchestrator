@@ -123,6 +123,61 @@ test('successful activation prepares before exact PID cutover and proves exact r
   assert.equal(events.some((event) => /taskkill|node\.exe.*kill|codex.*kill/i.test(event)), false);
 });
 
+test('forceRestart prepares before cutover even when the exact target revision is already serving', async () => {
+  const { repo, configPath, config } = tempBinding();
+  const events = [];
+  let oldStopped = false;
+  let targetStarted = false;
+  const run = async (file, args) => {
+    events.push(`run:${file}:${args.join(' ')}`);
+    if (args.includes('rev-parse')) return { code: 0, stdout: `${SHA}\n`, stderr: '' };
+    if (args.includes('status')) return { code: 0, stdout: '', stderr: '' };
+    if (file === 'netstat.exe') return {
+      code: 0,
+      stdout: oldStopped ? '' : 'TCP 127.0.0.1:8745 0.0.0.0:0 LISTENING 111\r\n',
+      stderr: '',
+    };
+    if (file === process.execPath && args.includes('--oneshot')) {
+      return { code: 0, stdout: 'V02_RUNTIME {"readyForLocalMcp":true}\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const probeJson = async (url) => {
+    if (url === config.tunnel.healthUrl) return { ok: true, status: 200, body: { status: 'ready' } };
+    return {
+      ok: true,
+      status: 200,
+      body: { status: url.endsWith('/healthz') ? 'ok' : 'ready', revision: SHA },
+    };
+  };
+  const activator = new StableRuntimeActivator({
+    platform: 'win32',
+    run,
+    probeJson,
+    loadConfig: () => config,
+    stopPid: (pid) => { events.push(`stop:${pid}`); oldStopped = true; },
+    spawnRuntime: async () => { events.push('start:target'); targetStarted = true; return { pid: 222 }; },
+    sleep: async () => {},
+  });
+
+  const reused = await activator.activate({ targetSha: SHA, configPath, repoPath: repo });
+  assert.equal(reused.alreadyActive, true);
+  assert.equal(events.some((event) => event.startsWith('stop:')), false);
+
+  events.length = 0;
+  oldStopped = false;
+  targetStarted = false;
+  const reloaded = await activator.activate({ targetSha: SHA, configPath, repoPath: repo, forceRestart: true });
+  assert.equal(reloaded.status, 'PASS');
+  assert.equal(reloaded.alreadyActive, false);
+  const npmCommand = npmCiCommand('win32', process.env);
+  const ci = events.findIndex((event) => event === `run:${npmCommand.file}:${npmCommand.args.join(' ')}`);
+  const preflight = events.findIndex((event) => event.includes('--oneshot'));
+  const stop = events.findIndex((event) => event === 'stop:111');
+  assert.ok(ci >= 0 && preflight > ci && stop > preflight, events.join(' | '));
+  assert.equal(targetStarted, true);
+});
+
 test('readiness failure restores only a previously recorded exact same-profile activation', async () => {
   const { repo, configPath, config } = tempBinding();
   const activationRoot = path.join(path.dirname(repo), `${path.basename(repo)}-runtime-activations`);
