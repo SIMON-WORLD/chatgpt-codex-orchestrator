@@ -9,6 +9,10 @@ import { Client } from '@modelcontextprotocol/client';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { startMcpServer } from '../../src/mcp/server.js';
 import { WorkspaceRegistry } from '../../src/local/workspace.js';
+import {
+  initializeReadOnlySmokeFixture,
+  readOnlySmokeFixtureContract,
+} from '../../src/local/read-only-smoke.js';
 
 function makeWorkspace() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-'));
@@ -110,6 +114,73 @@ test('workspace_open MCP schema exposes configured fixture alias and preserves e
   });
   assert.equal(both.isError, true);
   assert.match(textOf(both), /exactly one of path or fixture/i);
+});
+
+test('read_only_smoke alias contract drives read search git_status and git_diff without filename guessing', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-smoke-contract-'));
+  const fixture = path.join(root, 'fixture');
+  fs.mkdirSync(fixture);
+
+  await initializeReadOnlySmokeFixture(fixture, {
+    fsImpl: fs,
+    runGit: async (args, { cwd }) => ({
+      code: 0,
+      stdout: execFileSync('git', args, { cwd, encoding: 'utf8' }),
+      stderr: '',
+    }),
+  });
+
+  const registry = new WorkspaceRegistry({
+    allowedRoots: [root],
+    fixtures: {
+      read_only_smoke: {
+        path: fixture,
+        contract: readOnlySmokeFixtureContract(),
+      },
+    },
+  });
+  const srv = await startMcpServer({ workspaceRegistry: registry, host: '127.0.0.1', port: 0, allowedRoots: [root] });
+  t.after(() => srv.close());
+
+  const client = new Client({ name: 'smoke-contract-test', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(srv.url));
+  t.after(() => client.close());
+
+  const opened = await client.callTool({ name: 'workspace_open', arguments: { fixture: 'read_only_smoke' } });
+  const ws = JSON.parse(textOf(opened));
+  assert.equal(ws.fixture, 'read_only_smoke');
+  assert.equal(ws.isGitRepo, true);
+  assert.deepEqual(ws.fixtureContract, readOnlySmokeFixtureContract());
+
+  const rd = await client.callTool({
+    name: 'read',
+    arguments: { workspaceId: ws.workspaceId, path: ws.fixtureContract.readTarget },
+  });
+  const readResult = JSON.parse(textOf(rd));
+  assert.match(readResult.content, new RegExp(ws.fixtureContract.searchMarker));
+
+  const se = await client.callTool({
+    name: 'search',
+    arguments: { workspaceId: ws.workspaceId, query: ws.fixtureContract.searchMarker },
+  });
+  const searchResult = JSON.parse(textOf(se));
+  assert.equal(searchResult.count, 1);
+  assert.equal(searchResult.matches[0].path, ws.fixtureContract.readTarget);
+
+  const gs = await client.callTool({
+    name: 'git_status',
+    arguments: { workspaceId: ws.workspaceId },
+  });
+  const statusResult = JSON.parse(textOf(gs));
+  assert.match(statusResult.status, /smoke\.txt/);
+
+  const gd = await client.callTool({
+    name: 'git_diff',
+    arguments: { workspaceId: ws.workspaceId, mode: ws.fixtureContract.gitDiffMode },
+  });
+  const diffResult = JSON.parse(textOf(gd));
+  assert.equal(diffResult.mode, 'worktree');
+  assert.match(diffResult.diff, new RegExp(ws.fixtureContract.searchMarker));
 });
 
 test('rejects malicious Host and non-local Origin, allows localhost', async (t) => {
