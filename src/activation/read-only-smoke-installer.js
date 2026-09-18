@@ -144,13 +144,16 @@ export class ReadOnlySmokeInstaller {
     fsImpl = fs,
     platform = process.platform,
     probeCurrent,
+    stopCurrent,
     recoverTarget,
   } = {}) {
     if (typeof probeCurrent !== 'function') throw new Error('probeCurrent callback is required');
+    if (typeof stopCurrent !== 'function') throw new Error('stopCurrent callback is required');
     if (typeof recoverTarget !== 'function') throw new Error('recoverTarget callback is required');
     this.fs = fsImpl;
     this.platform = platform;
     this.probeCurrent = probeCurrent;
+    this.stopCurrent = stopCurrent;
     this.recoverTarget = recoverTarget;
   }
 
@@ -177,26 +180,21 @@ export class ReadOnlySmokeInstaller {
       canonicalizeRoot,
     });
 
-    if (!prepared.changed) {
-      const recovery = await this.recoverTarget({
-        targetSha: target,
+    const updatedText = prepared.changed
+      ? `${JSON.stringify(prepared.config, null, 2)}\n`
+      : originalText;
+    if (prepared.changed) writeTextAtomic(this.fs, absoluteConfigPath, updatedText);
+
+    let currentStopped = false;
+    try {
+      await this.stopCurrent({
+        pid: previous?.pid,
+        sha: previousSha,
         configPath: absoluteConfigPath,
         repoPath,
       });
-      return {
-        status: 'PASS',
-        operation: 'read_only_smoke_install',
-        fixtureConfigured: true,
-        configChanged: false,
-        rootAdded: false,
-        recovery,
-      };
-    }
+      currentStopped = true;
 
-    const updatedText = `${JSON.stringify(prepared.config, null, 2)}\n`;
-    writeTextAtomic(this.fs, absoluteConfigPath, updatedText);
-
-    try {
       const recovery = await this.recoverTarget({
         targetSha: target,
         configPath: absoluteConfigPath,
@@ -204,7 +202,7 @@ export class ReadOnlySmokeInstaller {
       });
       if (recovery?.runtime?.action === 'reused') {
         throw new ReadOnlySmokeInstallError(
-          'updated Stable Runtime config was not proven active because the runtime was reused',
+          'fixture installation requires a restarted runtime that proves the updated profile was loaded',
           { phase: 'activate_updated_profile' },
         );
       }
@@ -212,12 +210,22 @@ export class ReadOnlySmokeInstaller {
         status: 'PASS',
         operation: 'read_only_smoke_install',
         fixtureConfigured: true,
-        configChanged: true,
+        configChanged: prepared.changed,
         rootAdded: prepared.rootAdded,
+        previousSha,
         recovery,
       };
     } catch (error) {
-      writeTextAtomic(this.fs, absoluteConfigPath, originalText);
+      if (prepared.changed) writeTextAtomic(this.fs, absoluteConfigPath, originalText);
+
+      if (!currentStopped) {
+        throw new ReadOnlySmokeInstallError('read-only smoke fixture activation failed before cutover', {
+          phase: 'stop_current_runtime',
+          cause: error?.message || String(error),
+          rollback: { status: prepared.changed ? 'config_restored_runtime_unchanged' : 'runtime_unchanged' },
+        });
+      }
+
       let rollback;
       try {
         const restored = await this.recoverTarget({
