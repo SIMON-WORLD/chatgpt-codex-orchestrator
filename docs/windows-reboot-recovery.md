@@ -18,6 +18,29 @@ npm run recover:v0.2 -- --config <stable-v0.2-config.json> --sha <exact-40-hex-c
 
 Use `--repo <trusted-canonical-repo>` only when the Stable Runtime config declares more than one trusted repository. The selected path must resolve to an existing member of `worktree.trustedRepos`; recovery never broad-discovers a checkout and never treats `brain-command` config as repository authority.
 
+## One-time shared read-only smoke fixture install
+
+When the Human Principal has already chosen one exact disposable directory for the shared Local read-only smoke fixture, the same bounded recovery entrypoint can install that path and activate an exact accepted runtime revision in one host action:
+
+```powershell
+npm run recover:v0.2 -- --config <stable-v0.2-config.json> --sha <exact-40-hex-commit> --read-only-smoke-fixture <exact-human-approved-directory>
+```
+
+This mode is intentionally narrow:
+
+- the fixture path must be supplied explicitly; the host does not scan, enumerate, infer, rank, or substitute directories;
+- the path must already exist and resolve to a directory;
+- if existing `workspaceRoot/workspaceRoots` already contain it, those roots are left unchanged;
+- otherwise only that exact canonical directory is added to `workspaceRoots`; its parent is not authorized;
+- `diagnostics.localReadOnlyFixture` is set to that same exact canonical directory;
+- unrelated Stable Runtime config values are preserved;
+- config replacement is atomic and the original config is kept only in memory for rollback;
+- activation uses the existing exact-revision recovery path;
+- if activation fails after the config change, the original config is restored and the previously proven serving revision is recovered under that original profile where safe proof is available;
+- this operation does not authorize any downstream project's real workspace and does not create a generic config/root management API.
+
+Do not publish private machine paths in GitHub checkpoints. Durable evidence should record only that the Human-approved exact path was used and whether containment/activation/smoke verification passed.
+
 ## Deterministic target semantics
 
 Recovery accepts only:

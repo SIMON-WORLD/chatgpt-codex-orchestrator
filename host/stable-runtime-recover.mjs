@@ -11,6 +11,10 @@ import {
   runCommand,
   stableProfileFingerprint,
 } from '../src/activation/stable-runtime-activator.js';
+import {
+  ReadOnlySmokeInstallError,
+  ReadOnlySmokeInstaller,
+} from '../src/activation/read-only-smoke-installer.js';
 
 const STATE_FILE = 'stable-runtime-active.json';
 const MAX_CAUSE_CHARS = 512;
@@ -150,6 +154,14 @@ function localExact(local, sha) {
     && local.ready?.body?.revision === sha;
 }
 
+function exactServingRevision(local) {
+  const health = String(local.health?.body?.revision || '').trim().toLowerCase();
+  const ready = String(local.ready?.body?.revision || '').trim().toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(health) || health !== ready) return null;
+  if (local.health?.ok !== true || local.ready?.ok !== true) return null;
+  return health;
+}
+
 export class StableRuntimeRecoveryCoordinator {
   constructor({
     activator = new StableRuntimeActivator(),
@@ -179,6 +191,46 @@ export class StableRuntimeRecoveryCoordinator {
     }
     tunnelProfileArgs(config, 'doctor');
     return binding;
+  }
+
+  async _probeCurrentServing({ configPath, repoPath = null }) {
+    const absoluteConfigPath = path.resolve(String(configPath || ''));
+    if (!configPath || !this.activator.fs.existsSync(absoluteConfigPath)) {
+      throw new StableRuntimeRecoveryError('existing Stable Runtime config file is required', { phase: 'profile_binding' });
+    }
+    assertNoCriticalBindingEnv(this.env);
+    const config = this.activator.loadConfig(absoluteConfigPath);
+    const { baseUrl } = this._requireRecoveryProfile(config);
+    this.activator._resolveTrustedRepo(config, repoPath);
+    const local = await this.activator._probeLocal(baseUrl);
+    const sha = exactServingRevision(local);
+    const pids = await this.activator._listeningPids(config);
+    if (!sha || pids.length !== 1) {
+      throw new StableRuntimeRecoveryError('current Stable Runtime revision is not exactly proven for reversible fixture installation', {
+        phase: 'current_runtime_binding',
+        exactRevisionProven: Boolean(sha),
+        listenerCount: pids.length,
+      });
+    }
+    return { sha, pid: pids[0] };
+  }
+
+  async installReadOnlySmoke({ fixturePath, targetSha, configPath, repoPath = null }) {
+    const installer = new ReadOnlySmokeInstaller({
+      fsImpl: this.activator.fs,
+      platform: this.activator.platform,
+      probeCurrent: (args) => this._probeCurrentServing(args),
+      recoverTarget: (args) => this.recover(args),
+    });
+    try {
+      return await installer.install({ fixturePath, targetSha, configPath, repoPath });
+    } catch (error) {
+      if (error instanceof StableRuntimeRecoveryError) throw error;
+      if (error instanceof ReadOnlySmokeInstallError) {
+        throw new StableRuntimeRecoveryError(error.message, safeDetails(error.details));
+      }
+      throw new StableRuntimeRecoveryError(error?.message || String(error), { phase: 'fixture_install' });
+    }
   }
 
   async _selectTarget({ targetSha, statePath, fingerprint, configPath }) {
@@ -367,6 +419,7 @@ function parseArgs(argv) {
     if (arg === '--sha') out.targetSha = argv[++i];
     else if (arg === '--config') out.configPath = argv[++i];
     else if (arg === '--repo') out.repoPath = argv[++i];
+    else if (arg === '--read-only-smoke-fixture') out.readOnlySmokeFixture = argv[++i];
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
@@ -376,8 +429,10 @@ function parseArgs(argv) {
 function usage() {
   return [
     'Stable Runtime deterministic reboot/login recovery', '', 'Usage:',
-    '  node host/stable-runtime-recover.mjs --config <stable-v0.2-config.json> [--sha <exact-40-hex-commit>] [--repo <trusted-canonical-repo>]', '',
-    'When --sha is omitted, recovery uses only a validated same-profile/same-config exact last-active revision. It never guesses latest/main/newest.',
+    '  node host/stable-runtime-recover.mjs --config <stable-v0.2-config.json> [--sha <exact-40-hex-commit>] [--repo <trusted-canonical-repo>]', 
+    '  node host/stable-runtime-recover.mjs --config <stable-v0.2-config.json> --sha <exact-40-hex-commit> --read-only-smoke-fixture <exact-human-approved-directory> [--repo <trusted-canonical-repo>]', '',
+    'When --sha is omitted, normal recovery uses only a validated same-profile/same-config exact last-active revision. It never guesses latest/main/newest.',
+    'Fixture installation always requires an explicit exact --sha and exact Human-approved path; it never discovers or substitutes a directory.',
     'Tunnel credentials remain in the existing profile reference (for example env:CONTROL_PLANE_API_KEY); this command has no raw-secret CLI argument.',
   ].join('\n');
 }
@@ -391,9 +446,23 @@ async function main() {
     return;
   }
   if (args.help) { process.stdout.write(`${usage()}\n`); return; }
-  if (!args.configPath) { process.stderr.write(`${usage()}\n`); process.exitCode = 2; return; }
+  args.configPath ||= process.env.STABLE_RUNTIME_CONFIG;
+  args.repoPath ||= process.env.STABLE_RUNTIME_REPO || null;
+  if (!args.configPath || (args.readOnlySmokeFixture && !args.targetSha)) {
+    process.stderr.write(`${usage()}\n`);
+    process.exitCode = 2;
+    return;
+  }
   try {
-    const result = await new StableRuntimeRecoveryCoordinator().recover(args);
+    const coordinator = new StableRuntimeRecoveryCoordinator();
+    const result = args.readOnlySmokeFixture
+      ? await coordinator.installReadOnlySmoke({
+          fixturePath: args.readOnlySmokeFixture,
+          targetSha: args.targetSha,
+          configPath: args.configPath,
+          repoPath: args.repoPath,
+        })
+      : await coordinator.recover(args);
     process.stdout.write(`STABLE_RUNTIME_RECOVERY ${JSON.stringify(result)}\n`);
   } catch (error) {
     process.stderr.write(`STABLE_RUNTIME_RECOVERY ${JSON.stringify(recoveryFailurePayload(error))}\n`);
