@@ -107,6 +107,9 @@ export function applyExactAuthorizedWorkspaceRoot(
   const existing = Array.isArray(config.workspaceRoots)
     ? config.workspaceRoots.filter(Boolean).map((entry) => String(entry))
     : [];
+  if (existing.length === 0 && config.workspaceRoot) {
+    existing.push(String(config.workspaceRoot));
+  }
 
   const exactPresent = existing.some(
     (entry) => normalizeForCompare(entry, platform) === normalizeForCompare(exactRoot, platform),
