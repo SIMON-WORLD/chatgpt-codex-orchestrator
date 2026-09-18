@@ -331,7 +331,7 @@ export class StableRuntimeActivator {
     } catch { return null; }
   }
 
-  async activate({ targetSha, configPath, repoPath = null }) {
+  async activate({ targetSha, configPath, repoPath = null, forceRestart = false }) {
     const sha = assertExactCommitSha(targetSha);
     const absoluteConfigPath = path.resolve(String(configPath || ''));
     if (!configPath || !this.fs.existsSync(absoluteConfigPath)) throw new StableRuntimeActivationError('existing Stable Runtime config file is required', { phase: 'profile_binding', configPath: absoluteConfigPath });
@@ -347,7 +347,7 @@ export class StableRuntimeActivator {
     await this._validateTarget(repo, sha);
 
     const current = await this._probeLocal(baseUrl);
-    if (current.health.ok && current.ready.ok && current.health.body?.revision === sha && current.ready.body?.revision === sha) {
+    if (!forceRestart && current.health.ok && current.ready.ok && current.health.body?.revision === sha && current.ready.body?.revision === sha) {
       const tunnel = await this._requireTunnelReady(config);
       return { status: 'PASS', alreadyActive: true, sha, repo, configPath: absoluteConfigPath, profileFingerprint: fingerprint, evidence: { healthz: current.health.body, readyz: current.ready.body, tunnel } };
     }
