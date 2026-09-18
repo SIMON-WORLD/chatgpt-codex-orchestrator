@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 const EXACT_SHA_RE = /^[0-9a-f]{40}$/i;
 const ACTIVATION_EVIDENCE_PREFIX = 'STABLE_RUNTIME_ACTIVATION ';
+const RECOVERY_EVIDENCE_PREFIX = 'STABLE_RUNTIME_RECOVERY ';
+const DEFAULT_STABLE_PORT = 8745;
 const MAX_STRUCTURED_STRING_CHARS = 2048;
 const MAX_STRUCTURED_ARRAY_ITEMS = 20;
 const MAX_STRUCTURED_OBJECT_KEYS = 50;
@@ -59,6 +61,83 @@ export async function runCommand(file, args, { cwd = undefined, env = process.en
       reject(error);
     });
   });
+}
+
+function windowsListeningPids(output, { host = '127.0.0.1', port = DEFAULT_STABLE_PORT } = {}) {
+  const wantedHost = String(host).toLowerCase();
+  const wantedPort = Number(port);
+  const pids = new Set();
+  for (const rawLine of String(output || '').split(/\r?\n/)) {
+    const parts = rawLine.trim().split(/\s+/);
+    if (parts.length < 5 || parts[0]?.toUpperCase() !== 'TCP' || parts[3]?.toUpperCase() !== 'LISTENING') continue;
+    const match = parts[1].match(/^\[([^\]]+)\]:(\d+)$/) || parts[1].match(/^(.*):(\d+)$/);
+    if (!match || match[1].toLowerCase() !== wantedHost || Number(match[2]) !== wantedPort) continue;
+    const pid = Number(parts[4]);
+    if (Number.isInteger(pid) && pid > 0) pids.add(pid);
+  }
+  return [...pids];
+}
+
+export function configPathFromServingCommandLine(commandLine) {
+  const line = String(commandLine || '');
+  if (!/v0\.2-start\.mjs/i.test(line)) return null;
+  const match = line.match(/(?:^|\s)--config(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))/i);
+  return (match?.[1] || match?.[2] || match?.[3] || '').trim() || null;
+}
+
+export async function discoverServingConfigPath(
+  { host = '127.0.0.1', port = DEFAULT_STABLE_PORT } = {},
+  { run = runCommand, fsImpl = fs, platform = process.platform } = {},
+) {
+  if (platform !== 'win32') {
+    throw new StableRuntimeFirstBootstrapError('serving config discovery is supported only on the Windows Stable Runtime host', {
+      phase: 'config_binding',
+      platform,
+    });
+  }
+
+  let netstat;
+  try { netstat = await run('netstat.exe', ['-ano', '-p', 'TCP']); }
+  catch {
+    throw new StableRuntimeFirstBootstrapError('unable to inspect the configured Stable Runtime listener', { phase: 'config_binding' });
+  }
+  const pids = windowsListeningPids(netstat.stdout, { host, port });
+  if (pids.length !== 1) {
+    throw new StableRuntimeFirstBootstrapError('expected exactly one Stable Runtime listener for config binding', {
+      phase: 'config_binding',
+      listenerCount: pids.length,
+      host,
+      port,
+    });
+  }
+
+  const pid = pids[0];
+  const script = `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; if ($null -eq $p) { exit 3 }; [Console]::Out.Write($p.CommandLine)`;
+  let processInfo;
+  try {
+    processInfo = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
+  } catch {
+    throw new StableRuntimeFirstBootstrapError('unable to read the exact Stable Runtime process binding', {
+      phase: 'config_binding',
+      pid,
+    });
+  }
+  const configPath = configPathFromServingCommandLine(processInfo.stdout);
+  if (!configPath) {
+    throw new StableRuntimeFirstBootstrapError('serving process does not expose the expected explicit Stable Runtime --config binding', {
+      phase: 'config_binding',
+      pid,
+    });
+  }
+
+  const absolute = path.resolve(configPath);
+  if (!fsImpl.existsSync(absolute)) {
+    throw new StableRuntimeFirstBootstrapError('serving Stable Runtime config binding does not exist', {
+      phase: 'config_binding',
+      pid,
+    });
+  }
+  return { configPath: absolute, pid };
 }
 
 function loadBootstrapBinding(fsImpl, configPath, repoPath, platform) {
@@ -130,18 +209,22 @@ function boundedStructuredValue(value, depth = 0) {
   return out;
 }
 
-export function parseActivationFailureEvidence(stderr, stdout) {
+export function parseStructuredFailureEvidence(stderr, stdout, prefix) {
   for (const output of [stderr, stdout]) {
     for (const line of String(output || '').split(/\r?\n/)) {
-      if (!line.startsWith(ACTIVATION_EVIDENCE_PREFIX)) continue;
+      if (!line.startsWith(prefix)) continue;
       try {
-        const payload = JSON.parse(line.slice(ACTIVATION_EVIDENCE_PREFIX.length));
+        const payload = JSON.parse(line.slice(prefix.length));
         if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.status !== 'FAIL') continue;
         return boundedStructuredValue(payload);
       } catch {}
     }
   }
   return null;
+}
+
+export function parseActivationFailureEvidence(stderr, stdout) {
+  return parseStructuredFailureEvidence(stderr, stdout, ACTIVATION_EVIDENCE_PREFIX);
 }
 
 function boundedOutputSnippet(output) {
@@ -157,11 +240,11 @@ function boundedOutputSnippet(output) {
     : `${redacted.slice(0, MAX_FALLBACK_CHARS - 3)}...`;
 }
 
-function parseActivationResult(output) {
-  const line = String(output || '').split(/\r?\n/).find((entry) => entry.startsWith(ACTIVATION_EVIDENCE_PREFIX));
-  if (!line) throw new StableRuntimeFirstBootstrapError('target activator did not emit structured activation evidence', { phase: 'target_activator' });
-  try { return JSON.parse(line.slice(ACTIVATION_EVIDENCE_PREFIX.length)); }
-  catch { throw new StableRuntimeFirstBootstrapError('target activator emitted invalid structured activation evidence', { phase: 'target_activator' }); }
+function parseTargetResult(output, prefix, label) {
+  const line = String(output || '').split(/\r?\n/).find((entry) => entry.startsWith(prefix));
+  if (!line) throw new StableRuntimeFirstBootstrapError(`${label} did not emit structured evidence`, { phase: 'target_activator' });
+  try { return JSON.parse(line.slice(prefix.length)); }
+  catch { throw new StableRuntimeFirstBootstrapError(`${label} emitted invalid structured evidence`, { phase: 'target_activator' }); }
 }
 
 export function firstBootstrapFailurePayload(error) {
@@ -173,11 +256,18 @@ export function firstBootstrapFailurePayload(error) {
 }
 
 export async function firstBootstrap(
-  { targetSha, configPath, repoPath = null },
+  { targetSha, configPath = null, repoPath = null, readOnlySmokeFixture = null, servingPort = DEFAULT_STABLE_PORT },
   { fsImpl = fs, run = runCommand, platform = process.platform } = {},
 ) {
   const sha = exactSha(targetSha);
-  const { absoluteConfigPath, repo } = loadBootstrapBinding(fsImpl, configPath, repoPath, platform);
+  let resolvedConfigPath = configPath;
+  if (!resolvedConfigPath) {
+    resolvedConfigPath = (await discoverServingConfigPath(
+      { port: servingPort },
+      { run, fsImpl, platform },
+    )).configPath;
+  }
+  const { absoluteConfigPath, repo } = loadBootstrapBinding(fsImpl, resolvedConfigPath, repoPath, platform);
 
   try {
     await run('git', ['-C', repo, 'fetch', '--quiet', 'origin', 'main']);
@@ -213,23 +303,43 @@ export async function firstBootstrap(
     });
   }
 
-  const missing = REQUIRED_TARGET_FILES.filter((relative) => !fsImpl.existsSync(path.join(checkout, relative)));
+  const requiredTargetFiles = readOnlySmokeFixture
+    ? [
+        ...REQUIRED_TARGET_FILES,
+        'host/stable-runtime-recover.mjs',
+        'src/activation/read-only-smoke-installer.js',
+      ]
+    : REQUIRED_TARGET_FILES;
+  const missing = requiredTargetFiles.filter((relative) => !fsImpl.existsSync(path.join(checkout, relative)));
   if (missing.length) {
     throw new StableRuntimeFirstBootstrapError('exact target checkout does not contain the full Stable Runtime activator', {
       phase: 'prepare_target_checkout', checkout, missing,
     });
   }
 
+  const targetArgs = readOnlySmokeFixture
+    ? [
+        'host/stable-runtime-recover.mjs',
+        '--sha', sha,
+        '--config', absoluteConfigPath,
+        '--repo', repo,
+        '--read-only-smoke-fixture', readOnlySmokeFixture,
+      ]
+    : ['scripts/stable-runtime-activate.mjs', '--sha', sha, '--config', absoluteConfigPath, '--repo', repo];
+  const evidencePrefix = readOnlySmokeFixture ? RECOVERY_EVIDENCE_PREFIX : ACTIVATION_EVIDENCE_PREFIX;
+
   let targetRun;
   try {
     targetRun = await run(
       process.execPath,
-      ['scripts/stable-runtime-activate.mjs', '--sha', sha, '--config', absoluteConfigPath, '--repo', repo],
+      targetArgs,
       { cwd: checkout, env: process.env },
     );
   } catch (error) {
     const childResult = error?.result && typeof error.result === 'object' ? error.result : null;
-    const childFailure = parseActivationFailureEvidence(childResult?.stderr, childResult?.stdout);
+    const childFailure = readOnlySmokeFixture
+      ? parseStructuredFailureEvidence(childResult?.stderr, childResult?.stdout, RECOVERY_EVIDENCE_PREFIX)
+      : parseActivationFailureEvidence(childResult?.stderr, childResult?.stdout);
     if (childFailure) {
       const details = {
         bootstrapPhase: 'target_activator',
@@ -255,17 +365,26 @@ export async function firstBootstrap(
     });
   }
 
-  const targetActivation = parseActivationResult(targetRun.stdout);
-  if (targetActivation?.status !== 'PASS' || targetActivation?.sha !== sha) {
-    throw new StableRuntimeFirstBootstrapError('target activator did not prove PASS for the exact requested SHA', {
-      phase: 'target_activator', sha, checkout, targetActivation,
+  const targetResult = parseTargetResult(
+    targetRun.stdout,
+    evidencePrefix,
+    readOnlySmokeFixture ? 'target recovery/fixture installer' : 'target activator',
+  );
+  const resultSha = targetResult?.sha || targetResult?.recovery?.sha;
+  if (targetResult?.status !== 'PASS' || resultSha !== sha) {
+    throw new StableRuntimeFirstBootstrapError('target host action did not prove PASS for the exact requested SHA', {
+      phase: 'target_activator',
+      sha,
+      checkout,
     });
   }
 
   return {
     status: 'PASS', sha, repo, configPath: absoluteConfigPath, checkout,
     bootstrapArtifactIndependentOfCanonicalCheckout: true,
-    targetActivation,
+    ...(readOnlySmokeFixture
+      ? { fixtureInstall: true, targetRecovery: targetResult }
+      : { targetActivation: targetResult }),
   };
 }
 
@@ -276,6 +395,8 @@ function parseArgs(argv) {
     if (arg === '--sha') out.targetSha = argv[++i];
     else if (arg === '--config') out.configPath = argv[++i];
     else if (arg === '--repo') out.repoPath = argv[++i];
+    else if (arg === '--read-only-smoke-fixture') out.readOnlySmokeFixture = argv[++i];
+    else if (arg === '--serving-port') out.servingPort = Number(argv[++i]);
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`unknown argument: ${arg}`);
   }
@@ -289,8 +410,10 @@ function usage() {
     'This file is intentionally self-contained and may live outside a stale canonical checkout.',
     'It accepts one Parent-approved exact SHA plus the existing Stable Runtime config, materializes an isolated exact target checkout, then enters the target checkout activator.',
     '',
-    'Arguments: --sha <exact-40-hex-commit> --config <existing-stable-v0.2-config.json> [--repo <trusted-canonical-repo>]',
-    'Equivalent host-launcher environment: STABLE_RUNTIME_TARGET_SHA, STABLE_RUNTIME_CONFIG, optional STABLE_RUNTIME_REPO.',
+    'Normal activation: --sha <exact-40-hex-commit> [--config <stable-config>] [--repo <trusted-canonical-repo>]',
+    'Fixture install: --sha <exact-40-hex-commit> --read-only-smoke-fixture <exact-human-approved-directory> [--repo <trusted-canonical-repo>] [--serving-port 8745]',
+    'When --config is omitted on Windows, the bootstrap binds only to the single exact serving Stable Runtime listener and reads its explicit process --config argument. It does not scan the filesystem.',
+    'Equivalent host-launcher environment: STABLE_RUNTIME_TARGET_SHA, optional STABLE_RUNTIME_CONFIG / STABLE_RUNTIME_REPO.',
   ].join('\n');
 }
 
@@ -309,7 +432,8 @@ async function main() {
   args.targetSha ||= process.env.STABLE_RUNTIME_TARGET_SHA;
   args.configPath ||= process.env.STABLE_RUNTIME_CONFIG;
   args.repoPath ||= process.env.STABLE_RUNTIME_REPO || null;
-  if (!args.targetSha || !args.configPath) {
+  args.servingPort ||= DEFAULT_STABLE_PORT;
+  if (!args.targetSha) {
     process.stderr.write(`${usage()}\n`);
     process.exitCode = 2;
     return;
