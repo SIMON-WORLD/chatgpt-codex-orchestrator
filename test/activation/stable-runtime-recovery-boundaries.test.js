@@ -12,10 +12,8 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stable-recovery-boundary-'));
   const repo = path.join(root, 'repo');
   const configPath = path.join(root, 'stable.json');
-  const tunnelExecutable = path.join(root, 'tunnel-client.exe');
   fs.mkdirSync(repo, { recursive: true });
   fs.writeFileSync(configPath, '{}\n');
-  fs.writeFileSync(tunnelExecutable, 'binary-placeholder');
   const config = {
     host: '127.0.0.1',
     port: 8745,
@@ -26,10 +24,10 @@ function fixture() {
     codex: { bin: 'codex', runtimeProfile: path.join(root, 'codex-home'), extraArgs: [] },
     tunnel: {
       external: true,
-      clientExecutable: tunnelExecutable,
-      profile: 'stable-v02',
+      clientExecutable: null,
+      profile: null,
       profileFile: null,
-      profileDir: path.join(root, 'profiles'),
+      profileDir: null,
       localMcpUrl: 'http://127.0.0.1:8745/mcp',
       healthUrl: 'http://127.0.0.1:8081/readyz',
     },
@@ -41,21 +39,6 @@ function exactLocal() {
   return {
     health: { ok: true, status: 200, body: { status: 'ok', revision: SHA } },
     ready: { ok: true, status: 200, body: { status: 'ready', revision: SHA } },
-  };
-}
-
-function doctorOk(config) {
-  return {
-    code: 0,
-    stdout: JSON.stringify({
-      result: 'ok',
-      checks: [
-        { id: 'control_plane_api_key', status: 'pass', summary: 'runtime key reference resolved' },
-        { id: 'mcp_server_reachable', status: 'pass', summary: `HTTP 200 from ${config.tunnel.localMcpUrl}` },
-      ],
-      failed_checks: [],
-    }),
-    stderr: '',
   };
 }
 
@@ -102,66 +85,50 @@ test('critical binding environment override fails before config loading or proce
   assert.equal(loaded, 0);
 });
 
-test('exact runtime up with tunnel down starts only the configured external tunnel', async () => {
+test('external tunnel down fails closed and recovery never tries to launch it', async () => {
   const { repo, configPath, config } = fixture();
   const { activator, spawnRuntimeCalls } = exactRuntimeActivator({ config, repo });
-  let tunnelReady = false;
   let tunnelStarts = 0;
+  let runCalls = 0;
   const coordinator = new StableRuntimeRecoveryCoordinator({
     activator,
     env: {},
-    run: async () => doctorOk(config),
-    probeJson: async () => tunnelReady
-      ? { ok: true, status: 200, body: { status: 'ready' } }
-      : { ok: false, status: 0, body: null },
-    spawnTunnel: async ({ executable, args }) => {
-      tunnelStarts += 1;
-      assert.equal(executable, config.tunnel.clientExecutable);
-      assert.deepEqual(args, ['run', '--profile', 'stable-v02', '--profile-dir', config.tunnel.profileDir]);
-      tunnelReady = true;
-      return { pid: 333, stop: () => { tunnelReady = false; } };
-    },
-    sleep: async () => {},
-  });
-
-  const result = await coordinator.recover({ targetSha: SHA, configPath, repoPath: repo });
-  assert.equal(result.status, 'PASS');
-  assert.deepEqual(result.runtime, { action: 'reused', pid: 111 });
-  assert.deepEqual(result.tunnel, { action: 'started', pid: 333 });
-  assert.equal(spawnRuntimeCalls(), 0);
-  assert.equal(tunnelStarts, 1);
-});
-
-test('missing or rejected tunnel credential reference fails non-secret preflight and never launches tunnel', async () => {
-  const { repo, configPath, config } = fixture();
-  const { activator } = exactRuntimeActivator({ config, repo });
-  let tunnelStarts = 0;
-  const coordinator = new StableRuntimeRecoveryCoordinator({
-    activator,
-    env: {},
-    run: async () => {
-      const error = new Error('tunnel-client exited with code 1');
-      error.result = {
-        code: 1,
-        stdout: JSON.stringify({ result: 'error', failed_checks: ['control_plane_api_key'] }),
-        stderr: '',
-      };
-      throw error;
-    },
+    run: async () => { runCalls += 1; throw new Error('doctor must not run'); },
     probeJson: async () => ({ ok: false, status: 0, body: null }),
     spawnTunnel: async () => { tunnelStarts += 1; return { pid: 333, stop() {} }; },
+    sleep: async () => {},
   });
 
   await assert.rejects(
     () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
-    (error) => {
-      assert.ok(error instanceof StableRuntimeRecoveryError);
-      assert.equal(error.details.phase, 'tunnel_preflight');
-      assert.deepEqual(error.details.failedChecks, ['control_plane_api_key']);
-      assert.equal(JSON.stringify(error.details).includes('CONTROL_PLANE_API_KEY='), false);
-      return true;
-    },
+    (error) => error instanceof StableRuntimeRecoveryError && error.details.phase === 'tunnel_readiness',
   );
+  assert.equal(spawnRuntimeCalls(), 0);
+  assert.equal(tunnelStarts, 0);
+  assert.equal(runCalls, 0);
+});
+
+test('external ready recovery requires no tunnel executable/profile/doctor and reuses readiness only', async () => {
+  const { repo, configPath, config } = fixture();
+  const { activator } = exactRuntimeActivator({ config, repo });
+  let tunnelStarts = 0;
+  let runCalls = 0;
+  const coordinator = new StableRuntimeRecoveryCoordinator({
+    activator,
+    env: {},
+    run: async () => { runCalls += 1; throw new Error('doctor must not run'); },
+    probeJson: async () => ({ ok: true, status: 200, body: { status: 'ready' } }),
+    spawnTunnel: async () => { tunnelStarts += 1; return { pid: 333, stop() {} }; },
+  });
+
+  const result = await coordinator.recover({ targetSha: SHA, configPath, repoPath: repo });
+  assert.equal(result.status, 'PASS');
+  assert.deepEqual(result.tunnel, { action: 'reused', status: 200 });
+  assert.deepEqual(result.tunnelPreflight, {
+    mode: 'external-readiness-only',
+    checkedLocalMcpUrl: config.tunnel.localMcpUrl,
+  });
+  assert.equal(runCalls, 0);
   assert.equal(tunnelStarts, 0);
 });
 
@@ -183,21 +150,22 @@ test('untrusted or stale requested repo binding fails closed before target valid
   assert.equal(targetValidations, 0);
 });
 
-test('reachable-but-not-ready tunnel endpoint refuses duplicate tunnel launch', async () => {
+test('reachable-but-not-ready external tunnel fails readiness and is never restarted by recovery', async () => {
   const { repo, configPath, config } = fixture();
   const { activator } = exactRuntimeActivator({ config, repo });
   let tunnelStarts = 0;
   const coordinator = new StableRuntimeRecoveryCoordinator({
     activator,
     env: {},
-    run: async () => doctorOk(config),
     probeJson: async () => ({ ok: false, status: 503, body: { status: 'starting' } }),
     spawnTunnel: async () => { tunnelStarts += 1; return { pid: 333, stop() {} }; },
   });
 
   await assert.rejects(
     () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
-    (error) => error instanceof StableRuntimeRecoveryError && error.details.phase === 'tunnel_conflict',
+    (error) => error instanceof StableRuntimeRecoveryError
+      && error.details.phase === 'tunnel_readiness'
+      && error.details.status === 503,
   );
   assert.equal(tunnelStarts, 0);
 });
