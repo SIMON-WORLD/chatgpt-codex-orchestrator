@@ -370,7 +370,7 @@ export async function firstBootstrap(
     evidencePrefix,
     readOnlySmokeFixture ? 'target recovery/fixture installer' : 'target activator',
   );
-  const resultSha = targetResult?.sha || targetResult?.recovery?.sha;
+  const resultSha = targetResult?.sha || targetResult?.activation?.sha || targetResult?.recovery?.sha;
   if (targetResult?.status !== 'PASS' || resultSha !== sha) {
     throw new StableRuntimeFirstBootstrapError('target host action did not prove PASS for the exact requested SHA', {
       phase: 'target_activator',
