@@ -3,18 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { StableRuntimeRecoveryCoordinator, StableRuntimeRecoveryError } from '../../host/stable-runtime-recover.mjs';
+import { StableRuntimeRecoveryCoordinator } from '../../host/stable-runtime-recover.mjs';
 
 const SHA = 'a'.repeat(40);
 
-test('tunnel doctor requires the exact configured Local MCP URL, not a prefix-containing URL', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stable-recovery-doctor-'));
+test('external recovery accepts null tunnel executable/profile and never invokes tunnel doctor', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stable-recovery-external-'));
   const repo = path.join(root, 'repo');
   const configPath = path.join(root, 'stable.json');
-  const tunnelExecutable = path.join(root, 'tunnel-client.exe');
   fs.mkdirSync(repo, { recursive: true });
   fs.writeFileSync(configPath, '{}\n');
-  fs.writeFileSync(tunnelExecutable, 'binary-placeholder');
 
   const config = {
     host: '127.0.0.1',
@@ -26,10 +24,10 @@ test('tunnel doctor requires the exact configured Local MCP URL, not a prefix-co
     codex: { bin: 'codex', runtimeProfile: path.join(root, 'codex-home'), extraArgs: [] },
     tunnel: {
       external: true,
-      clientExecutable: tunnelExecutable,
-      profile: 'stable-v02',
+      clientExecutable: null,
+      profile: null,
       profileFile: null,
-      profileDir: path.join(root, 'profiles'),
+      profileDir: null,
       localMcpUrl: 'http://127.0.0.1:8745/mcp',
       healthUrl: 'http://127.0.0.1:8081/readyz',
     },
@@ -55,28 +53,19 @@ test('tunnel doctor requires the exact configured Local MCP URL, not a prefix-co
     spawnRuntime: async () => { throw new Error('must not spawn runtime'); },
   };
 
+  let runCalls = 0;
   let tunnelStarts = 0;
   const coordinator = new StableRuntimeRecoveryCoordinator({
     activator,
     env: {},
-    run: async () => ({
-      code: 0,
-      stdout: JSON.stringify({
-        result: 'ok',
-        checks: [
-          { id: 'mcp_server_reachable', status: 'pass', summary: 'HTTP 200 from http://127.0.0.1:8745/mcp.evil' },
-        ],
-        failed_checks: [],
-      }),
-      stderr: '',
-    }),
+    run: async () => { runCalls += 1; throw new Error('doctor must not run'); },
     probeJson: async () => ({ ok: true, status: 200, body: { status: 'ready' } }),
     spawnTunnel: async () => { tunnelStarts += 1; return { pid: 333, stop() {} }; },
   });
 
-  await assert.rejects(
-    () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
-    (error) => error instanceof StableRuntimeRecoveryError && error.details.phase === 'tunnel_profile_binding',
-  );
+  const result = await coordinator.recover({ targetSha: SHA, configPath, repoPath: repo });
+  assert.equal(result.status, 'PASS');
+  assert.equal(result.tunnelPreflight.mode, 'external-readiness-only');
+  assert.equal(runCalls, 0);
   assert.equal(tunnelStarts, 0);
 });

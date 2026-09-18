@@ -65,20 +65,17 @@ The entrypoint preserves the existing Stable Runtime and Secure Tunnel ownership
    - No listener: prepare the exact clean detached checkout, run the existing non-authoritative activation preflight, and cold-start that exact runtime.
    - One healthy runtime proving the exact target revision: reuse it.
    - Wrong/unknown revision, an unproven listener, or listener ambiguity: fail closed. Recovery does not kill an unknown process.
-4. Run the configured `tunnel-client doctor ... --json` against the exact configured profile. The doctor must pass and must prove the profile reaches the exact configured `tunnel.localMcpUrl` before recovery can launch or reuse the tunnel.
-5. Inspect `tunnel.healthUrl`.
-   - Ready: reuse the external tunnel.
-   - Unreachable: launch only the configured tunnel executable/profile with `shell:false`.
-   - Reachable but not ready: fail closed rather than starting a duplicate tunnel.
-6. PASS only after Local `/healthz` and `/readyz` both prove the exact target revision and the configured external tunnel `/readyz` is ready.
+4. Preserve the externally managed Secure Tunnel lifecycle. Recovery does **not** require a tunnel-client executable/profile, does not run `tunnel-client doctor`, and never launches/stops/reconfigures tunnel-client when `tunnel.external=true`.
+5. Inspect the already-configured `tunnel.healthUrl`.
+   - Ready: record the external tunnel as reused.
+   - Unreachable or not ready: fail closed with `tunnel_readiness`; tunnel lifecycle recovery belongs to its external owner.
+6. PASS only after Local `/healthz` and `/readyz` both prove the exact target revision and the configured external tunnel readiness endpoint is ready.
 
-The Stable Runtime still uses `tunnel.external=true`; the runtime itself does not acquire tunnel lifecycle ownership. The recovery coordinator only ensures the already-configured external tunnel for this bounded recovery attempt.
+The Stable Runtime uses `tunnel.external=true`; both runtime activation and deterministic recovery therefore own only the orchestrator process. Secure Tunnel lifecycle remains external.
 
 ## Credentials and logs
 
-The recovery CLI has **no raw credential argument**. Tunnel credentials stay in the existing tunnel profile reference, for example `env:CONTROL_PLANE_API_KEY`. Do not paste API keys into the recovery command, repository files, task metadata, or PowerShell history.
-
-`tunnel-client doctor` is used as the supported bounded profile check. Recovery emits only structured, bounded evidence and redacts sensitive assignment-shaped values from failure causes. A missing or rejected credential reference is a non-secret `tunnel_preflight` failure, not a reason to accept or persist a replacement raw secret.
+The recovery CLI has **no raw credential argument** and no tunnel credential/profile handling in external mode. Do not paste API keys into the recovery command, repository files, task metadata, or PowerShell history. Recovery emits only structured, bounded evidence and redacts sensitive assignment-shaped values from failure causes.
 
 ## Failure phases
 
@@ -87,12 +84,10 @@ The recovery CLI has **no raw credential argument**. Tunnel credentials stay in 
 - `profile_binding` / `target_binding` — config, trusted repo, exact target, or durable target state is invalid;
 - `runtime_conflict` — the configured endpoint has a wrong/unproven/ambiguous listener;
 - `runtime_start` / `runtime_readiness` — the exact runtime could not start or prove readiness;
-- `tunnel_profile_binding` / `tunnel_preflight` — the configured tunnel profile cannot be validated without guessing or the doctor fails;
-- `tunnel_conflict` — the configured tunnel health endpoint is reachable but not ready, so duplicate launch is refused;
-- `tunnel_start` / `tunnel_readiness` — the exact configured tunnel could not start or become ready;
+- `tunnel_readiness` — the externally managed Secure Tunnel readiness endpoint is not ready; recovery does not take over its lifecycle;
 - `joint_readiness` — one side lost exact readiness before the final proof.
 
-If recovery itself cold-started a runtime and later fails, cleanup is limited to that exact runtime PID. If it launched a tunnel and later fails, cleanup uses only that exact child process handle. Recovery never uses name-based/global process termination.
+If recovery itself cold-started a runtime and later fails, cleanup is limited to that exact runtime PID. Recovery never owns, launches, or stops the external Secure Tunnel and never uses name-based/global process termination.
 
 ## Troubleshooting boundary
 
