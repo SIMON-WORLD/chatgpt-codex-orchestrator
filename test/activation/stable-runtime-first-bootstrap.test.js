@@ -35,6 +35,8 @@ function materializeTargetActivator(checkout) {
   fs.mkdirSync(path.join(checkout, 'host'), { recursive: true });
   fs.writeFileSync(path.join(checkout, 'host', 'stable-runtime-recover.mjs'), '// target recovery\n');
   fs.writeFileSync(path.join(checkout, 'src', 'activation', 'read-only-smoke-installer.js'), '// target fixture installer\n');
+  fs.mkdirSync(path.join(checkout, 'src', 'local'), { recursive: true });
+  fs.writeFileSync(path.join(checkout, 'src', 'local', 'read-only-smoke.js'), '// target fixture payload contract\n');
 }
 
 function gitBootstrapRun({ checkout, onTargetActivator }) {

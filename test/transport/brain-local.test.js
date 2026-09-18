@@ -5,6 +5,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createBrainLocalRuntime, loadV02Config } from '../../src/transport/brain-local.js';
+import { readOnlySmokeFixtureContract } from '../../src/local/read-only-smoke.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_TUNNEL = path.join(__dirname, '..', '..', 'test-fixtures', 'tunnel', 'fake-tunnel-client.mjs');
@@ -121,6 +122,7 @@ test('configured local read-only fixture is wired into WorkspaceRegistry without
     const opened = runtime.registry.open({ fixture: 'read_only_smoke' });
     assert.equal(opened.fixture, 'read_only_smoke');
     assert.equal(opened.root, fs.realpathSync.native(fixture));
+    assert.deepEqual(opened.fixtureContract, readOnlySmokeFixtureContract());
   } finally {
     await runtime.close();
   }

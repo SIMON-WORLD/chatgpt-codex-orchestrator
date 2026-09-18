@@ -1,5 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  ReadOnlySmokeFixtureError,
+  initializeReadOnlySmokeFixture,
+} from '../local/read-only-smoke.js';
 
 const EXACT_SHA_RE = /^[0-9a-f]{40}$/i;
 
@@ -145,18 +149,34 @@ export class ReadOnlySmokeInstaller {
     platform = process.platform,
     probeCurrent,
     activateTarget,
+    runGit,
   } = {}) {
     if (typeof probeCurrent !== 'function') throw new Error('probeCurrent callback is required');
     if (typeof activateTarget !== 'function') throw new Error('activateTarget callback is required');
+    if (typeof runGit !== 'function') throw new Error('runGit callback is required');
     this.fs = fsImpl;
     this.platform = platform;
     this.probeCurrent = probeCurrent;
     this.activateTarget = activateTarget;
+    this.runGit = runGit;
   }
 
   async install({ fixturePath, configPath, targetSha, repoPath = null }) {
     const target = exactSha(targetSha, 'target SHA');
     const canonicalFixture = realpathDirectory(this.fs, fixturePath);
+    let fixturePayload;
+    try {
+      fixturePayload = await initializeReadOnlySmokeFixture(canonicalFixture, {
+        fsImpl: this.fs,
+        runGit: this.runGit,
+      });
+    } catch (error) {
+      if (error instanceof ReadOnlySmokeFixtureError) {
+        throw new ReadOnlySmokeInstallError(error.message, error.details);
+      }
+      throw error;
+    }
+
     const absoluteConfigPath = path.resolve(String(configPath || ''));
     if (!configPath || !this.fs.existsSync(absoluteConfigPath)) {
       throw new ReadOnlySmokeInstallError('existing Stable Runtime config file is required', { phase: 'profile_binding' });
@@ -200,6 +220,8 @@ export class ReadOnlySmokeInstaller {
         fixtureConfigured: true,
         configChanged: prepared.changed,
         rootAdded: prepared.rootAdded,
+        fixturePayloadInitialized: true,
+        fixtureContract: fixturePayload.contract,
         previousSha,
         activation,
       };

@@ -36,7 +36,13 @@ The bootstrap then materializes the exact target checkout and enters that revisi
 - requires the path to already exist and resolve to a directory;
 - if existing `workspaceRoot/workspaceRoots` already contain it, leaves those roots unchanged;
 - otherwise adds only that exact canonical directory to `workspaceRoots`, never its parent;
+- initializes that exact directory as the deterministic shared smoke payload before changing runtime config:
+  - minimal Git repository;
+  - `smoke.txt` with marker `READ_ONLY_SMOKE_V1`;
+  - intent-to-add state so normal worktree `git diff` is non-empty without creating a commit or requiring Git identity;
+  - unknown pre-existing top-level content or sentinel mismatch fails closed rather than being overwritten;
 - sets `diagnostics.localReadOnlyFixture` to that same exact canonical directory;
+- exposes a bounded fixture contract from `workspace_open({ fixture: "read_only_smoke" })` containing the exact relative read target, search marker, and git-diff mode;
 - preserves unrelated Stable Runtime config values;
 - atomically replaces the config;
 - proves the exact currently serving revision/PID, stops only that exact PID, and cold-starts the exact accepted target revision under the updated profile;

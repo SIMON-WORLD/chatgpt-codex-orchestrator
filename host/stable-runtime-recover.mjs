@@ -159,6 +159,7 @@ export class StableRuntimeRecoveryCoordinator {
       platform: this.activator.platform,
       probeCurrent: (args) => this._probeCurrentServing(args),
       activateTarget: (args) => this.activator.activate(args),
+      runGit: (args, options) => this.activator.run('git', args, options),
     });
     try {
       return await installer.install({ fixturePath, targetSha, configPath, repoPath });

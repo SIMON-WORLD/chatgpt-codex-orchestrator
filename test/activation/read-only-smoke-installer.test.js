@@ -3,14 +3,38 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import {
   ReadOnlySmokeInstallError,
   ReadOnlySmokeInstaller,
   applyExactReadOnlySmokeFixture,
 } from '../../src/activation/read-only-smoke-installer.js';
+import {
+  READ_ONLY_SMOKE_CONTENT,
+  READ_ONLY_SMOKE_READ_TARGET,
+  READ_ONLY_SMOKE_SEARCH_MARKER,
+  initializeReadOnlySmokeFixture,
+} from '../../src/local/read-only-smoke.js';
 
 const TARGET = 'a'.repeat(40);
 const PREVIOUS = 'b'.repeat(40);
+
+async function runGit(args, { cwd }) {
+  return {
+    code: 0,
+    stdout: execFileSync('git', args, { cwd, encoding: 'utf8' }),
+    stderr: '',
+  };
+}
+
+function makeInstaller(fsImpl = fs, activateTarget = async () => ({ status: 'PASS', sha: TARGET, alreadyActive: false, pid: 202 })) {
+  return new ReadOnlySmokeInstaller({
+    fsImpl,
+    probeCurrent: async () => ({ sha: PREVIOUS, pid: 101 }),
+    activateTarget,
+    runGit,
+  });
+}
 
 test('exact fixture config adds only the exact path when no configured root contains it', () => {
   const raw = {
@@ -47,7 +71,69 @@ test('exact fixture config does not widen roots when an existing authorized root
   assert.equal(result.config.diagnostics.localReadOnlyFixture, 'C:\\approved\\smoke');
 });
 
-test('installer atomically updates config and delegates prepare-before-cutover to forced activation', async () => {
+test('empty dedicated directory initializes deterministic Git fixture payload', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'read-only-smoke-payload-'));
+  const fixture = path.join(root, 'fixture');
+  fs.mkdirSync(fixture);
+
+  const result = await initializeReadOnlySmokeFixture(fixture, { fsImpl: fs, runGit });
+
+  assert.equal(result.gitInitialized, true);
+  assert.equal(result.sentinelCreated, true);
+  assert.equal(fs.readFileSync(path.join(fixture, READ_ONLY_SMOKE_READ_TARGET), 'utf8'), READ_ONLY_SMOKE_CONTENT);
+  assert.ok(fs.existsSync(path.join(fixture, '.git')));
+  assert.equal(result.contract.readTarget, READ_ONLY_SMOKE_READ_TARGET);
+  assert.equal(result.contract.searchMarker, READ_ONLY_SMOKE_SEARCH_MARKER);
+
+  const status = execFileSync('git', ['status', '--short'], { cwd: fixture, encoding: 'utf8' });
+  assert.match(status, /smoke\.txt/);
+  const diff = execFileSync('git', ['diff', '--no-ext-diff'], { cwd: fixture, encoding: 'utf8' });
+  assert.match(diff, /READ_ONLY_SMOKE_V1/);
+});
+
+test('fixture payload initialization is idempotent', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'read-only-smoke-idempotent-'));
+  const fixture = path.join(root, 'fixture');
+  fs.mkdirSync(fixture);
+
+  const first = await initializeReadOnlySmokeFixture(fixture, { fsImpl: fs, runGit });
+  const second = await initializeReadOnlySmokeFixture(fixture, { fsImpl: fs, runGit });
+
+  assert.equal(first.gitInitialized, true);
+  assert.equal(first.sentinelCreated, true);
+  assert.equal(second.gitInitialized, false);
+  assert.equal(second.sentinelCreated, false);
+  assert.equal(fs.readFileSync(path.join(fixture, READ_ONLY_SMOKE_READ_TARGET), 'utf8'), READ_ONLY_SMOKE_CONTENT);
+});
+
+test('fixture initialization fails closed on unknown pre-existing content', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'read-only-smoke-unknown-'));
+  const fixture = path.join(root, 'fixture');
+  fs.mkdirSync(fixture);
+  fs.writeFileSync(path.join(fixture, 'user-data.txt'), 'do not touch', 'utf8');
+
+  await assert.rejects(
+    () => initializeReadOnlySmokeFixture(fixture, { fsImpl: fs, runGit }),
+    /unexpected pre-existing content/i,
+  );
+  assert.equal(fs.existsSync(path.join(fixture, '.git')), false);
+  assert.equal(fs.readFileSync(path.join(fixture, 'user-data.txt'), 'utf8'), 'do not touch');
+});
+
+test('fixture initialization fails closed on sentinel tampering', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'read-only-smoke-tamper-'));
+  const fixture = path.join(root, 'fixture');
+  fs.mkdirSync(fixture);
+  fs.writeFileSync(path.join(fixture, READ_ONLY_SMOKE_READ_TARGET), 'tampered\n', 'utf8');
+
+  await assert.rejects(
+    () => initializeReadOnlySmokeFixture(fixture, { fsImpl: fs, runGit }),
+    /sentinel content mismatch/i,
+  );
+  assert.equal(fs.readFileSync(path.join(fixture, READ_ONLY_SMOKE_READ_TARGET), 'utf8'), 'tampered\n');
+});
+
+test('installer initializes fixture payload before atomically updating config and forcing activation', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'read-only-smoke-install-'));
   const fixture = path.join(root, 'fixture');
   fs.mkdirSync(fixture);
@@ -66,12 +152,16 @@ test('installer atomically updates config and delegates prepare-before-cutover t
       calls.push(args);
       return { status: 'PASS', sha: TARGET, alreadyActive: false, pid: 202 };
     },
+    runGit,
   });
 
   const result = await installer.install({ fixturePath: fixture, configPath, targetSha: TARGET, repoPath: root });
 
   assert.equal(result.status, 'PASS');
   assert.equal(result.fixtureConfigured, true);
+  assert.equal(result.fixturePayloadInitialized, true);
+  assert.equal(result.fixtureContract.readTarget, READ_ONLY_SMOKE_READ_TARGET);
+  assert.equal(result.fixtureContract.searchMarker, READ_ONLY_SMOKE_SEARCH_MARKER);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].targetSha, TARGET);
   assert.equal(calls[0].forceRestart, true);
@@ -79,6 +169,7 @@ test('installer atomically updates config and delegates prepare-before-cutover t
   assert.equal(saved.diagnostics.localReadOnlyFixture, fs.realpathSync(fixture));
   assert.deepEqual(saved.workspaceRoots, [fs.realpathSync(fixture)]);
   assert.deepEqual(saved.unrelated, { keep: true });
+  assert.equal(fs.readFileSync(path.join(fixture, READ_ONLY_SMOKE_READ_TARGET), 'utf8'), READ_ONLY_SMOKE_CONTENT);
 });
 
 test('activation failure restores original config and force-reloads the previously proven revision', async () => {
@@ -102,6 +193,7 @@ test('activation failure restores original config and force-reloads the previous
       if (args.targetSha === TARGET) throw new Error('target activation failed');
       return { status: 'PASS', sha: PREVIOUS, alreadyActive: false, pid: 303 };
     },
+    runGit,
   });
 
   await assert.rejects(
@@ -136,6 +228,7 @@ test('rollback activation failure is fail-closed and still leaves original confi
       if (targetSha === TARGET) throw new Error('target activation failed');
       throw new Error('rollback activation failed');
     },
+    runGit,
   });
 
   await assert.rejects(
@@ -167,6 +260,7 @@ test('same serving and target revision still force-restarts to prove the changed
       calls.push(args);
       return { status: 'PASS', sha: TARGET, alreadyActive: false, pid: 405 };
     },
+    runGit,
   });
 
   const result = await installer.install({ fixturePath: fixture, configPath, targetSha: TARGET, repoPath: root });
@@ -190,6 +284,7 @@ test('installer rejects a non-directory fixture before config mutation or activa
     fsImpl: fs,
     probeCurrent: async () => { probes += 1; return { sha: PREVIOUS, pid: 101 }; },
     activateTarget: async () => { activations += 1; return { status: 'PASS' }; },
+    runGit,
   });
 
   await assert.rejects(

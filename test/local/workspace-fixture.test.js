@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import { WorkspaceRegistry, WorkspaceError } from '../../src/local/workspace.js';
+import { readOnlySmokeFixtureContract } from '../../src/local/read-only-smoke.js';
 
 function makeFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-fixture-'));
@@ -18,7 +19,12 @@ test('workspace_open can bind the configured read_only_smoke fixture without cal
   const { root, repo } = makeFixture();
   const reg = new WorkspaceRegistry({
     allowedRoots: [root],
-    fixtures: { read_only_smoke: repo },
+    fixtures: {
+      read_only_smoke: {
+        path: repo,
+        contract: readOnlySmokeFixtureContract(),
+      },
+    },
   });
 
   const out = reg.open({ fixture: 'read_only_smoke' });
@@ -26,6 +32,7 @@ test('workspace_open can bind the configured read_only_smoke fixture without cal
   assert.equal(out.isGitRepo, true);
   assert.equal(out.fixture, 'read_only_smoke');
   assert.equal(out.root, fs.realpathSync.native(repo));
+  assert.deepEqual(out.fixtureContract, readOnlySmokeFixtureContract());
 });
 
 test('configured fixture does not widen containment outside allowedRoots', () => {
