@@ -78,7 +78,10 @@ export class BrainLocalRuntime {
     const c = this.config;
     const allowedRoots = c.workspaceRoots.length ? c.workspaceRoots : (c.workspaceRoot ? [c.workspaceRoot] : []);
     if (!allowedRoots.length) throw new Error('v0.2 runtime requires a workspaceRoot / workspaceRoots');
-    this.registry = new WorkspaceRegistry({ allowedRoots });
+    const fixtures = c.diagnostics?.localReadOnlyFixture
+      ? { read_only_smoke: c.diagnostics.localReadOnlyFixture }
+      : null;
+    this.registry = new WorkspaceRegistry({ allowedRoots, fixtures });
 
     if (!this.activationPreflight) {
       const codex = resolveCodexAppServer({ codexBin: c.codex.bin, listen: c.codex.listen, spawnArgs: c.codex.spawnArgs });

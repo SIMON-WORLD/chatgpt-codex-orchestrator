@@ -56,9 +56,16 @@ function effectiveRealPath(root, target) {
 }
 
 export class WorkspaceRegistry {
-  constructor({ allowedRoots = null } = {}) {
+  constructor({ allowedRoots = null, fixtures = null } = {}) {
     this.allowedRoots = (allowedRoots && allowedRoots.length ? allowedRoots : [process.cwd()])
       .map((r) => path.resolve(r)).filter(Boolean);
+    this.fixtures = new Map();
+    if (fixtures && typeof fixtures === 'object' && !Array.isArray(fixtures)) {
+      for (const [name, fixturePath] of Object.entries(fixtures)) {
+        if (!name || typeof fixturePath !== 'string' || !fixturePath.trim()) continue;
+        this.fixtures.set(name, path.resolve(fixturePath));
+      }
+    }
     this._workspaces = new Map();
   }
 
@@ -72,9 +79,20 @@ export class WorkspaceRegistry {
     return null;
   }
 
-  open({ path: rawPath } = {}) {
-    if (!rawPath || typeof rawPath !== 'string') throw new WorkspaceError('workspace_open requires a path');
-    const requested = path.resolve(rawPath);
+  open({ path: rawPath = null, fixture = null } = {}) {
+    const hasPath = typeof rawPath === 'string' && rawPath.trim().length > 0;
+    const hasFixture = typeof fixture === 'string' && fixture.trim().length > 0;
+    if (hasPath === hasFixture) throw new WorkspaceError('workspace_open requires exactly one of path or fixture');
+
+    let selectedPath = rawPath;
+    let fixtureName = null;
+    if (hasFixture) {
+      fixtureName = fixture.trim();
+      selectedPath = this.fixtures.get(fixtureName) || null;
+      if (!selectedPath) throw new WorkspaceError(`workspace fixture not configured: ${fixtureName}`);
+    }
+
+    const requested = path.resolve(selectedPath);
     const canonical = realpathOrNull(requested);
     if (!canonical) throw new WorkspaceError(`workspace path does not exist: ${requested}`);
     if (!fs.existsSync(canonical) || !fs.statSync(canonical).isDirectory()) throw new WorkspaceError(`workspace path is not a directory: ${canonical}`);
@@ -82,9 +100,9 @@ export class WorkspaceRegistry {
     if (!allowed) throw new WorkspaceError(`workspace path not within configured allowed roots: ${canonical}`);
     const workspaceId = crypto.randomUUID();
     const isGitRepo = detectGitRepo(canonical);
-    const ws = { workspaceId, root: canonical, isGitRepo, allowedRoot: allowed };
+    const ws = { workspaceId, root: canonical, isGitRepo, allowedRoot: allowed, fixture: fixtureName };
     this._workspaces.set(workspaceId, ws);
-    return { workspaceId, root: canonical, isGitRepo };
+    return { workspaceId, root: canonical, isGitRepo, ...(fixtureName ? { fixture: fixtureName } : {}) };
   }
 
   get(workspaceId) {

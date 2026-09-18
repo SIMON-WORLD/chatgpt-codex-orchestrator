@@ -60,6 +60,7 @@ export const DEFAULT_V02_CONFIG = {
   },
   diagnostics: {
     codex: { enabled: false },  // opt-in structured read-only Codex diagnostics (no caller path)
+    localReadOnlyFixture: null, // explicit Local-owned fixture path; never widens workspaceRoots
   },
   verify: {},                   // server-owned verify checks
   tunnel: {
@@ -114,8 +115,10 @@ export function loadV02Config(overrides = {}, { configPath = null } = {}) {
       trustedRepos: (Array.isArray(cfg.worktree.trustedRepos) ? cfg.worktree.trustedRepos : []).filter((r) => r).map((r) => path.resolve(String(r))),
     };
   }
+  const localReadOnlyFixture = cfg.diagnostics?.localReadOnlyFixture;
   cfg.diagnostics = {
     codex: { enabled: cfg.diagnostics?.codex?.enabled === true },
+    localReadOnlyFixture: localReadOnlyFixture ? path.resolve(String(localReadOnlyFixture)) : null,
   };
   cfg.tunnel.external = cfg.tunnel.external === true;
   cfg.paths = runtimePaths(cfg.dataRoot);
