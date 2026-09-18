@@ -93,8 +93,18 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   const server = new McpServer({ name: 'chatgpt-codex-orchestrator', version: '0.2.0-dev' });
 
   // ---- Direct Local (read-only + mutation) --------------------------------
-  server.registerTool('workspace_open', { description: 'Bind an explicit workspace root before local repo operations.', annotations: R, inputSchema: z.object({ path: z.string() }) },
-    async ({ path }) => { try { return text(workspaceRegistry.open({ path })); } catch (e) { return errText(e.message); } });
+  server.registerTool('workspace_open', {
+    description: 'Bind exactly one explicit workspace source before local repo operations: either a caller-supplied path or a server-configured fixture alias.',
+    annotations: R,
+    inputSchema: z.object({
+      path: z.string().optional(),
+      fixture: z.string().optional(),
+    }),
+  },
+  async ({ path, fixture }) => {
+    try { return text(workspaceRegistry.open({ path, fixture })); }
+    catch (e) { return errText(e.message); }
+  });
 
   server.registerTool('read', { description: 'Bounded read of a file inside a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string(), maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional() }) },
     async ({ workspaceId, path, maxBytes }) => { try { return text(readFile({ workspaceId, path, maxBytes }, workspaceRegistry)); } catch (e) { return errText(e.message); } });
