@@ -220,32 +220,7 @@ export class StableRuntimeRecoveryCoordinator {
       fsImpl: this.activator.fs,
       platform: this.activator.platform,
       probeCurrent: (args) => this._probeCurrentServing(args),
-      stopCurrent: async ({ pid, sha, configPath: currentConfigPath }) => {
-        const config = this.activator.loadConfig(currentConfigPath);
-        const { baseUrl } = this._requireRecoveryProfile(config);
-        const local = await this.activator._probeLocal(baseUrl);
-        const currentSha = exactServingRevision(local);
-        const pids = await this.activator._listeningPids(config);
-        if (currentSha !== sha || pids.length !== 1 || pids[0] !== pid) {
-          throw new StableRuntimeRecoveryError('serving runtime changed before fixture-install cutover; refusing stop', {
-            phase: 'runtime_conflict',
-            expectedSha: sha,
-            actualSha: currentSha,
-            expectedPid: pid,
-            pids,
-          });
-        }
-        this.activator.stopPid(pid);
-        if (!(await this.activator._waitForNoListener(config))) {
-          throw new StableRuntimeRecoveryError('serving runtime did not release the configured endpoint', {
-            phase: 'cutover',
-            pid,
-            currentStopped: true,
-          });
-        }
-        return { stopped: true };
-      },
-      recoverTarget: (args) => this.recover(args),
+      activateTarget: (args) => this.activator.activate(args),
     });
     try {
       return await installer.install({ fixturePath, targetSha, configPath, repoPath });
