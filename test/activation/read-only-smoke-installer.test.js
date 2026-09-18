@@ -62,6 +62,7 @@ test('installer updates config and requires a non-reused recovery when config ch
   const installer = new ReadOnlySmokeInstaller({
     fsImpl: fs,
     probeCurrent: async () => ({ sha: PREVIOUS, pid: 101 }),
+    stopCurrent: async (args) => { calls.push({ stop: args }); },
     recoverTarget: async (args) => {
       calls.push(args);
       return { status: 'PASS', sha: TARGET, runtime: { action: 'started', pid: 202 } };
@@ -77,7 +78,8 @@ test('installer updates config and requires a non-reused recovery when config ch
 
   assert.equal(result.status, 'PASS');
   assert.equal(result.fixtureConfigured, true);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].stop.pid, 101);
   const saved = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   assert.equal(saved.diagnostics.localReadOnlyFixture, fs.realpathSync(fixture));
   assert.deepEqual(saved.workspaceRoots, [fs.realpathSync(fixture)]);
@@ -100,6 +102,7 @@ test('activation failure restores original config and recovers the previously pr
   const installer = new ReadOnlySmokeInstaller({
     fsImpl: fs,
     probeCurrent: async () => ({ sha: PREVIOUS, pid: 101 }),
+    stopCurrent: async () => { calls.push({ stop: true }); },
     recoverTarget: async (args) => {
       calls.push(args);
       if (args.targetSha === TARGET) throw new Error('target activation failed');
@@ -118,7 +121,7 @@ test('activation failure restores original config and recovers the previously pr
     },
   );
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
-  assert.deepEqual(calls.map((x) => x.targetSha), [TARGET, PREVIOUS]);
+  assert.deepEqual(calls.filter((x) => x.targetSha).map((x) => x.targetSha), [TARGET, PREVIOUS]);
 });
 
 test('rollback recovery failure is fail-closed and leaves original config restored', async () => {
@@ -132,6 +135,7 @@ test('rollback recovery failure is fail-closed and leaves original config restor
   const installer = new ReadOnlySmokeInstaller({
     fsImpl: fs,
     probeCurrent: async () => ({ sha: PREVIOUS, pid: 101 }),
+    stopCurrent: async () => {},
     recoverTarget: async ({ targetSha }) => {
       if (targetSha === TARGET) throw new Error('target activation failed');
       throw new Error('rollback recovery failed');
@@ -149,6 +153,39 @@ test('rollback recovery failure is fail-closed and leaves original config restor
   assert.equal(fs.readFileSync(configPath, 'utf8'), original);
 });
 
+test('installer restarts even when the target revision already equals the serving revision so the profile reload is proven', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'read-only-smoke-same-revision-'));
+  const fixture = path.join(root, 'fixture');
+  fs.mkdirSync(fixture);
+  const configPath = path.join(root, 'stable.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    workspaceRoots: [],
+    diagnostics: { codex: { enabled: false } },
+  }, null, 2));
+
+  let stopped = 0;
+  let recovered = 0;
+  const installer = new ReadOnlySmokeInstaller({
+    fsImpl: fs,
+    probeCurrent: async () => ({ sha: TARGET, pid: 404 }),
+    stopCurrent: async ({ pid, sha }) => {
+      assert.equal(pid, 404);
+      assert.equal(sha, TARGET);
+      stopped += 1;
+    },
+    recoverTarget: async ({ targetSha }) => {
+      assert.equal(targetSha, TARGET);
+      recovered += 1;
+      return { status: 'PASS', sha: TARGET, runtime: { action: 'started', pid: 405 } };
+    },
+  });
+
+  const result = await installer.install({ fixturePath: fixture, configPath, targetSha: TARGET, repoPath: root });
+  assert.equal(result.status, 'PASS');
+  assert.equal(stopped, 1);
+  assert.equal(recovered, 1);
+});
+
 test('installer rejects a non-directory fixture before config mutation', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'read-only-smoke-file-'));
   const fixture = path.join(root, 'fixture.txt');
@@ -161,6 +198,7 @@ test('installer rejects a non-directory fixture before config mutation', async (
   const installer = new ReadOnlySmokeInstaller({
     fsImpl: fs,
     probeCurrent: async () => { probes += 1; return { sha: PREVIOUS, pid: 101 }; },
+    stopCurrent: async () => {},
     recoverTarget: async () => ({ status: 'PASS' }),
   });
 
