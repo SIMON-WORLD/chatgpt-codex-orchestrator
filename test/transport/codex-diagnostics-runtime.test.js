@@ -29,11 +29,15 @@ async function toolNames(runtime) {
 
 test('v0.2 config keeps Codex diagnostics default-off and exposes no path/root setting', () => {
   const cfg = makeConfig(undefined);
-  assert.deepEqual(cfg.diagnostics, { codex: { enabled: false } });
+  assert.deepEqual(cfg.diagnostics, { codex: { enabled: false }, localReadOnlyFixture: null });
   assert.deepEqual(Object.keys(cfg.diagnostics.codex), ['enabled']);
 
   const enabled = makeConfig({ codex: { enabled: true, path: '/forbidden' } });
-  assert.deepEqual(enabled.diagnostics, { codex: { enabled: true } }, 'unknown diagnostic config fields must not become runtime authority');
+  assert.deepEqual(
+    enabled.diagnostics,
+    { codex: { enabled: true }, localReadOnlyFixture: null },
+    'unknown Codex diagnostic config fields must not become runtime authority',
+  );
 });
 
 test('BrainLocalRuntime registers codex_diagnostics only after explicit opt-in', async () => {
