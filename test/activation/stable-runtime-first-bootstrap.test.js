@@ -128,7 +128,7 @@ test('first bootstrap fixture mode enters exact target recovery installer withou
       ]);
       return {
         code: 0,
-        stdout: `STABLE_RUNTIME_RECOVERY {"status":"PASS","operation":"read_only_smoke_install","recovery":{"sha":"${SHA}","runtime":{"action":"started"}}}\n`,
+        stdout: `STABLE_RUNTIME_RECOVERY {"status":"PASS","operation":"read_only_smoke_install","activation":{"status":"PASS","sha":"${SHA}","alreadyActive":false}}\n`,
         stderr: '',
       };
     }
@@ -141,7 +141,7 @@ test('first bootstrap fixture mode enters exact target recovery installer withou
   );
   assert.equal(result.status, 'PASS');
   assert.equal(result.fixtureInstall, true);
-  assert.equal(result.targetRecovery.recovery.sha, SHA);
+  assert.equal(result.targetRecovery.activation.sha, SHA);
 });
 
 test('first bootstrap starts from a stale canonical checkout with no activator source and enters the exact target activator', async () => {
