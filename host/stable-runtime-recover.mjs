@@ -220,7 +220,7 @@ export class StableRuntimeRecoveryCoordinator {
       fsImpl: this.activator.fs,
       platform: this.activator.platform,
       probeCurrent: (args) => this._probeCurrentServing(args),
-      recoverTarget: (args) => this.recover(args),
+      activateTarget: (args) => this.activator.activate(args),
     });
     try {
       return await installer.install({ fixturePath, targetSha, configPath, repoPath });

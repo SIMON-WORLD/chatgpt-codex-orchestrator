@@ -144,14 +144,14 @@ export class ReadOnlySmokeInstaller {
     fsImpl = fs,
     platform = process.platform,
     probeCurrent,
-    recoverTarget,
+    activateTarget,
   } = {}) {
     if (typeof probeCurrent !== 'function') throw new Error('probeCurrent callback is required');
-    if (typeof recoverTarget !== 'function') throw new Error('recoverTarget callback is required');
+    if (typeof activateTarget !== 'function') throw new Error('activateTarget callback is required');
     this.fs = fsImpl;
     this.platform = platform;
     this.probeCurrent = probeCurrent;
-    this.recoverTarget = recoverTarget;
+    this.activateTarget = activateTarget;
   }
 
   async install({ fixturePath, configPath, targetSha, repoPath = null }) {
@@ -177,34 +177,20 @@ export class ReadOnlySmokeInstaller {
       canonicalizeRoot,
     });
 
-    if (!prepared.changed) {
-      const recovery = await this.recoverTarget({
-        targetSha: target,
-        configPath: absoluteConfigPath,
-        repoPath,
-      });
-      return {
-        status: 'PASS',
-        operation: 'read_only_smoke_install',
-        fixtureConfigured: true,
-        configChanged: false,
-        rootAdded: false,
-        recovery,
-      };
+    if (prepared.changed) {
+      writeTextAtomic(this.fs, absoluteConfigPath, `${JSON.stringify(prepared.config, null, 2)}\n`);
     }
 
-    const updatedText = `${JSON.stringify(prepared.config, null, 2)}\n`;
-    writeTextAtomic(this.fs, absoluteConfigPath, updatedText);
-
     try {
-      const recovery = await this.recoverTarget({
+      const activation = await this.activateTarget({
         targetSha: target,
         configPath: absoluteConfigPath,
         repoPath,
+        forceRestart: true,
       });
-      if (recovery?.runtime?.action === 'reused') {
+      if (activation?.alreadyActive === true) {
         throw new ReadOnlySmokeInstallError(
-          'updated Stable Runtime config was not proven active because the runtime was reused',
+          'fixture installation requires a forced runtime reload that proves the updated profile was loaded',
           { phase: 'activate_updated_profile' },
         );
       }
@@ -212,20 +198,23 @@ export class ReadOnlySmokeInstaller {
         status: 'PASS',
         operation: 'read_only_smoke_install',
         fixtureConfigured: true,
-        configChanged: true,
+        configChanged: prepared.changed,
         rootAdded: prepared.rootAdded,
-        recovery,
+        previousSha,
+        activation,
       };
     } catch (error) {
-      writeTextAtomic(this.fs, absoluteConfigPath, originalText);
+      if (prepared.changed) writeTextAtomic(this.fs, absoluteConfigPath, originalText);
+
       let rollback;
       try {
-        const restored = await this.recoverTarget({
+        const restored = await this.activateTarget({
           targetSha: previousSha,
           configPath: absoluteConfigPath,
           repoPath,
+          forceRestart: true,
         });
-        rollback = { status: 'restored', sha: previousSha, recovery: restored };
+        rollback = { status: 'restored', sha: previousSha, activation: restored };
       } catch (rollbackError) {
         rollback = {
           status: 'failed',
