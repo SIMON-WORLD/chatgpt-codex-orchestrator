@@ -182,15 +182,10 @@ export class StableRuntimeRecoveryCoordinator {
   }
 
   _requireRecoveryProfile(config) {
-    const binding = this.activator._requireBoundedProfile(config);
-    const executable = config.tunnel?.clientExecutable;
-    if (!executable || !this.activator.fs.existsSync(executable)) {
-      throw new StableRuntimeRecoveryError('configured tunnel-client executable is required for recovery', {
-        phase: 'tunnel_profile_binding', executable: executable || null,
-      });
-    }
-    tunnelProfileArgs(config, 'doctor');
-    return binding;
+    // The Stable Runtime contract requires an externally managed Secure Tunnel.
+    // In external mode this process owns readiness verification only; it must not
+    // require, launch, stop, or reconfigure tunnel-client.
+    return this.activator._requireBoundedProfile(config);
   }
 
   async _probeCurrentServing({ configPath, repoPath = null }) {
@@ -303,8 +298,7 @@ export class StableRuntimeRecoveryCoordinator {
     }
 
     let startedRuntimePid = null;
-    let startedTunnel = null;
-    try {
+     try {
       assertNoCriticalBindingEnv(this.env);
       const config = this.activator.loadConfig(absoluteConfigPath);
       const { baseUrl } = this._requireRecoveryProfile(config);
@@ -353,29 +347,18 @@ export class StableRuntimeRecoveryCoordinator {
         runtime = { action: 'started', pid: startedRuntimePid };
       }
 
-      const tunnelPreflight = await this._doctorTunnel(config);
+      const tunnelPreflight = {
+        mode: 'external-readiness-only',
+        checkedLocalMcpUrl: normalizeUrl(config.tunnel.localMcpUrl),
+      };
       const tunnelBefore = await this.probeJson(config.tunnel.healthUrl);
-      let tunnel;
-      if (tunnelBefore.ok) {
-        tunnel = { action: 'reused', status: tunnelBefore.status };
-      } else {
-        if (tunnelBefore.status && tunnelBefore.status !== 0) {
-          throw new StableRuntimeRecoveryError('configured tunnel health endpoint is reachable but not ready; refusing duplicate launch', {
-            phase: 'tunnel_conflict', status: tunnelBefore.status,
-          });
-        }
-        const args = tunnelProfileArgs(config, 'run');
-        try {
-          startedTunnel = await this.spawnTunnel({ executable: config.tunnel.clientExecutable, args, env: this.env });
-        } catch (error) {
-          throw new StableRuntimeRecoveryError('failed to launch configured external Secure Tunnel', { phase: 'tunnel_start', cause: boundedCause(error) });
-        }
-        if (!Number.isInteger(startedTunnel?.pid) || startedTunnel.pid <= 0) {
-          throw new StableRuntimeRecoveryError('external Secure Tunnel did not return a valid process id', { phase: 'tunnel_start' });
-        }
-        await this._waitForTunnel(config);
-        tunnel = { action: 'started', pid: startedTunnel.pid };
+      if (!tunnelBefore.ok) {
+        throw new StableRuntimeRecoveryError('existing external Secure Tunnel is not ready', {
+          phase: 'tunnel_readiness',
+          status: tunnelBefore.status || 0,
+        });
       }
+      const tunnel = { action: 'reused', status: tunnelBefore.status };
 
       const finalLocal = await this.activator._probeLocal(baseUrl);
       const finalPids = await this.activator._listeningPids(config);
@@ -401,7 +384,6 @@ export class StableRuntimeRecoveryCoordinator {
         tunnelLifecycle: 'external-preserved', statePath,
       };
     } catch (error) {
-      if (startedTunnel?.stop) { try { startedTunnel.stop(); } catch {} }
       if (startedRuntimePid) { try { this.activator.stopPid(startedRuntimePid); } catch {} }
       if (error instanceof StableRuntimeRecoveryError) throw error;
       if (error instanceof StableRuntimeActivationError) {
