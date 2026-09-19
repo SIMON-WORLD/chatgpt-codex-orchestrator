@@ -449,6 +449,8 @@ Because a successful remote call itself proves current ChatGPT reachability, thi
 
 It must have no path arguments, workspace selectors, shell/process control, credential input, mutation, reconnect, or authority-granting fields.
 
+Security boundary: BUILD-2 must not recreate the always-available sensitive-diagnostics path rejected by Issues #66/#67. Only fields already established as non-sensitive connection/readiness evidence may be exposed without a stronger caller boundary. If a proposed field requires caller authorization that the current transport cannot enforce, omit it from the remote tool or keep it host-side; caller-supplied booleans or mission prose are not authorization.
+
 ### BUILD-3 — error/remediation mapper
 
 Translate accepted activation/recovery/tunnel/product phases into a small stable remediation vocabulary. Keep original bounded phase codes for evidence; hide routine raw logs and internal IDs.
@@ -613,6 +615,7 @@ The design was checked against current `main` behavior at `b4c4b127cefa483f0ce81
 - Workspace binding is explicit and canonical-root-contained.
 - MutationOwner prevents silent reacquisition across writer/unknown-interrupted boundaries.
 - Repository mutation remains subject to Repository Identity Fence.
+- Remote lifecycle status must remain non-sensitive fixed-schema evidence; this design does not reopen the #66/#67 rejected always-available sensitive diagnostic surface.
 
 ### Human relay inventory
 
