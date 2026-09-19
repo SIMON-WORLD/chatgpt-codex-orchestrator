@@ -64,8 +64,9 @@ export { startMcpServer } from './mcp/server.js';
 export { createToolsServer } from './mcp/tools.js';
 export { WorkspaceRegistry, WorkspaceError, detectGitRepo } from './local/workspace.js';
 export { readFile, READ_DEFAULTS } from './local/read.js';
-export { search, SEARCH_DEFAULTS } from './local/search.js';
+export { search, searchWithOptions, SEARCH_DEFAULTS } from './local/search.js';
 export { gitStatus, gitDiff, GIT_DIFF_MODES } from './local/git.js';
+export { DesktopCommanderChild, DesktopCommanderChildError, createDesktopCommanderChild, compositeEditBoundaryVerdict, COMPOSITE_EDIT_BOUNDARY_BLOCKED, DESKTOP_COMMANDER_PACKAGE, DESKTOP_COMMANDER_VERSION, DESKTOP_COMMANDER_UPSTREAM_COMMIT, DESKTOP_COMMANDER_LICENSE, DESKTOP_COMMANDER_REQUIRED_TOOLS, fixedGitCommand } from './local/desktop-commander-child.js';
 
 // --- v0.2 M3: bounded Direct Local edit + verify (additive, non-default) -------
 export { ChangeSetService, computeSha256, EDIT_BOUNDS } from './local/change-set.js';

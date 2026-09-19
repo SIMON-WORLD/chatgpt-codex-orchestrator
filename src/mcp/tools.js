@@ -6,9 +6,10 @@
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
-import { readFile } from '../local/read.js';
-import { search } from '../local/search.js';
+import { readFileWithDesktopCommander } from '../local/read.js';
+import { searchWithOptions } from '../local/search.js';
 import { gitStatus, gitDiff } from '../local/git.js';
+import { DesktopCommanderChild, COMPOSITE_EDIT_BOUNDARY_BLOCKED } from '../local/desktop-commander-child.js';
 import { WorkspaceError } from '../local/workspace.js';
 import { ChangeSetService } from '../local/change-set.js';
 import { OperationState } from '../state/operation-state.js';
@@ -73,7 +74,8 @@ function requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspa
   return res.taskId;
 }
 
-export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, verifyService = null, operationState = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null } = {}) {
+export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, verifyService = null, operationState = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, desktopCommanderChild = null } = {}) {
+  const child = desktopCommanderChild || new DesktopCommanderChild();
   // Shared mutation-ownership authority: when a Codex executor is present, Direct
   // Local mutation MUST use the SAME owner instance.
   let owner = mutationOwner;
@@ -109,16 +111,16 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   });
 
   server.registerTool('read', { description: 'Bounded read of a file inside a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string(), maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional() }) },
-    async ({ workspaceId, path, maxBytes }) => { try { return text(readFile({ workspaceId, path, maxBytes }, workspaceRegistry)); } catch (e) { return errText(e.message); } });
+    async ({ workspaceId, path, maxBytes }) => { try { return text(await readFileWithDesktopCommander({ workspaceId, path, maxBytes }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
 
   server.registerTool('search', { description: 'Bounded text search inside a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, query: z.string(), path: z.string().optional(), maxResults: z.number().int().positive().max(1000).optional() }) },
-    async ({ workspaceId, query, path, maxResults }) => { try { return text(search({ workspaceId, query, path, maxResults }, workspaceRegistry)); } catch (e) { return errText(e.message); } });
+    async ({ workspaceId, query, path, maxResults }) => { try { return text(await searchWithOptions({ workspaceId, query, path, maxResults }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
 
   server.registerTool('git_status', { description: 'Read-only git status for a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema }) },
-    async ({ workspaceId }) => { try { return text(await gitStatus({ workspaceId }, workspaceRegistry)); } catch (e) { return errText(e.message); } });
+    async ({ workspaceId }) => { try { return text(await gitStatus({ workspaceId }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
 
   server.registerTool('git_diff', { description: 'Read-only git diff (worktree|staged).', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, mode: z.enum(['worktree', 'staged']).optional() }) },
-    async ({ workspaceId, mode }) => { try { return text(await gitDiff({ workspaceId, mode }, workspaceRegistry)); } catch (e) { return errText(e.message); } });
+    async ({ workspaceId, mode }) => { try { return text(await gitDiff({ workspaceId, mode }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
 
   // ---- Narrow bounded worktree bootstrap (Issue #29) ------------------------
   // Registered only when a dedicated worktree service (trust pool + trusted repos) is
@@ -396,4 +398,4 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   return server;
 }
 
-export { WorkspaceError };
+export { WorkspaceError, COMPOSITE_EDIT_BOUNDARY_BLOCKED };

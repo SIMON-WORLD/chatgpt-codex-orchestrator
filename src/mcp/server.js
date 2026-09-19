@@ -19,6 +19,7 @@ import { createToolsServer } from './tools.js';
 import { registerCodexDiagnosticsTool } from './codex-diagnostics-tool.js';
 import { createCapabilityRouter } from '../router/capability-router.js';
 import { createGovernanceService } from '../governance/index.js';
+import { createDesktopCommanderChild } from '../local/desktop-commander-child.js';
 
 function sendJson(res, status, obj) {
   if (res.headersSent) return;
@@ -31,19 +32,21 @@ function runtimeRevision() {
   return /^[0-9a-f]{40}$/.test(value) ? value : null;
 }
 
-export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, codexDiagnosticsService = null, activationPreflight = false } = {}) {
+export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, codexDiagnosticsService = null, activationPreflight = false, desktopCommanderChild = null } = {}) {
   // Normal serving mode keeps the canonical MCP tools surface. Activation preflight
   // intentionally creates no MCP handler at all: only /healthz and /readyz exist as
   // narrow startup evidence, so no Governance/Codex/worktree/generic MCP operation can
   // be authorized through this temporary ephemeral listener.
   let nodeHandler = null;
+  const compositeChild = activationPreflight ? null : (desktopCommanderChild || createDesktopCommanderChild());
+  const ownsCompositeChild = !!compositeChild && !desktopCommanderChild;
   const validateHost = localhostHostValidation();
   const validateOrigin = localhostOriginValidation();
   if (!activationPreflight) {
     const router = capabilityRouter || createCapabilityRouter();
     const gov = governanceService || createGovernanceService();
     const factory = () => {
-      const server = createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, verifyService, verifyChecks, capabilityRouter: router, governanceService: gov, worktreeService });
+      const server = createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, verifyService, verifyChecks, capabilityRouter: router, governanceService: gov, worktreeService, desktopCommanderChild: compositeChild });
       if (codexDiagnosticsService) registerCodexDiagnosticsTool(server, codexDiagnosticsService);
       return server;
     };
@@ -55,9 +58,9 @@ export async function startMcpServer({ workspaceRegistry, appServerExecutor = nu
     const url = (req.url || '').split('?')[0];
     const revision = runtimeRevision();
 
-    if (req.method === 'GET' && url === '/healthz') return sendJson(res, 200, { status: 'ok', revision, activationPreflight: !!activationPreflight });
+    if (req.method === 'GET' && url === '/healthz') return sendJson(res, 200, { status: 'ok', revision, activationPreflight: !!activationPreflight, ...(compositeChild ? { compositeDesktopCommander: compositeChild.health() } : {}) });
     if (req.method === 'GET' && url === '/readyz') {
-      return sendJson(res, 200, { status: 'ready', revision, activationPreflight: !!activationPreflight, loopback: host === '127.0.0.1' || host === '::1', hasAllowedRoots: !!workspaceRegistry && workspaceRegistry.hasAllowedRoots });
+      return sendJson(res, 200, { status: 'ready', revision, activationPreflight: !!activationPreflight, loopback: host === '127.0.0.1' || host === '::1', hasAllowedRoots: !!workspaceRegistry && workspaceRegistry.hasAllowedRoots, ...(compositeChild ? { compositeDesktopCommander: compositeChild.health() } : {}) });
     }
 
     if (url === '/mcp' || url === '/mcp/') {
@@ -77,6 +80,12 @@ export async function startMcpServer({ workspaceRegistry, appServerExecutor = nu
   });
   const addr = httpServer.address();
   const port2 = typeof addr === 'object' && addr ? addr.port : port;
-  const close = () => new Promise((resolve) => httpServer.close(() => resolve()));
+  const close = async () => {
+    await new Promise((resolve) => {
+      if (!httpServer.listening) return resolve();
+      httpServer.close(() => resolve());
+    });
+    if (ownsCompositeChild) await compositeChild.close();
+  };
   return { httpServer, close, host, port: port2, url: `http://${host}:${port2}/mcp` };
 }
