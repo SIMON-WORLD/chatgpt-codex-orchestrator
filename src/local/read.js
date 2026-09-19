@@ -112,17 +112,9 @@ function normalizeReadContent({ raw, relPath, size, maxBytes, maxLines }) {
   };
 }
 
-function callChildTool(child, name, args) {
-  if (typeof child?.callTool === 'function') return child.callTool(name, args);
-  const legacy = { read_file: 'readFile' }[name];
-  if (legacy && typeof child?.[legacy] === 'function') return child[legacy](args);
-  throw new WorkspaceError('desktop commander child adapter is unavailable');
-}
-
 async function readFileThroughChild(validation, child) {
-  const result = typeof child?.readFile === 'function'
-    ? await child.readFile({ path: validation.canonical, maxLines: validation.maxLines, maxBytes: validation.maxBytes })
-    : await callChildTool(child, 'read_file', { path: validation.canonical, offset: 0, length: validation.maxLines });
+  if (typeof child?.readFile !== 'function') throw new WorkspaceError('desktop commander child adapter is required');
+  const result = await child.readFile({ path: validation.canonical, maxLines: validation.maxLines, maxBytes: validation.maxBytes });
   const raw = typeof result === 'string' ? result : extractTextContent(result);
   return normalizeReadContent({
     raw,
@@ -136,30 +128,6 @@ async function readFileThroughChild(validation, child) {
 export async function readFileWithDesktopCommander(args = {}, registry, child) {
   if (!child) throw new WorkspaceError('desktop commander child adapter is required');
   return readFileThroughChild(assertChildTextFormat(validateRead(args, registry)), child);
-}
-
-export function readFile(args = {}, registry, { child = null } = {}) {
-  const validation = validateRead(args, registry);
-  // Keep the historical direct helper synchronous for existing callers/tests.
-  return child ? readFileThroughChild(assertChildTextFormat(validation), child) : readFileLocally(validation);
-}
-
-function readFileLocally(validation) {
-  const fd = fs.openSync(validation.canonical, 'r');
-  try {
-    const toRead = Math.min(validation.size, validation.maxBytes);
-    const buf = Buffer.alloc(toRead);
-    const n = fs.readSync(fd, buf, 0, toRead, 0);
-    return normalizeReadContent({
-      raw: buf.subarray(0, n).toString('utf8'),
-      relPath: validation.relPath,
-      size: validation.size,
-      maxBytes: validation.maxBytes,
-      maxLines: validation.maxLines,
-    });
-  } finally {
-    fs.closeSync(fd);
-  }
 }
 
 export const READ_DEFAULTS = { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES };
