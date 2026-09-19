@@ -28,6 +28,23 @@ launch controls is a narrowly documented privacy residual for this POC. No paren
 process detail is included in the sanitized health object, which is exactly
 `{ state, version, generation }`.
 
+## Security reachability boundary for the 0.2.51 POC
+
+The exact-pinned 0.2.51 production dependency graph still has a non-zero
+`npm audit` result because vulnerable transitive packages remain installed.
+For child-backed `read`, the parent therefore rejects the extensions that
+Desktop Commander 0.2.51 routes into PDF, DOCX, Excel, or image handlers before
+any child dispatch: PDF; DOCX; XLS/XLSX/XLSM; and
+PNG/JPG/JPEG/GIF/WebP/BMP/SVG.
+
+Child-backed `search` remains directory-root content search with no
+`filePattern`; a file path is rejected as a scope before dispatch. This keeps
+the 0.2.51 Excel/DOCX special-search paths unreachable from the adapter.
+
+This reachability mitigation is accepted only for this bounded POC. No provider
+default flip or release may rely on this exact pin until upstream publishes a
+fixed exact version or Parent separately accepts a stronger mitigation.
+
 ## Deletion candidates after parity validation
 
 These are deliberately retained for rollback and existing callers during the

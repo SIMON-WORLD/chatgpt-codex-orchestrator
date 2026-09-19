@@ -101,6 +101,43 @@ test('read validation rejects sensitive and outside-root paths before child disp
   assert.equal(calls, 0);
 });
 
+test('child-backed read rejects special formats before fake or real child dispatch', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'issue117-special-format-'));
+  for (const name of ['crafted.pdf', 'sheet.xlsx', 'image.png', 'doc.docx']) {
+    // ASCII payloads ensure this is the explicit extension gate, not the
+    // pre-existing NUL-byte binary heuristic.
+    fs.writeFileSync(path.join(root, name), 'plain text payload\n', 'utf8');
+  }
+  const registry = new WorkspaceRegistry({ allowedRoots: [root] });
+  const workspace = registry.open({ path: root });
+
+  let fakeCalls = 0;
+  const fakeChild = {
+    callTool: async () => {
+      fakeCalls += 1;
+      throw new Error('special-format read must not dispatch');
+    },
+  };
+  for (const name of ['crafted.pdf', 'sheet.xlsx', 'image.png', 'doc.docx']) {
+    await assert.rejects(
+      () => readFileWithDesktopCommander({ workspaceId: workspace.workspaceId, path: name }, registry, fakeChild),
+      /special-format read blocked/,
+    );
+  }
+  assert.equal(fakeCalls, 0);
+
+  const realChild = new DesktopCommanderChild();
+  try {
+    await assert.rejects(
+      () => readFileWithDesktopCommander({ workspaceId: workspace.workspaceId, path: 'crafted.pdf' }, registry, realChild),
+      /special-format read blocked/,
+    );
+    assert.deepEqual(realChild.health(), { state: 'idle', version: DESKTOP_COMMANDER_VERSION, generation: 0 });
+  } finally {
+    await realChild.close();
+  }
+});
+
 test('search validation and normalization happen around callTool', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'issue117-search-'));
   fs.writeFileSync(path.join(root, 'safe.txt'), 'marker here\n', 'utf8');
@@ -121,8 +158,15 @@ test('search validation and normalization happen around callTool', async () => {
   const result = await searchWithOptions({ workspaceId: workspace.workspaceId, query: 'marker' }, registry, { child: fakeChild });
   assert.deepEqual(result.matches, [{ path: 'safe.txt', line: 1, snippet: 'marker here' }]);
   assert.deepEqual(calls.map((call) => call.name), ['start_search', 'get_more_search_results', 'stop_search']);
+
+  const startArgs = calls.find((call) => call.name === 'start_search').args;
+  assert.equal(Object.hasOwn(startArgs, 'filePattern'), false);
+  assert.equal(fs.statSync(startArgs.path).isDirectory(), true);
+
+  fs.writeFileSync(path.join(root, 'office.xlsx'), 'marker office\n', 'utf8');
   const before = calls.length;
   await assert.rejects(() => searchWithOptions({ workspaceId: workspace.workspaceId, query: 'marker', path: '.env' }, registry, { child: fakeChild }), /sensitive/);
+  await assert.rejects(() => searchWithOptions({ workspaceId: workspace.workspaceId, query: 'marker', path: 'office.xlsx' }, registry, { child: fakeChild }), /scope is not a directory/);
   assert.equal(calls.length, before);
 });
 

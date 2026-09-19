@@ -16,6 +16,26 @@ const HARD_MAX_BYTES = 4 * 1024 * 1024;
 const EDITABLE_MAX_BYTES = 256 * 1024;
 const PROBE_BYTES = 8192;
 
+// DesktopCommander 0.2.51 routes these extensions into dedicated PDF,
+// Office/Excel, or image handlers. Keep child-backed read on the ordinary
+// text path until the pinned dependency graph no longer carries the current
+// special-format transitive risk.
+const CHILD_SPECIAL_FORMAT_EXTENSIONS = new Set([
+  '.pdf',
+  '.docx',
+  '.xlsx', '.xls', '.xlsm',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg',
+]);
+
+function assertChildTextFormat(validation) {
+  const visibleExt = path.extname(String(validation.relPath || '')).toLowerCase();
+  const canonicalExt = path.extname(String(validation.canonical || '')).toLowerCase();
+  if (CHILD_SPECIAL_FORMAT_EXTENSIONS.has(visibleExt) || CHILD_SPECIAL_FORMAT_EXTENSIONS.has(canonicalExt)) {
+    throw new WorkspaceError(`special-format read blocked: ${validation.relPath}`);
+  }
+  return validation;
+}
+
 function looksBinary(buf) {
   const n = Math.min(buf.length, PROBE_BYTES);
   for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
@@ -115,13 +135,13 @@ async function readFileThroughChild(validation, child) {
 
 export async function readFileWithDesktopCommander(args = {}, registry, child) {
   if (!child) throw new WorkspaceError('desktop commander child adapter is required');
-  return readFileThroughChild(validateRead(args, registry), child);
+  return readFileThroughChild(assertChildTextFormat(validateRead(args, registry)), child);
 }
 
 export function readFile(args = {}, registry, { child = null } = {}) {
   const validation = validateRead(args, registry);
   // Keep the historical direct helper synchronous for existing callers/tests.
-  return child ? readFileThroughChild(validation, child) : readFileLocally(validation);
+  return child ? readFileThroughChild(assertChildTextFormat(validation), child) : readFileLocally(validation);
 }
 
 function readFileLocally(validation) {
