@@ -30,44 +30,6 @@ function realpathOrNull(p) {
   try { return fs.realpathSync.native(p); } catch { return null; }
 }
 
-function walk(root, onFile, budget, wsRoot) {
-  const stack = [root];
-  while (stack.length && !budget.stop) {
-    const dir = stack.pop();
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-    for (const e of entries) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        if (isIgnoredSearchDir(e.name) || isSensitivePath(e.name)) continue;
-        const real = realpathOrNull(p);
-        if (real && !isWithin(wsRoot, real)) continue;
-        stack.push(p);
-      } else if (e.isFile()) {
-        if (isSensitivePath(path.relative(wsRoot, p))) continue;
-        const real = realpathOrNull(p);
-        if (real && isSensitivePath(path.relative(wsRoot, real))) continue;
-        budget.scannedFiles++;
-        if (budget.scannedFiles > budget.maxScannedFiles) {
-          budget.stop = true;
-          budget.limitReason = 'maxScannedFiles';
-          return;
-        }
-        let st;
-        try { st = fs.statSync(p); } catch { continue; }
-        budget.scannedBytes += st.size || 0;
-        if (budget.scannedBytes > budget.maxScannedBytes) {
-          budget.stop = true;
-          budget.limitReason = 'maxScannedBytes';
-          return;
-        }
-        onFile(p);
-        if (budget.stop) return;
-      }
-    }
-  }
-}
-
 function validateSearch({ workspaceId, query, path: relScope = null, maxResults = DEFAULT_MAX_RESULTS, maxScannedFiles = DEFAULT_MAX_SCANNED_FILES, maxScannedBytes = DEFAULT_MAX_SCANNED_BYTES } = {}, registry) {
   if (!query || typeof query !== 'string' || !query.trim()) throw new WorkspaceError('search requires a query');
   if (!Number.isInteger(maxResults) || maxResults <= 0 || maxResults > HARD_MAX_RESULTS) {
@@ -79,45 +41,6 @@ function validateSearch({ workspaceId, query, path: relScope = null, maxResults 
   if (relScope && isSensitivePath(relScope)) throw new WorkspaceError(`sensitive path blocked: ${relScope}`);
   const root = scopeRoot(ws, relScope, registry);
   return { ws, root, query: query.trim(), maxResults, maxScannedFiles, maxScannedBytes };
-}
-
-function searchLocal({ ws, root, query, maxResults, maxScannedFiles, maxScannedBytes }) {
-  const matches = [];
-  const needles = query.split(/\s+/).filter(Boolean);
-  const budget = { scannedFiles: 0, scannedBytes: 0, maxScannedFiles, maxScannedBytes, stop: false, limitReason: null };
-
-  walk(root, (file) => {
-    if (budget.stop) return;
-    const real = realpathOrNull(file);
-    if (real && !isWithin(ws.root, real)) return;
-    let stat;
-    try { stat = fs.statSync(file); } catch { return; }
-    if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return;
-    let text;
-    try { text = fs.readFileSync(file, 'utf8'); } catch { return; }
-    const lines = text.split(/\r?\n/);
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line) continue;
-      const lower = line.toLowerCase();
-      if (needles.every((n) => lower.includes(n.toLowerCase()))) {
-        matches.push({ path: path.relative(ws.root, file).replace(/\\/g, '/'), line: i + 1, snippet: line.trim().slice(0, SNIPPET_LEN) });
-        if (matches.length >= maxResults) { budget.stop = true; budget.limitReason = 'maxResults'; return; }
-      }
-    }
-  }, budget, ws.root);
-
-  return {
-    matches,
-    truncated: budget.stop,
-    count: matches.length,
-    scannedFiles: budget.scannedFiles,
-    limitReason: budget.limitReason,
-  };
-}
-
-export function search({ workspaceId, query, path: relScope = null, maxResults = DEFAULT_MAX_RESULTS, maxScannedFiles = DEFAULT_MAX_SCANNED_FILES, maxScannedBytes = DEFAULT_MAX_SCANNED_BYTES } = {}, registry) {
-  return searchLocal(validateSearch({ workspaceId, query, path: relScope, maxResults, maxScannedFiles, maxScannedBytes }, registry));
 }
 
 function parseChildSearchPage(raw) {
@@ -173,19 +96,16 @@ function appendChildMatches(target, seen, page, ws, maxResults, needles, budget)
   }
 }
 
-function childText(child, name, args, legacyName = null) {
-  if (typeof child?.callTool === 'function') {
-    return Promise.resolve(child.callTool(name, args)).then((result) => typeof result === 'string' ? result : extractTextContent(result));
-  }
-  if (legacyName && typeof child?.[legacyName] === 'function') return Promise.resolve(child[legacyName](args));
-  throw new WorkspaceError('desktop commander child adapter is unavailable');
+function childText(child, method, args) {
+  if (typeof child?.[method] !== 'function') throw new WorkspaceError('desktop commander child adapter is required');
+  return Promise.resolve(child[method](args)).then((result) => typeof result === 'string' ? result : extractTextContent(result));
 }
 
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 async function searchThroughChild(validation, child) {
   const needles = validation.query.split(/\s+/).filter(Boolean);
-  const startText = await childText(child, 'start_search', {
+  const startText = await childText(child, 'startSearch', {
     path: validation.root,
     pattern: needles[0],
     searchType: 'content',
@@ -198,7 +118,7 @@ async function searchThroughChild(validation, child) {
     timeout_ms: 3000,
     literalSearch: true,
     origin: 'llm',
-  }, 'startSearch');
+  });
   let page = parseChildSearchPage(startText);
   const sessionId = page.sessionId;
   if (!sessionId) throw new WorkspaceError('DesktopCommander search did not return a session id');
@@ -225,18 +145,18 @@ async function searchThroughChild(validation, child) {
       // upstream start response can contain only the initial page/status.
       if (complete && requestedPage && !page.hasMore) break;
       if (!complete) await wait(30);
-      page = parseChildSearchPage(await childText(child, 'get_more_search_results', {
+      page = parseChildSearchPage(await childText(child, 'getMoreSearchResults', {
         sessionId,
         offset: upstreamOffset,
         length: HARD_MAX_RESULTS,
-      }, 'getMoreSearchResults'));
+      }));
       requestedPage = true;
       lastPage = page;
       upstreamOffset += page.results.length;
       complete = page.complete;
     }
   } finally {
-    try { await childText(child, 'stop_search', { sessionId }, 'stopSearch'); } catch {}
+    try { await childText(child, 'stopSearch', { sessionId }); } catch {}
   }
 
   const totalResults = lastPage.totalResults ?? page.totalResults;
@@ -251,8 +171,8 @@ async function searchThroughChild(validation, child) {
 }
 
 export async function searchWithOptions(args = {}, registry, { child = null } = {}) {
-  const validation = validateSearch(args, registry);
-  return child ? searchThroughChild(validation, child) : searchLocal(validation);
+  if (!child) throw new WorkspaceError('desktop commander child adapter is required');
+  return searchThroughChild(validateSearch(args, registry), child);
 }
 
 function scopeRoot(ws, relScope, registry) {

@@ -146,12 +146,17 @@ test('search validation and normalization happen around callTool', async () => {
   const workspace = registry.open({ path: root });
   const calls = [];
   const fakeChild = {
-    callTool: async (name, args) => {
-      calls.push({ name, args });
-      if (name === 'start_search') return { content: [{ type: 'text', text: `Started content search session: search_test\nStatus: RUNNING\nTotal results: 1\n\nInitial results:\n📄 ${path.join(root, 'safe.txt')}:1 - marker here` }] };
-      if (name === 'get_more_search_results') return { content: [{ type: 'text', text: 'Search session: search_test\nStatus: COMPLETED\nTotal results found: 1 (1 matches)\n✅ Search completed.' }] };
-      if (name === 'stop_search') return { content: [{ type: 'text', text: 'stopped' }] };
-      throw new Error(`unexpected child call ${name}`);
+    startSearch: async (args) => {
+      calls.push({ name: 'start_search', args });
+      return `Started content search session: search_test\nStatus: RUNNING\nTotal results: 1\n\nInitial results:\n📄 ${path.join(root, 'safe.txt')}:1 - marker here`;
+    },
+    getMoreSearchResults: async (args) => {
+      calls.push({ name: 'get_more_search_results', args });
+      return 'Search session: search_test\nStatus: COMPLETED\nTotal results found: 1 (1 matches)\n✅ Search completed.';
+    },
+    stopSearch: async (args) => {
+      calls.push({ name: 'stop_search', args });
+      return 'stopped';
     },
   };
 
@@ -180,11 +185,13 @@ test('child search reapplies scan bounds before accepting more upstream matches'
   const workspace = registry.open({ path: root });
   const calls = [];
   const fakeChild = {
-    callTool: async (name) => {
-      calls.push(name);
-      if (name === 'start_search') return { content: [{ type: 'text', text: `Started content search session: bounded\nStatus: RUNNING\nTotal results: 2\n\n📄 ${first}:1 - marker one\n📄 ${second}:1 - marker two` }] };
-      if (name === 'stop_search') return { content: [{ type: 'text', text: 'stopped' }] };
-      throw new Error(`unexpected child call ${name}`);
+    startSearch: async () => {
+      calls.push('start_search');
+      return `Started content search session: bounded\nStatus: RUNNING\nTotal results: 2\n\n📄 ${first}:1 - marker one\n📄 ${second}:1 - marker two`;
+    },
+    stopSearch: async () => {
+      calls.push('stop_search');
+      return 'stopped';
     },
   };
 
@@ -196,30 +203,42 @@ test('child search reapplies scan bounds before accepting more upstream matches'
   assert.deepEqual(calls, ['start_search', 'stop_search']);
 });
 
-test('git adapter uses only fixed start_process/read_process_output templates', async () => {
-  const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'issue117-git-'));
+test('git adapter delegates only validated repository root and mode to the child', async () => {
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'issue120-git-'));
   const repo = path.join(outer, 'repo');
   fs.mkdirSync(repo);
   execFileSync('git', ['init', '-q'], { cwd: repo });
-  execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: repo });
-  execFileSync('git', ['config', 'user.name', 't'], { cwd: repo });
-  fs.writeFileSync(path.join(repo, 'a.txt'), 'one\n', 'utf8');
   const registry = new WorkspaceRegistry({ allowedRoots: [outer] });
   const workspace = registry.open({ path: repo });
   const calls = [];
   const fakeChild = {
-    callTool: async (name, args) => {
-      calls.push({ name, args });
-      if (name === 'start_process') return { content: [{ type: 'text', text: 'Process started with PID 42' }] };
-      if (name === 'read_process_output') return { content: [{ type: 'text', text: '## branch\n' }] };
-      throw new Error(`unexpected child call ${name}`);
+    runGit: async (args) => {
+      calls.push(args);
+      return { output: '## branch\n', truncated: false };
     },
   };
   const result = await gitStatus({ workspaceId: workspace.workspaceId }, registry, { child: fakeChild });
   assert.equal(result.status, '## branch');
-  assert.deepEqual(calls.map((call) => call.name), ['start_process', 'read_process_output']);
-  assert.match(calls[0].args.command, /git -C .* status --short --branch$/);
-  assert.equal(calls[0].args.command.includes('&&'), false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].workspaceRoot, fs.realpathSync.native(repo));
+  assert.equal(calls[0].mode, 'status');
+  await assert.rejects(() => gitDiff({ workspaceId: workspace.workspaceId, mode: 'HEAD~1' }, registry, { child: fakeChild }), /unsupported git diff mode/);
+  assert.equal(calls.length, 1);
+});
+
+test('commodity read/search/git execution fails closed without the DesktopCommander child', async () => {
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'issue120-no-fallback-'));
+  const repo = path.join(outer, 'repo');
+  fs.mkdirSync(repo);
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  fs.writeFileSync(path.join(repo, 'safe.txt'), 'marker here\n', 'utf8');
+  const registry = new WorkspaceRegistry({ allowedRoots: [outer] });
+  const workspace = registry.open({ path: repo });
+
+  await assert.rejects(() => readFileWithDesktopCommander({ workspaceId: workspace.workspaceId, path: 'safe.txt' }, registry), /child adapter is required/);
+  await assert.rejects(() => searchWithOptions({ workspaceId: workspace.workspaceId, query: 'marker' }, registry), /child adapter is required/);
+  await assert.rejects(() => gitStatus({ workspaceId: workspace.workspaceId }, registry), /child adapter is required/);
+  await assert.rejects(() => gitDiff({ workspaceId: workspace.workspaceId, mode: 'worktree' }, registry), /child adapter is required/);
 });
 
 test('MCP schemas remain bounded and no upstream shell tool is public', async (t) => {
