@@ -19,6 +19,8 @@ import { performContinuityTakeover } from '../governance/durable.js';
 
 const R = { readOnlyHint: true };
 const M = { readOnlyHint: false, destructiveHint: true };
+const GOVERNANCE_PLAN_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
+const GOVERNANCE_TRANSITION_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 function text(result) { return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }; }
 function errText(message) { return { content: [{ type: 'text', text: 'error: ' + message }], isError: true }; }
@@ -193,9 +195,35 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   }
 
   if (governance) {
+    const invokeGovernanceTransition = (args) => {
+      const txArgs = { ...args };
+      if (txArgs.workspaceId) {
+        if (governance && typeof governance.authorizeMutation === 'function') txArgs.workspaceRoot = workspaceRegistry.get(txArgs.workspaceId).root;
+        delete txArgs.workspaceId;
+      }
+      return governance.transition(txArgs);
+    };
+
+    server.registerTool('governance_plan', {
+      description: 'Record only a Parent Brain PLAN control through the existing Governance transition implementation. This is a closed-world, non-read-only, non-destructive admission/control-state operation; durable Governance authority, admission scanning, canonical workspace binding, and fencing remain authoritative.',
+      annotations: GOVERNANCE_PLAN_ANNOTATIONS,
+      inputSchema: z.object({
+        taskId: z.string(),
+        projectKey: z.string().optional(),
+        identity: z.string().optional(),
+        authorityToken: z.string().optional(),
+        workspaceId: workspaceIdSchema.optional(),
+        route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
+        localRoute: z.enum(['CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE']).optional(),
+      }).strict(),
+    }, async (args) => {
+      try { return text(invokeGovernanceTransition({ ...args, control: 'PLAN' })); }
+      catch (e) { return errText(e.message); }
+    });
+
     server.registerTool('governance_transition', {
       description: 'Record a Parent Brain governance control (PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE) with acceptance contract and revise delta. Requires Parent authority in durable Governance; bounded execution claims never authorize this tool.',
-      annotations: M,
+      annotations: GOVERNANCE_TRANSITION_ANNOTATIONS,
       inputSchema: z.object({
         taskId: z.string().optional(),
         projectKey: z.string().optional(),
@@ -213,14 +241,8 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         question: z.string().optional(),
       }).strict(),
     }, async (args) => {
-      try {
-        const txArgs = { ...args };
-        if (txArgs.workspaceId) {
-          if (governance && typeof governance.authorizeMutation === 'function') txArgs.workspaceRoot = workspaceRegistry.get(txArgs.workspaceId).root;
-          delete txArgs.workspaceId;
-        }
-        return text(governance.transition(txArgs));
-      } catch (e) { return errText(e.message); }
+      try { return text(invokeGovernanceTransition(args)); }
+      catch (e) { return errText(e.message); }
     });
 
     server.registerTool('governance_record_result', {
