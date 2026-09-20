@@ -18,6 +18,14 @@ import { VerifyService } from '../local/verify.js';
 import { createCapabilityRouter } from '../router/capability-router.js';
 import { createGovernanceService } from '../governance/index.js';
 import { performContinuityTakeover } from '../governance/durable.js';
+import {
+  STRUCTURED_READ_LIMITS,
+  readImageWithDesktopCommander,
+  readExcelWithDesktopCommander,
+  searchExcelWithDesktopCommander,
+  readPdfWithDesktopCommander,
+  readDocxWithDesktopCommander,
+} from '../local/structured-read.js';
 
 const R = { readOnlyHint: true };
 const M = { readOnlyHint: false, destructiveHint: true };
@@ -25,6 +33,15 @@ const GOVERNANCE_PLAN_ANNOTATIONS = { readOnlyHint: false, destructiveHint: fals
 const GOVERNANCE_TRANSITION_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 function text(result) { return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }; }
+function structured(result) {
+  return {
+    structuredContent: result.structuredContent,
+    content: [
+      { type: 'text', text: JSON.stringify(result.structuredContent, null, 2) },
+      ...(Array.isArray(result.content) ? result.content : []),
+    ],
+  };
+}
 function errText(message) { return { content: [{ type: 'text', text: 'error: ' + message }], isError: true }; }
 
 const workspaceIdSchema = z.string().min(1);
@@ -136,6 +153,116 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
 
   server.registerTool('search', { description: 'Bounded text search in the primary workspace or one exact explicitly granted secondary directory root.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, query: z.string(), path: z.string().optional(), maxResults: z.number().int().positive().max(1000).optional() }) },
     async ({ workspaceId, query, path, maxResults }) => { try { return text(await searchWithOptions({ workspaceId, query, path, maxResults, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
+
+  server.registerTool('read_image', {
+    description: 'Read one authorized local PNG/JPEG/GIF/WebP/BMP through the exact pinned DesktopCommander image path. Parent-owned signature, authority, input/output byte bounds, and typed MCP image content. SVG is blocked.',
+    annotations: R,
+    inputSchema: z.object({
+      workspaceId: workspaceIdSchema,
+      path: z.string(),
+      maxInputBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.image.inputBytes).optional(),
+      maxOutputBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.image.outputBytes).optional(),
+    }).strict(),
+  }, async (args) => {
+    try {
+      return structured(await readImageWithDesktopCommander({
+        ...args,
+        secondaryReadGrants: secondaryReadGrantsFor(args.workspaceId),
+      }, workspaceRegistry, child));
+    } catch (e) { return errText(e.message); }
+  });
+
+  server.registerTool('read_excel', {
+    description: 'Read authorized .xlsx/.xlsm workbook metadata or bounded sheet/range values through the exact pinned child and its non-streaming ExcelJS path. Parent owns ZIP, authority, row/cell/input/result budgets. Legacy .xls and all writes/formula creation are blocked.',
+    annotations: R,
+    inputSchema: z.object({
+      workspaceId: workspaceIdSchema,
+      path: z.string(),
+      mode: z.enum(['metadata', 'values']).optional(),
+      sheet: z.string().max(256).optional(),
+      range: z.string().max(256).optional(),
+      offset: z.number().int().nonnegative().max(1048575).optional(),
+      maxRows: z.number().int().positive().max(STRUCTURED_READ_LIMITS.excel.rows).optional(),
+      maxCells: z.number().int().positive().max(STRUCTURED_READ_LIMITS.excel.cells).optional(),
+      maxInputBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.excel.inputBytes).optional(),
+      maxOutputBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.excel.outputBytes).optional(),
+    }).strict(),
+  }, async (args) => {
+    try {
+      return structured(await readExcelWithDesktopCommander({
+        ...args,
+        secondaryReadGrants: secondaryReadGrantsFor(args.workspaceId),
+      }, workspaceRegistry, child));
+    } catch (e) { return errText(e.message); }
+  });
+
+  server.registerTool('search_excel', {
+    description: 'Targeted literal content search in one authorized .xlsx/.xlsm workbook through the pinned child ExcelJS path. Parent owns authority and result/input budgets; no recursive arbitrary search and no .xls/write surface.',
+    annotations: R,
+    inputSchema: z.object({
+      workspaceId: workspaceIdSchema,
+      path: z.string(),
+      query: z.string().min(1).max(512),
+      maxResults: z.number().int().positive().max(STRUCTURED_READ_LIMITS.excel.results).optional(),
+      maxInputBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.excel.inputBytes).optional(),
+      maxOutputBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.excel.outputBytes).optional(),
+    }).strict(),
+  }, async (args) => {
+    try {
+      return structured(await searchExcelWithDesktopCommander({
+        ...args,
+        secondaryReadGrants: secondaryReadGrantsFor(args.workspaceId),
+      }, workspaceRegistry, child));
+    } catch (e) { return errText(e.message); }
+  });
+
+  server.registerTool('read_pdf', {
+    description: 'Read bounded pages and text from one authorized local PDF through the exact pinned child PDF path, preserving typed bounded embedded image blocks. Parent owns page/text/image/input/output budgets, timeout/recovery, authority, and local-only dispatch. No metadata-only shortcut, creation, or mutation.',
+    annotations: R,
+    inputSchema: z.object({
+      workspaceId: workspaceIdSchema,
+      path: z.string(),
+      pageOffset: z.number().int().nonnegative().max(1000000).optional(),
+      pageCount: z.number().int().positive().max(STRUCTURED_READ_LIMITS.pdf.pages).optional(),
+      maxTextBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.pdf.textBytes).optional(),
+      maxImages: z.number().int().positive().max(STRUCTURED_READ_LIMITS.pdf.images).optional(),
+      maxImageBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.pdf.imageBytes).optional(),
+      maxOutputBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.pdf.outputBytes).optional(),
+      maxInputBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.pdf.inputBytes).optional(),
+      timeoutMs: z.number().int().positive().max(STRUCTURED_READ_LIMITS.pdf.timeoutMs).optional(),
+      includeImages: z.boolean().optional(),
+    }).strict(),
+  }, async (args) => {
+    try {
+      return structured(await readPdfWithDesktopCommander({
+        ...args,
+        secondaryReadGrants: secondaryReadGrantsFor(args.workspaceId),
+      }, workspaceRegistry, child));
+    } catch (e) { return errText(e.message); }
+  });
+
+  server.registerTool('read_docx', {
+    description: 'Read an authorized .docx outline, bounded raw XML page, or safe bounded info through the exact pinned child DOCX path. Parent owns authority, ZIP/decompressed/XML/output/timeout budgets and recovery. No arbitrary XML edit, text edit, or create surface.',
+    annotations: R,
+    inputSchema: z.object({
+      workspaceId: workspaceIdSchema,
+      path: z.string(),
+      mode: z.enum(['outline', 'xml', 'info']).optional(),
+      offset: z.number().int().nonnegative().max(9999).optional(),
+      maxLines: z.number().int().positive().max(STRUCTURED_READ_LIMITS.docx.lines).optional(),
+      maxXmlBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.docx.xmlBytes).optional(),
+      maxInputBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.docx.inputBytes).optional(),
+      maxOutputBytes: z.number().int().positive().max(STRUCTURED_READ_LIMITS.docx.outputBytes).optional(),
+      timeoutMs: z.number().int().positive().max(STRUCTURED_READ_LIMITS.docx.timeoutMs).optional(),
+    }).strict(),
+  }, async (args) => {
+    try {
+      return structured(await readDocxWithDesktopCommander({
+        ...args,
+        secondaryReadGrants: secondaryReadGrantsFor(args.workspaceId),
+      }, workspaceRegistry, child));
+    } catch (e) { return errText(e.message); }
+  });
 
   server.registerTool('git_status', { description: 'Read-only git status for a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema }) },
     async ({ workspaceId }) => { try { return text(await gitStatus({ workspaceId }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
