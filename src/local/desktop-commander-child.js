@@ -22,6 +22,9 @@ export const COMPOSITE_EDIT_BOUNDARY_BLOCKED = 'COMPOSITE_EDIT_BOUNDARY_BLOCKED'
 // the sole Direct Local edit engine for this phase.
 export const DESKTOP_COMMANDER_REQUIRED_TOOLS = Object.freeze([
   'read_file',
+  'read_multiple_files',
+  'list_directory',
+  'get_file_info',
   'start_search',
   'get_more_search_results',
   'stop_search',
@@ -218,11 +221,11 @@ export class DesktopCommanderChild {
 
   killForTest() { return this.terminateForTest(); }
 
-  async readFile({ path: filePath, maxLines = 2000, maxBytes = READ_MAX_BYTES } = {}) {
+  async readFile({ path: filePath, offset = 0, maxLines = 2000, maxBytes = READ_MAX_BYTES } = {}) {
     const result = await this.#callTool('read_file', {
       path: filePath,
       isUrl: false,
-      offset: 0,
+      offset,
       length: maxLines,
       origin: 'llm',
     });
@@ -231,6 +234,22 @@ export class DesktopCommanderChild {
     // hard read ceiling before normalization.
     const clipped = clipUtf8(extractTextContent(result), Math.min(READ_MAX_BYTES + 1, maxBytes + 1));
     return clipped.text;
+  }
+
+  async readMultipleFiles({ paths = [] } = {}) {
+    const result = await this.#callTool('read_multiple_files', { paths, origin: 'llm' });
+    return clipUtf8(extractTextContent(result), READ_MAX_BYTES + (64 * 1024)).text;
+  }
+
+  async listDirectory({ path: directoryPath, depth = 1 } = {}) {
+    const result = await this.#callTool('list_directory', { path: directoryPath, depth, origin: 'llm' });
+    const clipped = clipUtf8(extractTextContent(result), 256 * 1024);
+    return { output: clipped.text, truncated: clipped.truncated };
+  }
+
+  async getFileInfo({ path: filePath } = {}) {
+    const result = await this.#callTool('get_file_info', { path: filePath, origin: 'llm' });
+    return clipUtf8(extractTextContent(result), 64 * 1024).text;
   }
 
   async startSearch(args = {}) {

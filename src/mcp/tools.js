@@ -8,6 +8,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import { readFileWithDesktopCommander } from '../local/read.js';
 import { searchWithOptions } from '../local/search.js';
+import { fileInfoWithDesktopCommander, filenameSearchWithDesktopCommander, listDirectoryWithDesktopCommander, readMultipleFilesWithDesktopCommander } from '../local/filesystem.js';
 import { gitStatus, gitDiff } from '../local/git.js';
 import { DesktopCommanderChild, COMPOSITE_EDIT_BOUNDARY_BLOCKED } from '../local/desktop-commander-child.js';
 import { WorkspaceError } from '../local/workspace.js';
@@ -118,8 +119,20 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     catch (e) { return errText(e.message); }
   });
 
-  server.registerTool('read', { description: 'Bounded read of a primary-workspace file or an explicitly granted secondary read-only file.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string(), maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional() }) },
-    async ({ workspaceId, path, maxBytes }) => { try { return text(await readFileWithDesktopCommander({ workspaceId, path, maxBytes, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
+  server.registerTool('read', { description: 'Bounded read or continuation range of a primary-workspace file or an explicitly granted secondary read-only file.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string(), offset: z.number().int().nonnegative().optional(), maxLines: z.number().int().positive().max(2000).optional(), maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional() }) },
+    async ({ workspaceId, path, offset, maxLines, maxBytes }) => { try { return text(await readFileWithDesktopCommander({ workspaceId, path, offset, maxLines, maxBytes, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
+
+  server.registerTool('read_multiple', { description: 'Read a small explicit set of authorized ordinary files in one fail-closed operation; no implicit directory enumeration.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, paths: z.array(z.string()).min(1).max(16), maxLines: z.number().int().positive().max(2000).optional(), maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional() }) },
+    async ({ workspaceId, paths, maxLines, maxBytes }) => { try { return text(await readMultipleFilesWithDesktopCommander({ workspaceId, paths, maxLines, maxBytes, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
+
+  server.registerTool('list_directory', { description: 'Bounded browse/list of a primary-workspace directory or one exact granted secondary directory; no parent/trust-root enumeration.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string().optional(), depth: z.number().int().min(1).max(3).optional(), maxResults: z.number().int().positive().max(1000).optional() }) },
+    async ({ workspaceId, path, depth, maxResults }) => { try { return text(await listDirectoryWithDesktopCommander({ workspaceId, path, depth, maxResults, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
+
+  server.registerTool('file_info', { description: 'Safe metadata for one exact authorized ordinary file. Sensitive and special-format targets remain blocked.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string() }) },
+    async ({ workspaceId, path }) => { try { return text(await fileInfoWithDesktopCommander({ workspaceId, path, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
+
+  server.registerTool('filename_search', { description: 'Bounded filename/path-name search inside the primary workspace or one exact granted secondary directory.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, query: z.string(), path: z.string().optional(), maxResults: z.number().int().positive().max(1000).optional() }) },
+    async ({ workspaceId, query, path, maxResults }) => { try { return text(await filenameSearchWithDesktopCommander({ workspaceId, query, path, maxResults, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
 
   server.registerTool('search', { description: 'Bounded text search in the primary workspace or one exact explicitly granted secondary directory root.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, query: z.string(), path: z.string().optional(), maxResults: z.number().int().positive().max(1000).optional() }) },
     async ({ workspaceId, query, path, maxResults }) => { try { return text(await searchWithOptions({ workspaceId, query, path, maxResults, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });

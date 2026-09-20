@@ -58,6 +58,9 @@ test('real DesktopCommander child handshakes, validates required tools, and expo
     assert.equal('entryPoint' in health, false);
     assert.deepEqual(DESKTOP_COMMANDER_REQUIRED_TOOLS, [
       'read_file',
+      'read_multiple_files',
+      'list_directory',
+      'get_file_info',
       'start_search',
       'get_more_search_results',
       'stop_search',
@@ -257,8 +260,12 @@ test('MCP schemas remain bounded and no upstream shell tool is public', async (t
     assert.equal(names.includes(forbidden), false, `unexpected public tool: ${forbidden}`);
   }
   const byName = Object.fromEntries(listed.tools.map((tool) => [tool.name, tool]));
-  assert.deepEqual(Object.keys(byName.read.inputSchema.properties).sort(), ['maxBytes', 'path', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.read.inputSchema.properties).sort(), ['maxBytes', 'maxLines', 'offset', 'path', 'workspaceId']);
   assert.deepEqual(byName.read.inputSchema.required.sort(), ['path', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.read_multiple.inputSchema.properties).sort(), ['maxBytes', 'maxLines', 'paths', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.list_directory.inputSchema.properties).sort(), ['depth', 'maxResults', 'path', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.file_info.inputSchema.properties).sort(), ['path', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.filename_search.inputSchema.properties).sort(), ['maxResults', 'path', 'query', 'workspaceId']);
   assert.deepEqual(Object.keys(byName.search.inputSchema.properties).sort(), ['maxResults', 'path', 'query', 'workspaceId']);
   assert.deepEqual(byName.search.inputSchema.required.sort(), ['query', 'workspaceId']);
   assert.deepEqual(Object.keys(byName.git_status.inputSchema.properties), ['workspaceId']);
@@ -377,7 +384,11 @@ test('Issue #124 public schema delta is limited to read-only workspace_open seco
   const listed = await client.listTools();
   const byName = Object.fromEntries(listed.tools.map((tool) => [tool.name, tool]));
 
-  assert.deepEqual(Object.keys(byName.read.inputSchema.properties).sort(), ['maxBytes', 'path', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.read.inputSchema.properties).sort(), ['maxBytes', 'maxLines', 'offset', 'path', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.read_multiple.inputSchema.properties).sort(), ['maxBytes', 'maxLines', 'paths', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.list_directory.inputSchema.properties).sort(), ['depth', 'maxResults', 'path', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.file_info.inputSchema.properties).sort(), ['path', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.filename_search.inputSchema.properties).sort(), ['maxResults', 'path', 'query', 'workspaceId']);
   assert.deepEqual(Object.keys(byName.search.inputSchema.properties).sort(), ['maxResults', 'path', 'query', 'workspaceId']);
   assert.ok(byName.workspace_open.inputSchema.properties.secondaryReadGrants);
   assert.equal(byName.workspace_open.annotations.readOnlyHint, true);
