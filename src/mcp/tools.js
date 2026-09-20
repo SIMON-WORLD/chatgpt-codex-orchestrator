@@ -99,23 +99,22 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   const governance = governanceService || createGovernanceService();
 
   const secondaryReadGrantsFor = (workspaceId) => {
-    if (!governance || typeof governance.getSecondaryReadGrants !== 'function') return [];
-    const ws = workspaceRegistry.get(workspaceId);
-    try { return governance.getSecondaryReadGrants({ workspaceRoot: ws.root }) || []; }
+    try { return workspaceRegistry.getSecondaryReadGrants(workspaceId); }
     catch { return []; }
   };
 
   // ---- Direct Local (read-only + mutation) --------------------------------
   server.registerTool('workspace_open', {
-    description: 'Bind exactly one explicit workspace source before local repo operations: either a caller-supplied path or a server-configured fixture alias.',
+    description: 'Bind one primary workspace context and, optionally, an explicit bounded set of secondary read-only file/root grants for this workspace handle. Grants stay inside the configured host trust ceiling and never widen write/process/network authority.',
     annotations: R,
     inputSchema: z.object({
       path: z.string().optional(),
       fixture: z.string().optional(),
+      secondaryReadGrants: z.array(z.string()).max(16).optional(),
     }),
   },
-  async ({ path, fixture }) => {
-    try { return text(workspaceRegistry.open({ path, fixture })); }
+  async ({ path, fixture, secondaryReadGrants }) => {
+    try { return text(workspaceRegistry.open({ path, fixture, secondaryReadGrants })); }
     catch (e) { return errText(e.message); }
   });
 
@@ -203,16 +202,8 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   if (governance) {
     const invokeGovernanceTransition = (args) => {
       const txArgs = { ...args };
-      if (txArgs.secondaryReadGrants != null && !txArgs.workspaceId) {
-        throw new WorkspaceError('workspaceId is required when setting secondaryReadGrants');
-      }
       if (txArgs.workspaceId) {
-        const ws = workspaceRegistry.get(txArgs.workspaceId);
-        if (governance && typeof governance.authorizeMutation === 'function') txArgs.workspaceRoot = ws.root;
-        if (txArgs.secondaryReadGrants != null) {
-          txArgs.secondaryReadGrants = workspaceRegistry.normalizeSecondaryReadGrants(txArgs.secondaryReadGrants);
-          txArgs.secondaryReadWorkspaceRoot = ws.root;
-        }
+        if (governance && typeof governance.authorizeMutation === 'function') txArgs.workspaceRoot = workspaceRegistry.get(txArgs.workspaceId).root;
         delete txArgs.workspaceId;
       }
       return governance.transition(txArgs);
@@ -229,7 +220,6 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         workspaceId: workspaceIdSchema.optional(),
         route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
         localRoute: z.enum(['CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE']).optional(),
-        secondaryReadGrants: z.array(z.string()).max(16).optional(),
       }).strict(),
     }, async (args) => {
       try { return text(invokeGovernanceTransition({ ...args, control: 'PLAN' })); }
@@ -249,7 +239,6 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         control: z.enum(['PLAN', 'TASK', 'REVISE', 'REPLAN', 'ASK_USER', 'PUBLISH', 'DONE']),
         route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
         localRoute: z.enum(['CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE']).optional(),
-        secondaryReadGrants: z.array(z.string()).max(16).optional(),
         acceptance: z.array(z.object({ id: z.string(), required: z.boolean().optional(), requiredEvidenceLevel: z.string().optional() })).optional(),
         reviseDelta: z.object({ preserve: z.array(z.string()).optional(), invalidate: z.array(z.string()).optional() }).optional(),
         whyBlocked: z.string().optional(),

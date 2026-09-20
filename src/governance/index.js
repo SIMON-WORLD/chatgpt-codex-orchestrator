@@ -11,7 +11,6 @@
 //
 // Governance NEVER performs a workspace mutation itself.
 
-import path from 'node:path';
 import { CONTROLS, validateLifecycleAfterDone, normalizeEvidence } from '../protocol.js';
 import { evaluateDirectAcceptanceGate, normalizeAcceptanceItem, createProofLedger, createDirectMetrics } from '../direct-governance.js';
 import { buildAskUserEnvelope } from '../protocol-integrity.js';
@@ -27,13 +26,6 @@ export class GovernanceError extends Error {
 
 const EXECUTOR_OK = 'success';
 const GATE_PASS = 'pass';
-
-function rootsEqual(a, b) {
-  if (!a || !b) return false;
-  const left = path.resolve(String(a));
-  const right = path.resolve(String(b));
-  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
-}
 
 function newStep(stepId, acceptance = []) {
   return {
@@ -61,8 +53,6 @@ export class GovernanceService {
       control: null,
       route: null,
       localRoute: null,
-      secondaryReadGrants: [],
-      secondaryReadWorkspaceRoot: null,
       planRevision: 0,
       currentStepId: null,
       previousStepId: null,
@@ -100,8 +90,6 @@ export class GovernanceService {
     this.state.control = null;
     this.state.route = null;
     this.state.localRoute = null;
-    this.state.secondaryReadGrants = [];
-    this.state.secondaryReadWorkspaceRoot = null;
     this.state.planRevision = 0;
     this.state.currentStepId = null;
     this.state.previousStepId = null;
@@ -179,7 +167,7 @@ export class GovernanceService {
   }
 
   // ---- Brain controls -------------------------------------------------------
-  transition({ taskId = null, stepId = null, control, route = null, localRoute = null, secondaryReadGrants = null, secondaryReadWorkspaceRoot = null, acceptance = null, reviseDelta = null, whyBlocked = '', minimalUserAction = '', expectedFields = [], question = '', resumeControlId = null } = {}) {
+  transition({ taskId = null, stepId = null, control, route = null, localRoute = null, acceptance = null, reviseDelta = null, whyBlocked = '', minimalUserAction = '', expectedFields = [], question = '', resumeControlId = null } = {}) {
     this._requireControl(control);
     // Sequential task boundary in one persistent runtime: a NEW taskId at a terminal-DONE
     // + PLAN boundary starts a fresh task lifecycle. Otherwise a taskId change is rejected.
@@ -200,12 +188,6 @@ export class GovernanceService {
 
     if (route) this.state.route = route;
     if (localRoute) this.state.localRoute = localRoute;
-    if (secondaryReadGrants != null && !['PLAN', 'TASK', 'REVISE', 'REPLAN'].includes(control)) {
-      throw new GovernanceError(`secondaryReadGrants may only change on PLAN/TASK/REVISE/REPLAN, got ${control}`);
-    }
-    if (secondaryReadGrants != null && !secondaryReadWorkspaceRoot) {
-      throw new GovernanceError('secondaryReadGrants require the canonical primary workspace root');
-    }
 
     let blocked = false;
     let reason = null;
@@ -332,11 +314,6 @@ export class GovernanceService {
         nextAction = 'none';
     }
 
-    if (!blocked && secondaryReadGrants != null) {
-      if (!Array.isArray(secondaryReadGrants)) throw new GovernanceError('secondaryReadGrants must be an array');
-      this.state.secondaryReadGrants = structuredClone(secondaryReadGrants);
-      this.state.secondaryReadWorkspaceRoot = path.resolve(String(secondaryReadWorkspaceRoot));
-    }
     if (control !== 'DONE') this.state.control = control;
 
     this._pushHistory({ control, blocked: !!blocked, reason, nextAction });
@@ -456,13 +433,6 @@ export class GovernanceService {
     });
   }
 
-
-  getSecondaryReadGrants({ workspaceRoot = null } = {}) {
-    if (this.state.control === 'DONE') return [];
-    if (!rootsEqual(workspaceRoot, this.state.secondaryReadWorkspaceRoot)) return [];
-    return structuredClone(this.state.secondaryReadGrants || []);
-  }
-
   status() {
     const steps = {};
     for (const [id, s] of Object.entries(this.state.steps)) {
@@ -482,7 +452,6 @@ export class GovernanceService {
       control: this.state.control,
       route: this.state.route,
       localRoute: this.state.localRoute,
-      secondaryReadGrants: structuredClone(this.state.secondaryReadGrants || []),
       currentStepId: this.state.currentStepId,
       previousStepId: this.state.previousStepId,
       steps,

@@ -167,19 +167,23 @@ test('external search retains scan/result budgets', async () => {
   assert.equal(result.limitReason, 'maxScannedFiles');
 });
 
-test('secondary grants stay inside the host trust ceiling and never widen resolveWritable', () => {
-  const { external, registry, workspace } = fixture();
+test('session-bound secondary grants stay inside the host trust ceiling and never widen resolveWritable', () => {
+  const { primary, external, registry, workspace } = fixture();
   registry.normalizeSecondaryReadGrants([external]);
+  const bound = registry.open({ path: primary, secondaryReadGrants: [external] });
+  assert.equal(bound.secondaryReadGrantCount, 1);
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'issue124-outside-ceiling-'));
   fs.writeFileSync(path.join(outside, 'outside.txt'), 'outside\n', 'utf8');
   assert.throws(
-    () => registry.normalizeSecondaryReadGrants([path.join(outside, 'outside.txt')]),
+    () => registry.open({ path: primary, secondaryReadGrants: [path.join(outside, 'outside.txt')] }),
     /not within configured allowed roots/,
   );
-  assert.throws(
-    () => registry.resolveWritable(workspace.workspaceId, path.join(external, 'allowed.txt')),
-    /absolute path not allowed/,
-  );
+  for (const workspaceId of [workspace.workspaceId, bound.workspaceId]) {
+    assert.throws(
+      () => registry.resolveWritable(workspaceId, path.join(external, 'allowed.txt')),
+      /absolute path not allowed/,
+    );
+  }
 });
 
 test('real pinned DesktopCommander child executes external granted read/search', async () => {

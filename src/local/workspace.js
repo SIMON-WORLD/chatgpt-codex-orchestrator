@@ -89,7 +89,7 @@ export class WorkspaceRegistry {
     return null;
   }
 
-  open({ path: rawPath = null, fixture = null } = {}) {
+  open({ path: rawPath = null, fixture = null, secondaryReadGrants = [] } = {}) {
     const hasPath = typeof rawPath === 'string' && rawPath.trim().length > 0;
     const hasFixture = typeof fixture === 'string' && fixture.trim().length > 0;
     if (hasPath === hasFixture) throw new WorkspaceError('workspace_open requires exactly one of path or fixture');
@@ -113,6 +113,7 @@ export class WorkspaceRegistry {
     if (!allowed) throw new WorkspaceError(`workspace path not within configured allowed roots: ${canonical}`);
     const workspaceId = crypto.randomUUID();
     const isGitRepo = detectGitRepo(canonical);
+    const normalizedSecondaryReadGrants = this.normalizeSecondaryReadGrants(secondaryReadGrants);
     const ws = {
       workspaceId,
       root: canonical,
@@ -120,6 +121,7 @@ export class WorkspaceRegistry {
       allowedRoot: allowed,
       fixture: fixtureName,
       fixtureContract: fixtureContract ? JSON.parse(JSON.stringify(fixtureContract)) : null,
+      secondaryReadGrants: normalizedSecondaryReadGrants,
     };
     this._workspaces.set(workspaceId, ws);
     return {
@@ -128,6 +130,7 @@ export class WorkspaceRegistry {
       isGitRepo,
       ...(fixtureName ? { fixture: fixtureName } : {}),
       ...(fixtureContract ? { fixtureContract: JSON.parse(JSON.stringify(fixtureContract)) } : {}),
+      secondaryReadGrantCount: normalizedSecondaryReadGrants.length,
     };
   }
 
@@ -135,6 +138,11 @@ export class WorkspaceRegistry {
     const ws = this._workspaces.get(workspaceId);
     if (!ws) throw new WorkspaceError(`unknown workspaceId: ${workspaceId}`);
     return ws;
+  }
+
+  getSecondaryReadGrants(workspaceId) {
+    const ws = this.get(workspaceId);
+    return structuredClone(ws.secondaryReadGrants || []);
   }
 
   normalizeSecondaryReadGrants(grants = []) {

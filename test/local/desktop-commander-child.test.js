@@ -366,7 +366,7 @@ test('real child preserves the 200 KiB git diff output bound', async () => {
   }
 });
 
-test('Issue #124 public schema delta is limited to optional Governance secondaryReadGrants', async (t) => {
+test('Issue #124 public schema delta is limited to read-only workspace_open secondaryReadGrants', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'issue124-schema-'));
   const registry = new WorkspaceRegistry({ allowedRoots: [root] });
   const server = await startMcpServer({ workspaceRegistry: registry, desktopCommanderChild: {}, host: '127.0.0.1', port: 0 });
@@ -379,10 +379,9 @@ test('Issue #124 public schema delta is limited to optional Governance secondary
 
   assert.deepEqual(Object.keys(byName.read.inputSchema.properties).sort(), ['maxBytes', 'path', 'workspaceId']);
   assert.deepEqual(Object.keys(byName.search.inputSchema.properties).sort(), ['maxResults', 'path', 'query', 'workspaceId']);
-  for (const name of ['governance_plan', 'governance_transition']) {
-    assert.ok(byName[name].inputSchema.properties.secondaryReadGrants);
-  }
-  for (const name of ['workspace_open', 'read', 'search', 'git_status', 'git_diff']) {
+  assert.ok(byName.workspace_open.inputSchema.properties.secondaryReadGrants);
+  assert.equal(byName.workspace_open.annotations.readOnlyHint, true);
+  for (const name of ['governance_plan', 'governance_transition', 'read', 'search', 'git_status', 'git_diff']) {
     assert.equal(Object.hasOwn(byName[name].inputSchema.properties, 'secondaryReadGrants'), false);
   }
   for (const forbidden of ['shell', 'execute_command', 'start_process', 'write_file', 'edit_block', 'config']) {
@@ -390,19 +389,25 @@ test('Issue #124 public schema delta is limited to optional Governance secondary
   }
 });
 
-test('Issue #124 secondary grants are bound to the primary workspace even with in-memory Governance', async (t) => {
+test('Issue #124 workspace_open binds grants to one read-only workspace handle without Governance mutation', async (t) => {
   const host = fs.mkdtempSync(path.join(os.tmpdir(), 'issue124-workspace-binding-'));
-  const primaryA = path.join(host, 'primary-a');
-  const primaryB = path.join(host, 'primary-b');
+  const primary = path.join(host, 'primary');
   const external = path.join(host, 'external');
-  fs.mkdirSync(primaryA); fs.mkdirSync(primaryB); fs.mkdirSync(external);
+  fs.mkdirSync(primary); fs.mkdirSync(external);
   const granted = path.join(external, 'granted.txt');
   fs.writeFileSync(granted, 'granted marker\n', 'utf8');
   const registry = new WorkspaceRegistry({ allowedRoots: [host] });
-  const a = registry.open({ path: primaryA });
-  const b = registry.open({ path: primaryB });
-  let calls = 0;
-  const fakeChild = { readFile: async () => { calls += 1; return 'granted marker\n'; } };
+  let readCalls = 0;
+  let searchCalls = 0;
+  const fakeChild = {
+    readFile: async () => { readCalls += 1; return 'granted marker\n'; },
+    startSearch: async () => {
+      searchCalls += 1;
+      return `Started content search session: issue124-session\nStatus: COMPLETED\nTotal results: 1\n📄 ${granted}:1 - granted marker`;
+    },
+    getMoreSearchResults: async () => 'Search session: issue124-session\nStatus: COMPLETED\nTotal results found: 1\n✅ Search completed.',
+    stopSearch: async () => 'stopped',
+  };
   const server = await startMcpServer({
     workspaceRegistry: registry, desktopCommanderChild: fakeChild, host: '127.0.0.1', port: 0,
   });
@@ -411,21 +416,47 @@ test('Issue #124 secondary grants are bound to the primary workspace even with i
   await client.connect(new StreamableHTTPClientTransport(server.url));
   t.after(() => client.close());
 
-  const plan = await client.callTool({
-    name: 'governance_plan',
-    arguments: { taskId: 'issue124-workspace-binding', workspaceId: a.workspaceId, secondaryReadGrants: [granted] },
+  const plainOpen = await client.callTool({
+    name: 'workspace_open', arguments: { path: primary },
   });
-  assert.notEqual(plan.isError, true);
+  assert.notEqual(plainOpen.isError, true);
+  const plain = JSON.parse(plainOpen.content[0].text);
+  assert.equal(plain.secondaryReadGrantCount, 0);
+
+  const grantedOpen = await client.callTool({
+    name: 'workspace_open', arguments: { path: primary, secondaryReadGrants: [external] },
+  });
+  assert.notEqual(grantedOpen.isError, true);
+  const bound = JSON.parse(grantedOpen.content[0].text);
+  assert.equal(bound.secondaryReadGrantCount, 1);
+  assert.notEqual(bound.workspaceId, plain.workspaceId);
 
   const allowed = await client.callTool({
-    name: 'read', arguments: { workspaceId: a.workspaceId, path: granted },
+    name: 'read', arguments: { workspaceId: bound.workspaceId, path: granted },
   });
   assert.notEqual(allowed.isError, true);
-  assert.equal(calls, 1);
+  assert.equal(readCalls, 1);
+
+  const searched = await client.callTool({
+    name: 'search', arguments: { workspaceId: bound.workspaceId, query: 'marker', path: external, maxResults: 10 },
+  });
+  assert.notEqual(searched.isError, true);
+  assert.equal(searchCalls, 1);
 
   const blocked = await client.callTool({
-    name: 'read', arguments: { workspaceId: b.workspaceId, path: granted },
+    name: 'read', arguments: { workspaceId: plain.workspaceId, path: granted },
   });
   assert.equal(blocked.isError, true);
-  assert.equal(calls, 1, 'wrong-primary-workspace grant must fail before child dispatch');
+  assert.equal(readCalls, 1, 'grant-free handle read must fail before child dispatch');
+
+  const blockedSearch = await client.callTool({
+    name: 'search', arguments: { workspaceId: plain.workspaceId, query: 'marker', path: external, maxResults: 10 },
+  });
+  assert.equal(blockedSearch.isError, true);
+  assert.equal(searchCalls, 1, 'grant-free handle search must fail before child dispatch');
+
+  const listed = await client.listTools();
+  const byName = Object.fromEntries(listed.tools.map((tool) => [tool.name, tool]));
+  assert.equal(Object.hasOwn(byName.governance_plan.inputSchema.properties, 'secondaryReadGrants'), false);
+  assert.equal(Object.hasOwn(byName.governance_transition.inputSchema.properties, 'secondaryReadGrants'), false);
 });
