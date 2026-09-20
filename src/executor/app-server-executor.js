@@ -21,10 +21,11 @@
 //     job.mutationUnitId), it does NOT treat that old-turn terminal as the current
 //     unit's terminal, does NOT release the current writer, and returns
 //     recoveryRequired=true + nextAction=codex_reconcile.
-//   - reconcile()/resume() share an authoritative identity-safe resolver
-//     (_authoritativeReconcileCore): thread/resume + thread/read -> resolve the turn
-//     belonging to the CURRENT mutation unit (durable-binding an unseen single
-//     candidate when uniquely identified) -> reconcile that unit's real status.
+//   - reconcile()/resume()/interrupt share an authoritative identity-safe observer.
+//     Legacy history uses thread/resume + thread/read(includeTurns=true); paginated
+//     history uses bounded thread/turns/list pages and never infers status from absence.
+//     The observer resolves the CURRENT mutation unit (durable-binding an unseen single
+//     candidate only when uniquely proven) before reconciling that unit's real status.
 //     Never infers current-B terminal from old-A terminal. No generic force-unlock.
 
 import path from 'node:path';
@@ -45,6 +46,33 @@ export const APPROVAL_POLICY_BY_ACCESS = Object.freeze({
 
 const WORKSPACE_WRITE = 'workspace-write';
 const READ_ONLY = 'read-only';
+
+const AUTHORITATIVE_TURN_PAGE_SIZE = 25;
+const AUTHORITATIVE_TURN_MAX_PAGES = 8;
+const AUTHORITATIVE_TURN_MAX_SCANNED = AUTHORITATIVE_TURN_PAGE_SIZE * AUTHORITATIVE_TURN_MAX_PAGES;
+
+function appServerErrorText(error) {
+  return String((error && error.message) || error || '').toLowerCase();
+}
+
+function isPaginatedFullHistoryIncompatibility(error) {
+  const text = appServerErrorText(error);
+  return text.includes('paginated_threads')
+    || (text.includes('paginated') && text.includes('full-history'))
+    || (text.includes('paginated') && text.includes('thread/turns/list'));
+}
+
+function isMethodUnsupported(error) {
+  const text = appServerErrorText(error);
+  return text.includes('"code":-32601')
+    || text.includes('method not found')
+    || text.includes('unsupported method')
+    || text.includes('is unavailable');
+}
+
+function threadHistoryMode(thread) {
+  return String((thread && thread.historyMode) || '').toLowerCase();
+}
 
 // Build the SandboxPolicy object sent on turn/start (and used to derive the effective
 // permission contract). workspace_write scopes `writableRoots` to the target workspace so
@@ -333,17 +361,140 @@ export class AppServerExecutor {
     return { ownershipReleased, status, unitState: ownershipReleased ? 'released' : this.owner.unitState };
   }
 
-  async _authoritativeTurn(job) {
-    if (!job || !job.threadId || !job.turnId) return null;
-    let read;
-    try {
-      read = await this.client.request('thread/read', { threadId: job.threadId, includeTurns: true });
-    } catch {
-      return null;
+  async _paginatedTurnHistory(job) {
+    const unitId = job.mutationUnitId || null;
+    const turnUnits = job.turnUnits || {};
+    const currentBoundIds = Object.entries(turnUnits)
+      .filter(([, mappedUnitId]) => mappedUnitId === unitId)
+      .map(([turnId]) => turnId);
+    const exactTurnId = (job.turnId && turnUnits[job.turnId] === unitId)
+      ? job.turnId
+      : (currentBoundIds.length === 1 ? currentBoundIds[0] : null);
+
+    let cursor = null;
+    let pages = 0;
+    let scanned = 0;
+    const seenCursors = new Set();
+    const turns = [];
+    const seenTurnIds = new Set();
+
+    while (pages < AUTHORITATIVE_TURN_MAX_PAGES && scanned < AUTHORITATIVE_TURN_MAX_SCANNED) {
+      const remaining = AUTHORITATIVE_TURN_MAX_SCANNED - scanned;
+      const limit = Math.min(AUTHORITATIVE_TURN_PAGE_SIZE, remaining);
+      let page;
+      try {
+        page = await this.client.request('thread/turns/list', {
+          threadId: job.threadId,
+          cursor,
+          limit,
+          sortDirection: 'desc',
+          itemsView: 'notLoaded',
+        });
+      } catch (e) {
+        return {
+          ok: false,
+          reason: 'thread/turns/list failed: ' + String(e.message || e).slice(0, 160),
+          observationCode: isMethodUnsupported(e) ? 'paginated_turns_list_unsupported' : 'paginated_turns_list_failed',
+        };
+      }
+
+      if (!page || !Array.isArray(page.data)) {
+        return { ok: false, reason: 'thread/turns/list returned unreadable page', observationCode: 'paginated_turns_unreadable' };
+      }
+
+      pages += 1;
+      scanned += page.data.length;
+      for (const turn of page.data) {
+        if (!turn || !turn.id) continue;
+        if (exactTurnId && turn.id === exactTurnId) {
+          return { ok: true, turns: [turn], complete: false, historyMode: 'paginated', pages, scanned };
+        }
+        if (!seenTurnIds.has(turn.id)) {
+          seenTurnIds.add(turn.id);
+          turns.push(turn);
+        }
+      }
+
+      const nextCursor = page.nextCursor || null;
+      if (!nextCursor) {
+        if (exactTurnId) {
+          return {
+            ok: false,
+            reason: 'exact current-unit turn was not found in paginated history',
+            observationCode: 'paginated_turn_not_found',
+          };
+        }
+        return { ok: true, turns, complete: true, historyMode: 'paginated', pages, scanned };
+      }
+      if (seenCursors.has(nextCursor) || nextCursor === cursor) {
+        return { ok: false, reason: 'thread/turns/list cursor did not advance', observationCode: 'paginated_cursor_loop' };
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
     }
-    const thread = read && read.thread;
-    const turn = thread && Array.isArray(thread.turns) ? thread.turns.find((t) => t && t.id === job.turnId) : null;
-    return turn && turn.status ? turn : null;
+
+    return {
+      ok: false,
+      reason: 'paginated authoritative turn search exceeded bounded page/turn ceiling',
+      observationCode: 'paginated_page_limit',
+    };
+  }
+
+  async _authoritativeTurn(job) {
+    if (!job || !job.threadId) {
+      return { ok: false, reason: 'no thread identity to reconcile', observationCode: 'missing_thread_identity' };
+    }
+
+    let resumed;
+    try {
+      resumed = await this.client.request('thread/resume', {
+        threadId: job.threadId,
+        ...(job.cwd ? { cwd: job.cwd } : {}),
+        excludeTurns: true,
+      });
+    } catch (e) {
+      return { ok: false, reason: 'resume failed: ' + String(e.message || e).slice(0, 160), observationCode: 'resume_failed' };
+    }
+    if (!(resumed && resumed.thread && resumed.thread.id)) {
+      return { ok: false, reason: 'thread/resume returned no thread id', observationCode: 'resume_no_thread_identity' };
+    }
+
+    let history;
+    const resumedMode = threadHistoryMode(resumed.thread);
+    if (resumedMode === 'paginated') {
+      history = await this._paginatedTurnHistory(job);
+    } else {
+      let read;
+      try {
+        read = await this.client.request('thread/read', { threadId: job.threadId, includeTurns: true });
+      } catch (e) {
+        if (!isPaginatedFullHistoryIncompatibility(e)) {
+          return { ok: false, reason: 'thread/read failed: ' + String(e.message || e).slice(0, 160), observationCode: 'read_failed' };
+        }
+        history = await this._paginatedTurnHistory(job);
+      }
+      if (!history) {
+        const thread = read && read.thread;
+        if (!thread) return { ok: false, reason: 'thread/read returned no thread', observationCode: 'read_no_thread' };
+        if (threadHistoryMode(thread) === 'paginated') history = await this._paginatedTurnHistory(job);
+        else history = { ok: true, turns: Array.isArray(thread.turns) ? thread.turns : [], complete: true, historyMode: 'legacy' };
+      }
+    }
+
+    if (!history.ok) return history;
+    const resolved = this._resolveCurrentUnitTurn(job, history.turns || []);
+    if (!resolved.ok) return resolved;
+
+    const turn = resolved.turn;
+    if (resolved.resolution === 'unbound_single') {
+      const tu = { ...(job.turnUnits || {}), [turn.id]: resolved.unitId };
+      this.jobMap.update(job.jobId, { turnId: turn.id, turnUnits: tu, updatedAt: Date.now() });
+      this._turnUnits.set(turn.id, resolved.unitId);
+    }
+    if (!turn || !turn.status) {
+      return { ok: false, reason: 'authoritative turn has no readable status', observationCode: 'lifecycle_unreadable' };
+    }
+    return { ok: true, turn, resolution: resolved.resolution, unitId: resolved.unitId, historyMode: history.historyMode || resumedMode || 'legacy' };
   }
 
   async _ensureConnected() {
@@ -382,40 +533,14 @@ export class AppServerExecutor {
   async _authoritativeObserveLifecycleCore(job) {
     const jobId = job.jobId;
     const unitId = job.mutationUnitId || null;
-    if (!job.threadId) return { ok: false, resolution: 'unresolved', reason: 'no thread identity to reconcile', observationCode: 'missing_thread_identity' };
-    let resumed;
-    try {
-      resumed = await this.client.request('thread/resume', { threadId: job.threadId, ...(job.cwd ? { cwd: job.cwd } : {}) });
-    } catch (e) {
+    const observed = await this._authoritativeTurn(job);
+    if (!observed.ok) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', reason: 'resume failed: ' + String(e.message || e).slice(0, 160), observationCode: 'resume_failed' };
+      return { ok: false, resolution: 'unresolved', reason: observed.reason, observationCode: observed.observationCode || 'lifecycle_unreadable' };
     }
-    if (!(resumed && resumed.thread && resumed.thread.id)) {
-      this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', reason: 'thread/resume returned no thread id', observationCode: 'resume_no_thread_identity' };
-    }
-    let read;
-    try {
-      read = await this.client.request('thread/read', { threadId: job.threadId, includeTurns: true });
-    } catch (e) {
-      this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', reason: 'thread/read failed: ' + String(e.message || e).slice(0, 160), observationCode: 'read_failed' };
-    }
-    const thread = read && read.thread;
-    const turns = (thread && Array.isArray(thread.turns)) ? thread.turns : [];
-    const resolved = this._resolveCurrentUnitTurn(job, turns);
-    if (!resolved.ok) {
-      this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', reason: resolved.reason, observationCode: resolved.observationCode || 'lifecycle_unreadable' };
-    }
-    const turn = resolved.turn;
-    if (resolved.resolution === 'unbound_single') {
-      const tu = { ...(job.turnUnits || {}), [turn.id]: unitId };
-      this.jobMap.update(jobId, { turnId: turn.id, turnUnits: tu, updatedAt: Date.now() });
-      this._turnUnits.set(turn.id, unitId);
-    }
-    if (TERMINAL_TURN_STATES.includes(turn.status)) return { ok: true, resolution: 'terminal', state: turn.status, unitId };
-    if (turn.status === 'inProgress') return { ok: true, resolution: 'in_progress', state: 'running', unitId };
+    const turn = observed.turn;
+    if (TERMINAL_TURN_STATES.includes(turn.status)) return { ok: true, resolution: 'terminal', state: turn.status, unitId, observationCode: null };
+    if (turn.status === 'inProgress') return { ok: true, resolution: 'in_progress', state: 'running', unitId, observationCode: null };
     this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
     return { ok: false, resolution: 'unresolved', reason: 'ambiguous or unreadable turn state', observationCode: 'lifecycle_unreadable' };
   }
@@ -429,7 +554,7 @@ export class AppServerExecutor {
     const isWriter = this._isWriter(job);
     const observed = await this._authoritativeObserveLifecycle(job);
     if (!observed.ok) {
-      return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: observed.reason };
+      return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: observed.reason, observationCode: observed.observationCode || 'lifecycle_unreadable' };
     }
 
     if (observed.resolution === 'terminal') {
@@ -830,7 +955,7 @@ export class AppServerExecutor {
     }
     const core = await this._authoritativeReconcileCore(job);
     if (!core.ok) {
-      return { jobId, reconciled: false, resolution: 'unresolved', recoveryRequired: true, reason: core.reason };
+      return { jobId, reconciled: false, resolution: 'unresolved', recoveryRequired: true, reason: core.reason, observationCode: core.observationCode || 'lifecycle_unreadable' };
     }
     return {
       jobId, reconciled: true, resolution: core.resolution, state: core.state,
@@ -908,17 +1033,28 @@ export class AppServerExecutor {
 
   async _boundedReconcile(jobId, attempts = 3, delayMs = 150) {
     const job = this.jobMap.load(jobId);
-    if (!job) return { jobId, reconciliation: 'unresolved', ownershipReleased: false, recoveryRequired: true };
+    if (!job) return { jobId, reconciliation: 'unresolved', ownershipReleased: false, recoveryRequired: true, observationCode: 'missing_job' };
+    let lastObservation = null;
     for (let i = 0; i < attempts; i++) {
-      const turn = await this._authoritativeTurn(job);
-      if (turn && TERMINAL_TURN_STATES.includes(turn.status)) {
-        const rel = this._releaseUnitOnTerminal(job, turn.status);
-        return { jobId, state: turn.status, reconciliation: 'confirmed', ownershipReleased: rel.ownershipReleased, recoveryRequired: false, mutationUnitId: job.mutationUnitId || null };
+      const observed = await this._authoritativeTurn(job);
+      lastObservation = observed;
+      if (observed.ok && TERMINAL_TURN_STATES.includes(observed.turn.status)) {
+        const rel = this._releaseUnitOnTerminal(job, observed.turn.status);
+        return { jobId, state: observed.turn.status, reconciliation: 'confirmed', ownershipReleased: rel.ownershipReleased, recoveryRequired: false, mutationUnitId: job.mutationUnitId || null };
       }
       if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs));
     }
-    this.jobMap.update(jobId, { state: 'interrupted', updatedAt: Date.now() });
-    return { jobId, state: 'interrupted', reconciliation: 'unresolved', ownershipReleased: false, recoveryRequired: true, mutationUnitId: job.mutationUnitId || null };
+    this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
+    return {
+      jobId,
+      state: 'recovery_required',
+      reconciliation: 'unresolved',
+      ownershipReleased: false,
+      recoveryRequired: true,
+      mutationUnitId: job.mutationUnitId || null,
+      reason: lastObservation && lastObservation.reason ? lastObservation.reason : 'authoritative terminal state not confirmed',
+      observationCode: lastObservation && lastObservation.observationCode ? lastObservation.observationCode : 'terminal_not_confirmed',
+    };
   }
 
   async interrupt({ jobId }) {
@@ -926,7 +1062,7 @@ export class AppServerExecutor {
     if (!job) throw new Error(`unknown job: ${jobId}`);
     if (!job.threadId || !job.turnId) throw new Error(`job ${jobId} has no turn to interrupt`);
     await this.client.request('turn/interrupt', { threadId: job.threadId, turnId: job.turnId });
-    this.jobMap.update(jobId, { state: 'interrupted', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
     return this._boundedReconcile(jobId);
   }
 
