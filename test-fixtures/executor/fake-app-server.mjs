@@ -32,6 +32,11 @@ const EMIT_APPROVAL_NONBINARY = process.env.FAKE_APP_SERVER_APPROVAL_NONBINARY =
 const DIE_MS = process.env.FAKE_APP_SERVER_DIE_MS ? Number(process.env.FAKE_APP_SERVER_DIE_MS) : null;
 const FAIL_TURN_START = process.env.FAKE_APP_SERVER_FAIL_TURN_START === '1';
 const SLOW_TURN = process.env.FAKE_APP_SERVER_SLOW_TURN === '1';
+const HISTORY_MODE = process.env.FAKE_APP_SERVER_HISTORY_MODE || 'full';
+const HIDE_HISTORY_MODE = process.env.FAKE_APP_SERVER_HIDE_HISTORY_MODE === '1';
+const PAGINATED_READ_ERROR = process.env.FAKE_APP_SERVER_PAGINATED_READ_ERROR === '1';
+const TURNS_LIST_UNSUPPORTED = process.env.FAKE_APP_SERVER_TURNS_LIST_UNSUPPORTED === '1';
+const TURN_PAGE_CAP = process.env.FAKE_APP_SERVER_TURN_PAGE_CAP ? Number(process.env.FAKE_APP_SERVER_TURN_PAGE_CAP) : null;
 const STATE_DIR = process.env.FAKE_APP_SERVER_STATE_DIR || os.tmpdir();
 const STATE_FILE = path.join(STATE_DIR, 'fake-app-server-state.json');
 
@@ -60,7 +65,8 @@ function notify(method, params) { process.stdout.write(JSON.stringify({ method, 
 function fakeThread(id) {
   return {
     id, extra: null, sessionId: id, forkedFromId: null, parentThreadId: null,
-    preview: '', ephemeral: false, isPinned: false, historyMode: 'full',
+    preview: '', ephemeral: false, isPinned: false,
+    ...(HIDE_HISTORY_MODE ? {} : { historyMode: HISTORY_MODE }),
     modelProvider: 'openai', createdAt: Math.floor(Date.now() / 1000),
     updatedAt: Math.floor(Date.now() / 1000), recencyAt: null, status: 'idle',
     path: null, cwd: process.cwd(), cliVersion: '0.146.0-fake', source: 'app-server',
@@ -185,8 +191,11 @@ function handle(msg) {
       if (!thread) return respondError(id, { code: -32601, message: `thread not found: ${threadId}` });
       const activeTurn = currentTurns().find((t) => t.status === 'inProgress' || t.status === 'interrupted');
       maybeReEmitApproval(threadId, activeTurn ? activeTurn.id : null);
+      let resumedThread = threadWithTurns(threadId);
+      if (params && params.excludeTurns === true) resumedThread = { ...resumedThread, turns: [] };
+      if (HIDE_HISTORY_MODE) delete resumedThread.historyMode;
       return respond(id, {
-        thread: threadWithTurns(threadId),
+        thread: resumedThread,
         model: 'fake', modelProvider: 'openai', serviceTier: null,
         cwd: thread.cwd, runtimeWorkspaceRoots: [], instructionSources: [],
         approvalPolicy: 'on-request', approvalsReviewer: 'user',
@@ -238,7 +247,35 @@ function handle(msg) {
       const threadId = params && params.threadId;
       const thread = threads.get(threadId);
       if (!thread) return respondError(id, { code: -32601, message: `thread not found: ${threadId}` });
-      return respond(id, { thread: threadWithTurns(threadId) });
+      if (PAGINATED_READ_ERROR && params && params.includeTurns === true) {
+        return respondError(id, { code: -32601, message: 'paginated_threads is not supported yet' });
+      }
+      const payload = threadWithTurns(threadId);
+      if (HIDE_HISTORY_MODE) delete payload.historyMode;
+      return respond(id, { thread: payload });
+    }
+
+    case 'thread/turns/list': {
+      if (TURNS_LIST_UNSUPPORTED) return respondError(id, { code: -32601, message: 'method not found: thread/turns/list' });
+      const threadId = params && params.threadId;
+      const thread = threads.get(threadId);
+      if (!thread) return respondError(id, { code: -32601, message: `thread not found: ${threadId}` });
+      const direction = (params && params.sortDirection) || 'desc';
+      const all = currentTurns().slice();
+      if (direction !== 'asc') all.reverse();
+      const rawCursor = params && params.cursor;
+      const offset = rawCursor ? Number(String(rawCursor).replace(/^cursor-/, '')) : 0;
+      if (!Number.isInteger(offset) || offset < 0) return respondError(id, { code: -32602, message: 'invalid cursor' });
+      const requestedLimit = Math.max(1, Number((params && params.limit) || 25));
+      const pageLimit = TURN_PAGE_CAP != null ? Math.min(requestedLimit, Math.max(1, TURN_PAGE_CAP)) : requestedLimit;
+      const pageTurns = all.slice(offset, offset + pageLimit).map((turn) => {
+        if (params && params.itemsView === 'notLoaded') return { ...turn, items: [], itemsView: 'notLoaded' };
+        if (params && params.itemsView === 'summary') return { ...turn, items: [], itemsView: 'summary' };
+        return turn;
+      });
+      const nextOffset = offset + pageTurns.length;
+      const nextCursor = nextOffset < all.length ? `cursor-${nextOffset}` : null;
+      return respond(id, { data: pageTurns, nextCursor, backwardsCursor: pageTurns.length ? `cursor-${offset}` : null });
     }
 
     case 'turn/interrupt': {
