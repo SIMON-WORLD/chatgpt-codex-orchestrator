@@ -30,7 +30,7 @@ function realpathOrNull(p) {
   try { return fs.realpathSync.native(p); } catch { return null; }
 }
 
-function validateSearch({ workspaceId, query, path: relScope = null, maxResults = DEFAULT_MAX_RESULTS, maxScannedFiles = DEFAULT_MAX_SCANNED_FILES, maxScannedBytes = DEFAULT_MAX_SCANNED_BYTES } = {}, registry) {
+function validateSearch({ workspaceId, query, path: relScope = null, maxResults = DEFAULT_MAX_RESULTS, maxScannedFiles = DEFAULT_MAX_SCANNED_FILES, maxScannedBytes = DEFAULT_MAX_SCANNED_BYTES, secondaryReadGrants = [] } = {}, registry) {
   if (!query || typeof query !== 'string' || !query.trim()) throw new WorkspaceError('search requires a query');
   if (!Number.isInteger(maxResults) || maxResults <= 0 || maxResults > HARD_MAX_RESULTS) {
     throw new WorkspaceError(`maxResults must be a positive integer <= ${HARD_MAX_RESULTS}`);
@@ -39,8 +39,10 @@ function validateSearch({ workspaceId, query, path: relScope = null, maxResults 
   if (!Number.isInteger(maxScannedBytes) || maxScannedBytes <= 0) throw new WorkspaceError('maxScannedBytes must be a positive integer');
   const ws = registry.get(workspaceId);
   if (relScope && isSensitivePath(relScope)) throw new WorkspaceError(`sensitive path blocked: ${relScope}`);
-  const root = scopeRoot(ws, relScope, registry);
-  return { ws, root, query: query.trim(), maxResults, maxScannedFiles, maxScannedBytes };
+  const scope = registry.resolveSearchScope(workspaceId, relScope, { secondaryReadGrants });
+  const canonicalRel = path.relative(scope.authorizationRoot, scope.root);
+  if ((canonicalRel && isSensitivePath(canonicalRel)) || isSensitivePath(scope.root)) throw new WorkspaceError(`sensitive path blocked: ${relScope}`);
+  return { ws, ...scope, query: query.trim(), maxResults, maxScannedFiles, maxScannedBytes };
 }
 
 function parseChildSearchPage(raw) {
@@ -61,26 +63,27 @@ function parseChildSearchPage(raw) {
   };
 }
 
-function normalizeChildMatch(result, ws) {
-  const absolute = path.isAbsolute(result.file) ? path.resolve(result.file) : path.resolve(ws.root, result.file);
+function normalizeChildMatch(result, validation) {
+  const absolute = path.isAbsolute(result.file) ? path.resolve(result.file) : path.resolve(validation.root, result.file);
   const canonical = realpathOrNull(absolute);
-  if (!canonical || !isWithin(ws.root, canonical)) return null;
-  const rel = path.relative(ws.root, canonical).replace(/\\/g, '/');
-  if (!rel || isSensitivePath(rel) || rel.split('/').some((part) => isIgnoredSearchDir(part))) return null;
+  if (!canonical || !isWithin(validation.authorizationRoot, canonical)) return null;
+  const scopedRel = path.relative(validation.authorizationRoot, canonical).replace(/\\/g, '/');
+  if (!scopedRel || isSensitivePath(scopedRel) || isSensitivePath(canonical) || scopedRel.split('/').some((part) => isIgnoredSearchDir(part))) return null;
   try {
     const stat = fs.statSync(canonical);
     if (!stat.isFile() || stat.size > MAX_FILE_BYTES) return null;
   } catch { return null; }
-  return { path: rel, line: result.line, snippet: String(result.snippet || '').trim().slice(0, SNIPPET_LEN) };
+  const displayPath = validation.external ? canonical : path.relative(validation.ws.root, canonical).replace(/\\/g, '/');
+  return { path: displayPath, canonical, line: result.line, snippet: String(result.snippet || '').trim().slice(0, SNIPPET_LEN) };
 }
 
-function appendChildMatches(target, seen, page, ws, maxResults, needles, budget) {
+function appendChildMatches(target, seen, page, validation, maxResults, needles, budget) {
   for (const result of page.results) {
-    const normalized = normalizeChildMatch(result, ws);
+    const normalized = normalizeChildMatch(result, validation);
     if (!normalized) continue;
     if (!budget.files.has(normalized.path)) {
       let size;
-      try { size = fs.statSync(path.resolve(ws.root, normalized.path)).size; } catch { continue; }
+      try { size = fs.statSync(normalized.canonical).size; } catch { continue; }
       if (budget.files.size >= budget.maxScannedFiles) return 'maxScannedFiles';
       if (budget.scannedBytes + size > budget.maxScannedBytes) return 'maxScannedBytes';
       budget.files.add(normalized.path);
@@ -91,7 +94,7 @@ function appendChildMatches(target, seen, page, ws, maxResults, needles, budget)
     const key = `${normalized.path}\u0000${normalized.line}\u0000${normalized.snippet}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    target.push(normalized);
+    target.push({ path: normalized.path, line: normalized.line, snippet: normalized.snippet });
     if (target.length >= maxResults) break;
   }
 }
@@ -138,7 +141,7 @@ async function searchThroughChild(validation, child) {
   };
   try {
     for (let attempt = 0; attempt < 25 && matches.length < validation.maxResults; attempt++) {
-      budget.limitReason = appendChildMatches(matches, seen, page, validation.ws, validation.maxResults, needles, budget);
+      budget.limitReason = appendChildMatches(matches, seen, page, validation, validation.maxResults, needles, budget);
       if (budget.limitReason) break;
       if (matches.length >= validation.maxResults) break;
       // Fetch one session page even when start_search reports COMPLETED: the
@@ -175,14 +178,5 @@ export async function searchWithOptions(args = {}, registry, { child = null } = 
   return searchThroughChild(validateSearch(args, registry), child);
 }
 
-function scopeRoot(ws, relScope, registry) {
-  if (!relScope) return ws.root;
-  const { canonical } = registry.resolve(ws.workspaceId, relScope);
-  if (!isWithin(ws.root, canonical)) throw new WorkspaceError(`path escapes workspace: ${relScope}`);
-  if (!fs.existsSync(canonical) || !fs.statSync(canonical).isDirectory()) throw new WorkspaceError(`scope is not a directory: ${relScope}`);
-  const canonicalRel = path.relative(ws.root, canonical);
-  if (canonicalRel && isSensitivePath(canonicalRel)) throw new WorkspaceError(`sensitive path blocked: ${relScope}`);
-  return canonical;
-}
 
 export const SEARCH_DEFAULTS = { maxResults: DEFAULT_MAX_RESULTS };

@@ -360,6 +360,10 @@ export class DurableGovernanceService {
     }
     const normalizedRoot = this._resolveWorkspaceRoot(normalized.workspaceRoot);
     this._assertRootCompatible(normalized.taskId || this.svc.state.taskId, normalizedRoot);
+    if (normalized.secondaryReadGrants != null) {
+      if (!normalizedRoot) throw governanceError('secondaryReadGrants require the canonical primary workspace root', 'workspace_unbound');
+      normalized.secondaryReadWorkspaceRoot = normalizedRoot;
+    }
     const freshStart = this._isFreshTaskStart(normalized);
     if (freshStart) this._assertNewTaskAdmission();
     if (!freshStart) this._checkAuthority(normalized);
@@ -609,6 +613,14 @@ export class DurableGovernanceService {
       workspaceRoot: this._meta.workspaceRoot,
       executionClaim: { generation: claim.generation, parentGeneration: claim.parentGeneration },
     };
+  }
+
+  getSecondaryReadGrants({ workspaceRoot = null } = {}) {
+    this._ensureOpen();
+    if (!this._meta || !this.svc.state?.taskId || this.svc.state.control === 'DONE') return [];
+    const root = this._resolveWorkspaceRoot(workspaceRoot);
+    if (!root || !this._meta.workspaceRoot || !eqRoots(root, this._meta.workspaceRoot)) return [];
+    return this.svc.getSecondaryReadGrants({ workspaceRoot: this._meta.workspaceRoot });
   }
 
   // ---- Task-scoped Parent mutation authorization (Issue #29) -------------------

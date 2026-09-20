@@ -365,3 +365,67 @@ test('real child preserves the 200 KiB git diff output bound', async () => {
     await child.close();
   }
 });
+
+test('Issue #124 public schema delta is limited to optional Governance secondaryReadGrants', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'issue124-schema-'));
+  const registry = new WorkspaceRegistry({ allowedRoots: [root] });
+  const server = await startMcpServer({ workspaceRegistry: registry, desktopCommanderChild: {}, host: '127.0.0.1', port: 0 });
+  t.after(() => server.close());
+  const client = new Client({ name: 'issue124-schema-test', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(server.url));
+  t.after(() => client.close());
+  const listed = await client.listTools();
+  const byName = Object.fromEntries(listed.tools.map((tool) => [tool.name, tool]));
+
+  assert.deepEqual(Object.keys(byName.read.inputSchema.properties).sort(), ['maxBytes', 'path', 'workspaceId']);
+  assert.deepEqual(Object.keys(byName.search.inputSchema.properties).sort(), ['maxResults', 'path', 'query', 'workspaceId']);
+  for (const name of ['governance_plan', 'governance_transition']) {
+    assert.ok(byName[name].inputSchema.properties.secondaryReadGrants);
+  }
+  for (const name of ['workspace_open', 'read', 'search', 'git_status', 'git_diff']) {
+    assert.equal(Object.hasOwn(byName[name].inputSchema.properties, 'secondaryReadGrants'), false);
+  }
+  for (const forbidden of ['shell', 'execute_command', 'start_process', 'write_file', 'edit_block', 'config']) {
+    assert.equal(Object.hasOwn(byName, forbidden), false);
+  }
+});
+
+test('Issue #124 secondary grants are bound to the primary workspace even with in-memory Governance', async (t) => {
+  const host = fs.mkdtempSync(path.join(os.tmpdir(), 'issue124-workspace-binding-'));
+  const primaryA = path.join(host, 'primary-a');
+  const primaryB = path.join(host, 'primary-b');
+  const external = path.join(host, 'external');
+  fs.mkdirSync(primaryA); fs.mkdirSync(primaryB); fs.mkdirSync(external);
+  const granted = path.join(external, 'granted.txt');
+  fs.writeFileSync(granted, 'granted marker\n', 'utf8');
+  const registry = new WorkspaceRegistry({ allowedRoots: [host] });
+  const a = registry.open({ path: primaryA });
+  const b = registry.open({ path: primaryB });
+  let calls = 0;
+  const fakeChild = { readFile: async () => { calls += 1; return 'granted marker\n'; } };
+  const server = await startMcpServer({
+    workspaceRegistry: registry, desktopCommanderChild: fakeChild, host: '127.0.0.1', port: 0,
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: 'issue124-workspace-binding', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(server.url));
+  t.after(() => client.close());
+
+  const plan = await client.callTool({
+    name: 'governance_plan',
+    arguments: { taskId: 'issue124-workspace-binding', workspaceId: a.workspaceId, secondaryReadGrants: [granted] },
+  });
+  assert.notEqual(plan.isError, true);
+
+  const allowed = await client.callTool({
+    name: 'read', arguments: { workspaceId: a.workspaceId, path: granted },
+  });
+  assert.notEqual(allowed.isError, true);
+  assert.equal(calls, 1);
+
+  const blocked = await client.callTool({
+    name: 'read', arguments: { workspaceId: b.workspaceId, path: granted },
+  });
+  assert.equal(blocked.isError, true);
+  assert.equal(calls, 1, 'wrong-primary-workspace grant must fail before child dispatch');
+});

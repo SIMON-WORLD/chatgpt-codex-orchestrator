@@ -95,6 +95,15 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   const verify = verifyService || (owner && hasVerifyChecks ? new VerifyService({ workspaceRegistry, mutationOwner: owner, verifyChecks }) : null);
 
   const server = new McpServer({ name: 'chatgpt-codex-orchestrator', version: '0.2.0-dev' });
+  const router = capabilityRouter || createCapabilityRouter();
+  const governance = governanceService || createGovernanceService();
+
+  const secondaryReadGrantsFor = (workspaceId) => {
+    if (!governance || typeof governance.getSecondaryReadGrants !== 'function') return [];
+    const ws = workspaceRegistry.get(workspaceId);
+    try { return governance.getSecondaryReadGrants({ workspaceRoot: ws.root }) || []; }
+    catch { return []; }
+  };
 
   // ---- Direct Local (read-only + mutation) --------------------------------
   server.registerTool('workspace_open', {
@@ -110,11 +119,11 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     catch (e) { return errText(e.message); }
   });
 
-  server.registerTool('read', { description: 'Bounded read of a file inside a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string(), maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional() }) },
-    async ({ workspaceId, path, maxBytes }) => { try { return text(await readFileWithDesktopCommander({ workspaceId, path, maxBytes }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
+  server.registerTool('read', { description: 'Bounded read of a primary-workspace file or an explicitly granted secondary read-only file.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string(), maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional() }) },
+    async ({ workspaceId, path, maxBytes }) => { try { return text(await readFileWithDesktopCommander({ workspaceId, path, maxBytes, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
 
-  server.registerTool('search', { description: 'Bounded text search inside a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, query: z.string(), path: z.string().optional(), maxResults: z.number().int().positive().max(1000).optional() }) },
-    async ({ workspaceId, query, path, maxResults }) => { try { return text(await searchWithOptions({ workspaceId, query, path, maxResults }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
+  server.registerTool('search', { description: 'Bounded text search in the primary workspace or one exact explicitly granted secondary directory root.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, query: z.string(), path: z.string().optional(), maxResults: z.number().int().positive().max(1000).optional() }) },
+    async ({ workspaceId, query, path, maxResults }) => { try { return text(await searchWithOptions({ workspaceId, query, path, maxResults, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
 
   server.registerTool('git_status', { description: 'Read-only git status for a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema }) },
     async ({ workspaceId }) => { try { return text(await gitStatus({ workspaceId }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
@@ -134,11 +143,6 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       try { return text(await worktreeService.create({ repo, targetPath, branch, startPoint })); } catch (e) { return errText(e.message); }
     });
   }
-
-  // Governance is created before mutation handlers run; closures below consume the
-  // final configured service when a tool call arrives.
-  const router = capabilityRouter || createCapabilityRouter();
-  const governance = governanceService || createGovernanceService();
 
   // ---- Direct Local bounded edit (M3) -------------------------------------
   if (changeSet) {
@@ -199,8 +203,16 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   if (governance) {
     const invokeGovernanceTransition = (args) => {
       const txArgs = { ...args };
+      if (txArgs.secondaryReadGrants != null && !txArgs.workspaceId) {
+        throw new WorkspaceError('workspaceId is required when setting secondaryReadGrants');
+      }
       if (txArgs.workspaceId) {
-        if (governance && typeof governance.authorizeMutation === 'function') txArgs.workspaceRoot = workspaceRegistry.get(txArgs.workspaceId).root;
+        const ws = workspaceRegistry.get(txArgs.workspaceId);
+        if (governance && typeof governance.authorizeMutation === 'function') txArgs.workspaceRoot = ws.root;
+        if (txArgs.secondaryReadGrants != null) {
+          txArgs.secondaryReadGrants = workspaceRegistry.normalizeSecondaryReadGrants(txArgs.secondaryReadGrants);
+          txArgs.secondaryReadWorkspaceRoot = ws.root;
+        }
         delete txArgs.workspaceId;
       }
       return governance.transition(txArgs);
@@ -217,6 +229,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         workspaceId: workspaceIdSchema.optional(),
         route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
         localRoute: z.enum(['CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE']).optional(),
+        secondaryReadGrants: z.array(z.string()).max(16).optional(),
       }).strict(),
     }, async (args) => {
       try { return text(invokeGovernanceTransition({ ...args, control: 'PLAN' })); }
@@ -236,6 +249,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         control: z.enum(['PLAN', 'TASK', 'REVISE', 'REPLAN', 'ASK_USER', 'PUBLISH', 'DONE']),
         route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
         localRoute: z.enum(['CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE']).optional(),
+        secondaryReadGrants: z.array(z.string()).max(16).optional(),
         acceptance: z.array(z.object({ id: z.string(), required: z.boolean().optional(), requiredEvidenceLevel: z.string().optional() })).optional(),
         reviseDelta: z.object({ preserve: z.array(z.string()).optional(), invalidate: z.array(z.string()).optional() }).optional(),
         whyBlocked: z.string().optional(),
