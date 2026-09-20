@@ -53,20 +53,20 @@ function isWithin(root, target) {
   return t === r || t.startsWith(r.endsWith(path.sep) ? r : `${r}${path.sep}`);
 }
 
-function validateRead({ workspaceId, path: relPath, maxBytes = DEFAULT_MAX_BYTES, maxLines = DEFAULT_MAX_LINES } = {}, registry) {
+function validateRead({ workspaceId, path: relPath, maxBytes = DEFAULT_MAX_BYTES, maxLines = DEFAULT_MAX_LINES, secondaryReadGrants = [] } = {}, registry) {
   if (!Number.isInteger(maxBytes) || maxBytes <= 0 || maxBytes > HARD_MAX_BYTES) {
     throw new WorkspaceError(`maxBytes must be a positive integer <= ${HARD_MAX_BYTES}`);
   }
   if (!Number.isInteger(maxLines) || maxLines <= 0) throw new WorkspaceError('maxLines must be a positive integer');
-  const { workspace, absolute, canonical } = registry.resolve(workspaceId, relPath);
+  const { workspace, absolute, canonical, authorizationRoot, external } = registry.resolve(workspaceId, relPath, { secondaryReadGrants });
   if (!fs.existsSync(absolute)) throw new WorkspaceError(`file not found: ${relPath}`);
-  if (!isWithin(workspace.root, canonical)) throw new WorkspaceError(`path escapes workspace: ${relPath}`);
+  if (!external && !isWithin(workspace.root, canonical)) throw new WorkspaceError(`path escapes workspace: ${relPath}`);
   const st = fs.statSync(canonical);
   if (!st.isFile()) throw new WorkspaceError(`not a regular file: ${relPath}`);
 
   // Evaluate read policy on BOTH the caller-visible path and the canonical
   // target (an internal symlink/junction alias must not hide a sensitive file).
-  const canonicalRel = path.relative(workspace.root, canonical);
+  const canonicalRel = path.relative(authorizationRoot || workspace.root, canonical);
   if (isSensitivePath(relPath) || (canonicalRel && isSensitivePath(canonicalRel))) {
     throw new WorkspaceError(`sensitive path blocked: ${relPath}`);
   }
@@ -82,7 +82,7 @@ function validateRead({ workspaceId, path: relPath, maxBytes = DEFAULT_MAX_BYTES
     fs.closeSync(fd);
   }
 
-  return { workspace, canonical, relPath, size: st.size, maxBytes, maxLines };
+  return { workspace, canonical, relPath: external ? canonical : relPath, size: st.size, maxBytes, maxLines };
 }
 
 function extractChildReadText(raw) {

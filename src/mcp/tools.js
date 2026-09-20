@@ -95,26 +95,34 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   const verify = verifyService || (owner && hasVerifyChecks ? new VerifyService({ workspaceRegistry, mutationOwner: owner, verifyChecks }) : null);
 
   const server = new McpServer({ name: 'chatgpt-codex-orchestrator', version: '0.2.0-dev' });
+  const router = capabilityRouter || createCapabilityRouter();
+  const governance = governanceService || createGovernanceService();
+
+  const secondaryReadGrantsFor = (workspaceId) => {
+    try { return workspaceRegistry.getSecondaryReadGrants(workspaceId); }
+    catch { return []; }
+  };
 
   // ---- Direct Local (read-only + mutation) --------------------------------
   server.registerTool('workspace_open', {
-    description: 'Bind exactly one explicit workspace source before local repo operations: either a caller-supplied path or a server-configured fixture alias.',
+    description: 'Bind one primary workspace context and, optionally, an explicit bounded set of secondary read-only file/root grants for this workspace handle. Grants stay inside the configured host trust ceiling and never widen write/process/network authority.',
     annotations: R,
     inputSchema: z.object({
       path: z.string().optional(),
       fixture: z.string().optional(),
+      secondaryReadGrants: z.array(z.string()).max(16).optional(),
     }),
   },
-  async ({ path, fixture }) => {
-    try { return text(workspaceRegistry.open({ path, fixture })); }
+  async ({ path, fixture, secondaryReadGrants }) => {
+    try { return text(workspaceRegistry.open({ path, fixture, secondaryReadGrants })); }
     catch (e) { return errText(e.message); }
   });
 
-  server.registerTool('read', { description: 'Bounded read of a file inside a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string(), maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional() }) },
-    async ({ workspaceId, path, maxBytes }) => { try { return text(await readFileWithDesktopCommander({ workspaceId, path, maxBytes }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
+  server.registerTool('read', { description: 'Bounded read of a primary-workspace file or an explicitly granted secondary read-only file.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, path: z.string(), maxBytes: z.number().int().positive().max(4 * 1024 * 1024).optional() }) },
+    async ({ workspaceId, path, maxBytes }) => { try { return text(await readFileWithDesktopCommander({ workspaceId, path, maxBytes, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, child)); } catch (e) { return errText(e.message); } });
 
-  server.registerTool('search', { description: 'Bounded text search inside a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, query: z.string(), path: z.string().optional(), maxResults: z.number().int().positive().max(1000).optional() }) },
-    async ({ workspaceId, query, path, maxResults }) => { try { return text(await searchWithOptions({ workspaceId, query, path, maxResults }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
+  server.registerTool('search', { description: 'Bounded text search in the primary workspace or one exact explicitly granted secondary directory root.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema, query: z.string(), path: z.string().optional(), maxResults: z.number().int().positive().max(1000).optional() }) },
+    async ({ workspaceId, query, path, maxResults }) => { try { return text(await searchWithOptions({ workspaceId, query, path, maxResults, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
 
   server.registerTool('git_status', { description: 'Read-only git status for a bound workspace.', annotations: R, inputSchema: z.object({ workspaceId: workspaceIdSchema }) },
     async ({ workspaceId }) => { try { return text(await gitStatus({ workspaceId }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
@@ -134,11 +142,6 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       try { return text(await worktreeService.create({ repo, targetPath, branch, startPoint })); } catch (e) { return errText(e.message); }
     });
   }
-
-  // Governance is created before mutation handlers run; closures below consume the
-  // final configured service when a tool call arrives.
-  const router = capabilityRouter || createCapabilityRouter();
-  const governance = governanceService || createGovernanceService();
 
   // ---- Direct Local bounded edit (M3) -------------------------------------
   if (changeSet) {

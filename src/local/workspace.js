@@ -89,7 +89,7 @@ export class WorkspaceRegistry {
     return null;
   }
 
-  open({ path: rawPath = null, fixture = null } = {}) {
+  open({ path: rawPath = null, fixture = null, secondaryReadGrants = [] } = {}) {
     const hasPath = typeof rawPath === 'string' && rawPath.trim().length > 0;
     const hasFixture = typeof fixture === 'string' && fixture.trim().length > 0;
     if (hasPath === hasFixture) throw new WorkspaceError('workspace_open requires exactly one of path or fixture');
@@ -113,6 +113,7 @@ export class WorkspaceRegistry {
     if (!allowed) throw new WorkspaceError(`workspace path not within configured allowed roots: ${canonical}`);
     const workspaceId = crypto.randomUUID();
     const isGitRepo = detectGitRepo(canonical);
+    const normalizedSecondaryReadGrants = this.normalizeSecondaryReadGrants(secondaryReadGrants);
     const ws = {
       workspaceId,
       root: canonical,
@@ -120,6 +121,7 @@ export class WorkspaceRegistry {
       allowedRoot: allowed,
       fixture: fixtureName,
       fixtureContract: fixtureContract ? JSON.parse(JSON.stringify(fixtureContract)) : null,
+      secondaryReadGrants: normalizedSecondaryReadGrants,
     };
     this._workspaces.set(workspaceId, ws);
     return {
@@ -128,6 +130,7 @@ export class WorkspaceRegistry {
       isGitRepo,
       ...(fixtureName ? { fixture: fixtureName } : {}),
       ...(fixtureContract ? { fixtureContract: JSON.parse(JSON.stringify(fixtureContract)) } : {}),
+      secondaryReadGrantCount: normalizedSecondaryReadGrants.length,
     };
   }
 
@@ -137,15 +140,96 @@ export class WorkspaceRegistry {
     return ws;
   }
 
-  // Read-path resolution with containment checks (existing target).
-  resolve(workspaceId, relPath) {
+  getSecondaryReadGrants(workspaceId) {
+    const ws = this.get(workspaceId);
+    return structuredClone(ws.secondaryReadGrants || []);
+  }
+
+  normalizeSecondaryReadGrants(grants = []) {
+    if (!Array.isArray(grants)) throw new WorkspaceError('secondaryReadGrants must be an array');
+    if (grants.length > 16) throw new WorkspaceError('secondaryReadGrants may contain at most 16 paths');
+    const out = [];
+    const seen = new Set();
+    for (const raw of grants) {
+      if (typeof raw !== 'string' || !raw.trim()) throw new WorkspaceError('secondary read grant must be a non-empty path string');
+      const requested = path.resolve(raw);
+      const canonical = realpathOrNull(requested);
+      if (!canonical) throw new WorkspaceError(`secondary read grant does not exist: ${requested}`);
+      const allowed = this._allowedRootFor(canonical);
+      if (!allowed) throw new WorkspaceError(`secondary read grant not within configured allowed roots: ${canonical}`);
+      const stat = fs.statSync(canonical);
+      const kind = stat.isFile() ? 'file' : (stat.isDirectory() ? 'root' : null);
+      if (!kind) throw new WorkspaceError(`secondary read grant must be a regular file or directory: ${canonical}`);
+      const key = `${kind}:${process.platform === 'win32' ? canonical.toLowerCase() : canonical}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({ kind, path: canonical });
+      }
+    }
+    return out;
+  }
+
+  _selectSecondaryGrant(canonical, grants = [], { exactRoot = false } = {}) {
+    for (const grant of grants || []) {
+      if (!grant || typeof grant.path !== 'string' || !['file', 'root'].includes(grant.kind)) continue;
+      const grantReal = realpathOrNull(grant.path);
+      if (!grantReal || !(isWithinCI(grant.path, grantReal) && isWithinCI(grantReal, grant.path))) continue;
+      if (!this._allowedRootFor(grantReal)) continue;
+      let grantStat;
+      try { grantStat = fs.statSync(grantReal); } catch { continue; }
+      if (grant.kind === 'file' && !grantStat.isFile()) continue;
+      if (grant.kind === 'root' && !grantStat.isDirectory()) continue;
+      if (grant.kind === 'file') {
+        if (!exactRoot && isWithinCI(grantReal, canonical) && isWithinCI(canonical, grantReal)) return { ...grant, path: grantReal };
+        continue;
+      }
+      if (exactRoot) {
+        if (isWithinCI(grantReal, canonical) && isWithinCI(canonical, grantReal)) return { ...grant, path: grantReal };
+      } else if (isWithinCI(grantReal, canonical)) {
+        return { ...grant, path: grantReal };
+      }
+    }
+    return null;
+  }
+
+  // Read-path resolution with containment checks (existing target). Relative paths
+  // remain primary-workspace scoped; absolute paths may use a task-scoped secondary
+  // read grant but never acquire write/process/network authority.
+  resolve(workspaceId, relPath, { secondaryReadGrants = [] } = {}) {
     const ws = this.get(workspaceId);
     if (!relPath) throw new WorkspaceError('resolve requires a path');
     const target = path.resolve(ws.root, relPath);
-    if (!isWithin(ws.root, target)) throw new WorkspaceError(`path escapes workspace: ${relPath}`);
     const canonical = effectiveRealPath(ws.root, target);
-    if (!isWithin(ws.root, canonical)) throw new WorkspaceError(`symlink escapes workspace: ${relPath}`);
-    return { workspace: ws, absolute: target, canonical };
+    if (isWithinCI(ws.root, target) && isWithinCI(ws.root, canonical)) {
+      return { workspace: ws, absolute: target, canonical, authorizationRoot: ws.root, external: false };
+    }
+    if (!path.isAbsolute(relPath)) {
+      if (!isWithinCI(ws.root, target)) throw new WorkspaceError(`path escapes workspace: ${relPath}`);
+      throw new WorkspaceError(`symlink escapes workspace: ${relPath}`);
+    }
+    const grant = this._selectSecondaryGrant(canonical, secondaryReadGrants, { exactRoot: false });
+    if (!grant) throw new WorkspaceError(`path not authorized by a secondary read grant: ${relPath}`);
+    return { workspace: ws, absolute: target, canonical, authorizationRoot: grant.kind === 'file' ? path.dirname(grant.path) : grant.path, external: true, grant };
+  }
+
+  resolveSearchScope(workspaceId, requestedPath = null, { secondaryReadGrants = [] } = {}) {
+    const ws = this.get(workspaceId);
+    if (!requestedPath) return { workspace: ws, root: ws.root, authorizationRoot: ws.root, external: false, grant: null };
+    if (!path.isAbsolute(requestedPath)) {
+      const { canonical } = this.resolve(workspaceId, requestedPath);
+      if (!fs.existsSync(canonical) || !fs.statSync(canonical).isDirectory()) throw new WorkspaceError(`scope is not a directory: ${requestedPath}`);
+      return { workspace: ws, root: canonical, authorizationRoot: ws.root, external: false, grant: null };
+    }
+    const canonical = realpathOrNull(path.resolve(requestedPath));
+    if (!canonical) throw new WorkspaceError(`search scope does not exist: ${requestedPath}`);
+    if (isWithinCI(ws.root, canonical)) {
+      if (!fs.statSync(canonical).isDirectory()) throw new WorkspaceError(`scope is not a directory: ${requestedPath}`);
+      return { workspace: ws, root: canonical, authorizationRoot: ws.root, external: false, grant: null };
+    }
+    const grant = this._selectSecondaryGrant(canonical, secondaryReadGrants, { exactRoot: true });
+    if (!grant || grant.kind !== 'root') throw new WorkspaceError(`search scope not authorized by an exact secondary directory grant: ${requestedPath}`);
+    if (!fs.statSync(canonical).isDirectory()) throw new WorkspaceError(`scope is not a directory: ${requestedPath}`);
+    return { workspace: ws, root: canonical, authorizationRoot: grant.path, external: true, grant };
   }
 
   // Write-safe resolution: for an EXISTING target, canonicalize the resolved path
