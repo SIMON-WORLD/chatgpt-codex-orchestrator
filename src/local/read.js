@@ -27,7 +27,7 @@ const CHILD_SPECIAL_FORMAT_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg',
 ]);
 
-function assertChildTextFormat(validation) {
+export function assertChildTextFormat(validation) {
   const visibleExt = path.extname(String(validation.relPath || '')).toLowerCase();
   const canonicalExt = path.extname(String(validation.canonical || '')).toLowerCase();
   if (CHILD_SPECIAL_FORMAT_EXTENSIONS.has(visibleExt) || CHILD_SPECIAL_FORMAT_EXTENSIONS.has(canonicalExt)) {
@@ -53,11 +53,12 @@ function isWithin(root, target) {
   return t === r || t.startsWith(r.endsWith(path.sep) ? r : `${r}${path.sep}`);
 }
 
-function validateRead({ workspaceId, path: relPath, maxBytes = DEFAULT_MAX_BYTES, maxLines = DEFAULT_MAX_LINES, secondaryReadGrants = [] } = {}, registry) {
+export function validateRead({ workspaceId, path: relPath, offset = 0, maxBytes = DEFAULT_MAX_BYTES, maxLines = DEFAULT_MAX_LINES, secondaryReadGrants = [] } = {}, registry) {
+  if (!Number.isInteger(offset) || offset < 0) throw new WorkspaceError('offset must be a non-negative integer');
   if (!Number.isInteger(maxBytes) || maxBytes <= 0 || maxBytes > HARD_MAX_BYTES) {
     throw new WorkspaceError(`maxBytes must be a positive integer <= ${HARD_MAX_BYTES}`);
   }
-  if (!Number.isInteger(maxLines) || maxLines <= 0) throw new WorkspaceError('maxLines must be a positive integer');
+  if (!Number.isInteger(maxLines) || maxLines <= 0 || maxLines > DEFAULT_MAX_LINES) throw new WorkspaceError(`maxLines must be a positive integer <= ${DEFAULT_MAX_LINES}`);
   const { workspace, absolute, canonical, authorizationRoot, external } = registry.resolve(workspaceId, relPath, { secondaryReadGrants });
   if (!fs.existsSync(absolute)) throw new WorkspaceError(`file not found: ${relPath}`);
   if (!external && !isWithin(workspace.root, canonical)) throw new WorkspaceError(`path escapes workspace: ${relPath}`);
@@ -82,7 +83,7 @@ function validateRead({ workspaceId, path: relPath, maxBytes = DEFAULT_MAX_BYTES
     fs.closeSync(fd);
   }
 
-  return { workspace, canonical, relPath: external ? canonical : relPath, size: st.size, maxBytes, maxLines };
+  return { workspace, canonical, relPath: external ? canonical : relPath, size: st.size, offset, maxBytes, maxLines };
 }
 
 function extractChildReadText(raw) {
@@ -90,7 +91,7 @@ function extractChildReadText(raw) {
   return text.replace(/^\[Reading [^\n]*\]\n\n/u, '');
 }
 
-function normalizeReadContent({ raw, relPath, size, maxBytes, maxLines }) {
+export function normalizeReadContent({ raw, relPath, size, offset = 0, maxBytes, maxLines }) {
   // Desktop Commander returns text plus a bounded line header. Re-apply the
   // orchestrator byte/line bounds because those bounds are part of the current
   // Direct Local response contract, not an upstream promise.
@@ -101,25 +102,27 @@ function normalizeReadContent({ raw, relPath, size, maxBytes, maxLines }) {
   const lines = chunk.split(/\r?\n/);
   const truncatedLines = lines.length > maxLines;
   const content = truncatedLines ? lines.slice(0, maxLines).join('\n') : chunk;
-  const full = !(size > maxBytes) && !truncatedLines && size <= EDITABLE_MAX_BYTES;
+  const full = offset === 0 && !(size > maxBytes) && !truncatedLines && size <= EDITABLE_MAX_BYTES;
   const sha = full ? crypto.createHash('sha256').update(buf.subarray(0, n)).digest('hex') : null;
   return {
     path: relPath,
     bytes: size,
+    offset,
     content: redactSecrets(content),
     sha256: sha,
-    truncated: size > maxBytes || buf.length > maxBytes || truncatedLines,
+    truncated: offset > 0 || size > maxBytes || buf.length > maxBytes || truncatedLines,
   };
 }
 
 async function readFileThroughChild(validation, child) {
   if (typeof child?.readFile !== 'function') throw new WorkspaceError('desktop commander child adapter is required');
-  const result = await child.readFile({ path: validation.canonical, maxLines: validation.maxLines, maxBytes: validation.maxBytes });
+  const result = await child.readFile({ path: validation.canonical, offset: validation.offset, maxLines: validation.maxLines, maxBytes: validation.maxBytes });
   const raw = typeof result === 'string' ? result : extractTextContent(result);
   return normalizeReadContent({
     raw,
     relPath: validation.relPath,
     size: validation.size,
+    offset: validation.offset,
     maxBytes: validation.maxBytes,
     maxLines: validation.maxLines,
   });

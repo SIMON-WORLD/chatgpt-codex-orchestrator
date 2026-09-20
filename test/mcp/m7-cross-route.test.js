@@ -31,7 +31,11 @@ async function setup(root, { slow = false, noConfirmInterrupt = false, turnFail 
   const ops = new OperationState({ dataRoot: root });
   const env = makeEnv(root, { ...(slow ? { FAKE_APP_SERVER_SLOW_TURN: '1' } : {}), ...(noConfirmInterrupt ? { FAKE_APP_SERVER_NO_CONFIRM_INTERRUPT: '1' } : {}), ...(turnFail ? { FAKE_APP_SERVER_TURN_FAIL: '1' } : {}), ...(die !== null ? { FAKE_APP_SERVER_DIE_MS: String(die) } : {}) });
   const exec = new AppServerExecutor({ dataRoot: root, client: new AppServerClient({ codexBin: process.execPath, spawnArgs: [fixture], env }), mutationOwner: shared });
-  const srv = await startMcpServer({ workspaceRegistry: registry, appServerExecutor: exec, mutationOwner: shared, operationState: ops, host: '127.0.0.1', port: 0, allowedRoots: [root] });
+  // Keep this mutation-lifecycle test independent of real DesktopCommander lazy-start latency.
+  // The filesystem/composite-child contract is covered by dedicated local tests; this suite
+  // should measure only whether an active/unresolved writer blocks Direct Local mutation.
+  const desktopCommanderChild = { readFile: async ({ path: filePath }) => fs.readFileSync(filePath, 'utf8') };
+  const srv = await startMcpServer({ workspaceRegistry: registry, appServerExecutor: exec, mutationOwner: shared, operationState: ops, host: '127.0.0.1', port: 0, allowedRoots: [root], desktopCommanderChild });
   const client = new Client({ name: 'm7-cross', version: '1' });
   await client.connect(new StreamableHTTPClientTransport(srv.url));
   return { shared, exec, srv, client, repo };

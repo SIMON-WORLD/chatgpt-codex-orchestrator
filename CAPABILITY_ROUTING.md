@@ -78,6 +78,10 @@ Pointer-not-payload：GitHub Issue / PR / CI / current code 是 implementation/p
 
 Issue body + Parent durable decision 定义 authoritative mandatory acceptance。普通 mission prompt 不得静默增加新的 mandatory gate。Dogfood friction 先分类：P0 correctness/authority/safety 为 blocking；P1 operability 仅在实质阻止正常使用时 blocking；P2 UX/optional capability 默认 non-blocking。不要把每个 friction 自动升级为新的 Governance feature。
 
+Outcome Preservation Fence：Human-authorized North Star / outcome 在被 Human 或基于该 intent 的 authorized Parent decision 明确 supersede 前持续 authoritative。Parent 可以把 outcome 分解为 phase / POC / mission；任一 slice 的 `ACCEPT` 只证明其 declared slice，未被该 slice 覆盖的 mandatory original outcome element 不会因 omission 自动变成 non-requirement。Reviewer findings 可以建议 disposition，但不能重写 Human outcome；green phase / POC tests 也只构成 declared slice 的 evidence。
+
+在 project / milestone `ACCEPT / DONE` 前，每个尚未 delivered 的 material original outcome element 必须有一个 explicit disposition：`DELIVERED`、`ROUTED_ELSEWHERE_WITH_EQUIVALENT_OUTCOME`、`DEFERRED`、`REJECTED_WITH_MATERIAL_REASON` 或 `SUPERSEDED_BY_HUMAN_DECISION`。这一 fence 是 acceptance discipline，不引入 requirements DB、traceability service、watcher / scheduler、scorecard、static capability registry 或新的 Governance runtime / schema。
+
 Bounded implementation-session continuity 使用 execution claim 时，该 claim 只授权已经 Parent-approved 的 current task/step/workspace Direct Local execution；它不授予 Parent generation，也不能发起 `PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE`、Parent takeover、scope/acceptance 变化或 project-level final decision。
 
 Session naming：
