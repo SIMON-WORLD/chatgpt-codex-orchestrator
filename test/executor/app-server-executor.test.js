@@ -24,7 +24,7 @@ async function waitFor(fn, timeout = 3000) {
   return false;
 }
 
-function makeExecutor({ approval = '0', die = null, dataRoot = null, failTurnStart = false, slowTurn = false, turnFail = false, noConfirmInterrupt = false, forceEffectiveSandbox = null, forceWritableRoots = null, forceNetworkAccess = null, forceApprovalPolicy = null, noSettingsUpdate = false, failSettingsUpdate = false } = {}) {
+function makeExecutor({ approval = '0', die = null, dataRoot = null, failTurnStart = false, slowTurn = false, turnFail = false, noConfirmInterrupt = false, forceEffectiveSandbox = null, forceWritableRoots = null, forceNetworkAccess = null, forceApprovalPolicy = null, noSettingsUpdate = false, failSettingsUpdate = false, historyMode = null, hideHistoryMode = false, paginatedReadError = false, turnsListUnsupported = false, turnPageCap = null } = {}) {
   const root = dataRoot || fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
   const env = { ...process.env, FAKE_APP_SERVER_APPROVAL: approval, FAKE_APP_SERVER_STATE_DIR: root };
   if (forceEffectiveSandbox) env.FAKE_APP_SERVER_FORCE_EFFECTIVE_SANDBOX = forceEffectiveSandbox;
@@ -33,6 +33,11 @@ function makeExecutor({ approval = '0', die = null, dataRoot = null, failTurnSta
   if (forceApprovalPolicy) env.FAKE_APP_SERVER_FORCE_APPROVAL_POLICY = forceApprovalPolicy;
   if (noSettingsUpdate) env.FAKE_APP_SERVER_NO_SETTINGS_UPDATE = '1';
   if (failSettingsUpdate) env.FAKE_APP_SERVER_FAIL_SETTINGS_UPDATE = '1';
+  if (historyMode) env.FAKE_APP_SERVER_HISTORY_MODE = historyMode;
+  if (hideHistoryMode) env.FAKE_APP_SERVER_HIDE_HISTORY_MODE = '1';
+  if (paginatedReadError) env.FAKE_APP_SERVER_PAGINATED_READ_ERROR = '1';
+  if (turnsListUnsupported) env.FAKE_APP_SERVER_TURNS_LIST_UNSUPPORTED = '1';
+  if (turnPageCap != null) env.FAKE_APP_SERVER_TURN_PAGE_CAP = String(turnPageCap);
   if (die !== null) env.FAKE_APP_SERVER_DIE_MS = String(die);
   if (failTurnStart) env.FAKE_APP_SERVER_FAIL_TURN_START = '1';
   if (slowTurn) env.FAKE_APP_SERVER_SLOW_TURN = '1';
@@ -620,6 +625,162 @@ test('reconcile inProgress retains writer', async (t) => {
   assert.equal(rec.resolution, 'in_progress');
   assert.equal(rec.ownershipReleased, false);
   assert.equal(exec.owner.owner, 'codex'); // retained
+});
+
+
+test('paginated reconcile terminal exact turn on first page releases writer', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, historyMode: 'paginated' });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const job = exec.load(r.jobId);
+  if (exec.owner.owner === 'none') exec.owner.acquire('codex', job.mutationUnitId);
+  exec.jobMap.update(r.jobId, { state: 'recovery_required', ownershipReleased: false });
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'terminal');
+  assert.equal(rec.state, 'completed');
+  assert.equal(rec.ownershipReleased, true);
+  assert.equal(exec.owner.owner, 'none');
+});
+
+test('paginated reconcile finds exact terminal turn on a later bounded page', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, historyMode: 'paginated', turnPageCap: 1 });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const turnA = r.turnId;
+  const unitA = exec.load(r.jobId).mutationUnitId;
+  await exec.continue({ jobId: r.jobId, instruction: 'b' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const afterB = exec.load(r.jobId);
+  exec.jobMap.update(r.jobId, { mutationUnitId: unitA, turnId: turnA, state: 'recovery_required', ownershipReleased: false });
+  assert.equal(exec.owner.owner, 'none');
+  exec.owner.acquire('codex', unitA);
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'terminal');
+  assert.equal(rec.state, 'completed');
+  assert.equal(rec.ownershipReleased, true);
+  assert.equal(exec.owner.owner, 'none');
+  assert.equal(afterB.turnUnits[turnA], unitA);
+});
+
+test('paginated reconcile inProgress retains exact current writer', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, historyMode: 'paginated', slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'in_progress');
+  assert.equal(rec.ownershipReleased, false);
+  assert.equal(exec.owner.owner, 'codex');
+  assert.equal(exec.owner.unitId, exec.load(r.jobId).mutationUnitId);
+});
+
+test('paginated old terminal turn plus current inProgress turn retains current writer', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, historyMode: 'paginated', slowTurn: true, turnPageCap: 1 });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  const oldUnit = exec.load(r.jobId).mutationUnitId;
+  const interrupted = await exec.interrupt({ jobId: r.jobId });
+  assert.equal(interrupted.reconciliation, 'confirmed');
+  assert.equal(exec.owner.owner, 'none');
+  const cont = await exec.continue({ jobId: r.jobId, instruction: 'b' });
+  assert.notEqual(cont.turnId, r.turnId);
+  const currentUnit = exec.load(r.jobId).mutationUnitId;
+  assert.notEqual(currentUnit, oldUnit);
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.resolution, 'in_progress');
+  assert.equal(rec.ownershipReleased, false);
+  assert.equal(exec.owner.owner, 'codex');
+  assert.equal(exec.owner.unitId, currentUnit);
+});
+
+test('paginated exact turn absent after bounded page ceiling fails closed and retains writer', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, historyMode: 'paginated', turnPageCap: 1 });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: '0', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  for (let i = 1; i < 9; i++) {
+    await exec.continue({ jobId: r.jobId, instruction: String(i) });
+    await waitFor(() => exec.load(r.jobId).state === 'completed');
+  }
+  const missingUnit = 'unit-missing-page-bound';
+  const job = exec.load(r.jobId);
+  exec.jobMap.update(r.jobId, {
+    mutationUnitId: missingUnit,
+    turnId: 'turn-does-not-exist',
+    turnUnits: { ...(job.turnUnits || {}), 'turn-does-not-exist': missingUnit },
+    state: 'recovery_required',
+    ownershipReleased: false,
+  });
+  assert.equal(exec.owner.owner, 'none');
+  exec.owner.acquire('codex', missingUnit);
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.reconciled, false);
+  assert.equal(rec.recoveryRequired, true);
+  assert.equal(rec.observationCode, 'paginated_page_limit');
+  assert.equal(exec.owner.owner, 'codex');
+  assert.equal(exec.owner.unitId, missingUnit);
+});
+
+test('paginated paging method unsupported fails closed and retains writer', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, historyMode: 'paginated', turnsListUnsupported: true, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.reconciled, false);
+  assert.equal(rec.recoveryRequired, true);
+  assert.equal(rec.observationCode, 'paginated_turns_list_unsupported');
+  assert.equal(exec.owner.owner, 'codex');
+});
+
+test('paginated recovery with missing current-unit identity fails closed instead of guessing latest', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, historyMode: 'paginated' });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  await exec.continue({ jobId: r.jobId, instruction: 'b' });
+  await waitFor(() => exec.load(r.jobId).state === 'completed');
+  const unknownUnit = 'unit-without-identity';
+  exec.jobMap.update(r.jobId, { mutationUnitId: unknownUnit, turnId: null, turnUnits: {}, state: 'recovery_required', ownershipReleased: false });
+  assert.equal(exec.owner.owner, 'none');
+  exec.owner.acquire('codex', unknownUnit);
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.reconciled, false);
+  assert.equal(rec.recoveryRequired, true);
+  assert.equal(rec.observationCode, 'turn_binding_multiple');
+  assert.equal(exec.owner.owner, 'codex');
+  assert.equal(exec.owner.unitId, unknownUnit);
+});
+
+test('specific paginated full-history incompatibility falls back to bounded turn paging', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, hideHistoryMode: true, paginatedReadError: true, slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  const rec = await exec.reconcile({ jobId: r.jobId });
+  assert.equal(rec.reconciled, true);
+  assert.equal(rec.resolution, 'in_progress');
+  assert.equal(rec.ownershipReleased, false);
+  assert.equal(exec.owner.owner, 'codex');
+});
+
+test('paginated interrupt re-observes through shared paging path before release', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
+  const exec = makeExecutor({ dataRoot: root, historyMode: 'paginated', slowTurn: true });
+  t.after(() => exec.shutdown());
+  const r = await exec.start({ prompt: 'a', accessMode: 'workspace_write' });
+  const ir = await exec.interrupt({ jobId: r.jobId });
+  assert.equal(ir.reconciliation, 'confirmed');
+  assert.equal(ir.state, 'interrupted');
+  assert.equal(ir.ownershipReleased, true);
+  assert.equal(exec.owner.owner, 'none');
 });
 
 test('ambiguous reconciliation fails closed (no candidate for current unit)', async (t) => {
