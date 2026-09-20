@@ -1,0 +1,37 @@
+{
+  "contractVersion": 1,
+  "purpose": "dependency-escrow",
+  "release": {
+    "repository": "SIMON-WORLD/chatgpt-codex-orchestrator",
+    "tag": "dependency-escrow-desktop-commander-0.2.51",
+    "prerelease": true,
+    "latest": false,
+    "targetCommit": "216143cd0d0360c73bfb5689a0245327403d70fa",
+    "manifestAsset": "desktop-commander-0.2.51-escrow-manifest.json",
+    "manifestBytes": 2996,
+    "manifestSha256": "2dfd8db574b6e05a033cd78ab463229c19c28486be7bee6a32fc79abaaa53be7"
+  },
+  "package": {
+    "name": "@wonderwhy-er/desktop-commander",
+    "version": "0.2.51",
+    "artifact": "wonderwhy-er-desktop-commander-0.2.51.tgz",
+    "bytes": 1587236,
+    "sha256": "290ae6a2ebca033a42f727459fd152b24e0ac066970eef08579ad92006499386",
+    "sha1": "fca73b7d88d0b8c9b9426b37af8584f74494e6f5",
+    "integrity": "sha512-BF/ZV06c7mh+tzfJEkQpjcOg6UaQtzp2vRadIpA9hI+WpPDwkQ2ekdY0fbN7I4xOrCQX6NajyEPouEDXFJc1kA=="
+  },
+  "source": {
+    "commit": "092ce0b841e86455f12e41f4dc36399a7522ecb5",
+    "tree": "81ea98e8f789e18e2daaaa7c6e1b01552792f413",
+    "archive": "DesktopCommanderMCP-092ce0b841e86455f12e41f4dc36399a7522ecb5.tar.gz",
+    "bytes": 54943717,
+    "sha256": "d7ae9c4abb15c6e4511233decd875e316942c5ae52f203a5efaea2d3e305d1fd"
+  },
+  "license": {
+    "spdx": "MIT",
+    "asset": "DesktopCommanderMCP-0.2.51-LICENSE",
+    "bytes": 1108,
+    "sha256": "e77cff545e0506903bf6a4bf29169fa40911eb76d70d239267df10c5c59370dd",
+    "sourceArchiveEntry": "wonderwhy-er-DesktopCommanderMCP-092ce0b/LICENSE"
+  }
+}
