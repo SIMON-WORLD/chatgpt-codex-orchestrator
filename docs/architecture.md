@@ -69,14 +69,47 @@ These capabilities are **not reimplemented locally merely for architectural unif
 
 ### Local Capability Plane
 
-`Custom MCP App + Secure Tunnel + Local MCP` supplies capability that the ChatGPT product cannot directly provide for the user's local machine/workspace.
+The human-facing custom App is **Local Connector**: `Connect ChatGPT to authorized files, workspaces, and local execution capabilities on your computer.` Repository/server/programmatic identity remains `chatgpt-codex-orchestrator`; DesktopCommander is dependency/provenance rather than product branding ([#119](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/119)).
 
-It is not a mandatory hop for native-only work.
+`Custom MCP App + Secure Tunnel + thin Orchestrator HTTP MCP façade` supplies capability that the ChatGPT product cannot directly provide for the user's local machine. It is not a mandatory hop for native-only work.
 
-Current local families:
+The accepted Local execution architecture is the **composite DesktopCommander engine** ([#116](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/116), [#117](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/117), [#120](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/120)):
 
-- **Direct Local** — workspace read/search/status/diff, small bounded exact edits, allowlisted/focused verification.
-- **Codex App Server** — sustained local coding execution.
+```text
+ChatGPT
+  → Local Connector custom App
+  → existing Secure MCP Tunnel
+  → thin Orchestrator HTTP MCP façade
+       → parent-owned resource / security / normalization checks
+       → exact-pinned @wonderwhy-er/desktop-commander@0.2.51 child over stdio
+            → bounded commodity read / search / fixed git status+diff execution
+       → bounded Direct Local edit / verify
+       → durable Governance / continuity where evidenced
+       → separate Codex App Server adapter for sustained execution
+```
+
+Hosted Remote Desktop Commander is **not** a current execution dependency. #120 removed the superseded bespoke direct read/search/git execution fallbacks; the remaining `src/local/read.js`, `search.js` and `git.js` paths are parent-side contract/validation/dispatch layers around the child, not a second commodity execution engine. Generic DesktopCommander shell/process/config/write-file actions are not public Local Connector capabilities; private child process mechanics are used only behind the fixed Orchestrator-owned git path.
+
+Current local families remain:
+
+- **Direct Local** — bounded local read/search/status/diff through the composite child plus small exact edits and allowlisted/focused verification.
+- **Codex App Server** — separate sustained local coding execution.
+
+#### Local resource authority
+
+The accepted model from [#123](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/123), [#124](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/124) and real custom-App dogfood [#127](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/127) rejects the old universal equation `PRIMARY_WORKSPACE == COMPLETE_LOCAL_RESOURCE_AUTHORITY`:
+
+- **primary workspace** = primary task context + default mutation root;
+- **Host trust ceiling** = coarse Human/admin maximum;
+- **secondary read grants** = explicit mission/session-scoped auxiliary file/root read/search authority bound through read-only `workspace_open.secondaryReadGrants` handles.
+
+Ordinary secondary reads require no Governance mutation and no per-mission Stable Runtime trust-root restart/reconfiguration. Ungranted/sibling access fails closed and external write remains unauthorized. Direct Local edit, Codex writable roots, process/shell, network, MutationOwner, Repository Identity Fence and Parent authority semantics remain unchanged. This is not generic RBAC, machine-wide ambient read, multi-root mutation or a resource registry.
+
+#### DesktopCommander dependency continuity and security
+
+The exact DesktopCommander 0.2.51 npm artifact and exact upstream source commit `092ce0b841e86455f12e41f4dc36399a7522ecb5` are preserved in the project-owned [dependency-escrow prerelease](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/releases/tag/dependency-escrow-desktop-commander-0.2.51), with repository pointer [`dependency-escrow/desktop-commander-0.2.51.json`](../dependency-escrow/desktop-commander-0.2.51.json). [#122](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/122) proved project-owned retrieval plus bounded cold recovery without live DesktopCommander npm/GitHub source. Escrow is supply continuity, not a product release/default change, maintained fork or mirror service.
+
+The current production dependency audit still reports **2 high + 2 moderate package objects** through DesktopCommander transitives; the current underlying advisory paths are `sharp` and `uuid`. Under [#128](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/128), Parent accepted the material advisories as `NOT_REACHABLE_BY_EVIDENCE` for the **current accepted Local Connector surface** because the relevant special-format/generic child paths are excluded by the parent contract. Current Local Connector usage therefore need not pause and the exact 0.2.51 pin remains. This is surface-specific, not a claim that 0.2.51 is generally vulnerability-free. Re-evaluate when upstream ships a real fixing candidate or before expanding into excluded special-format/generic DesktopCommander surfaces.
 
 ## 3. Four routing targets
 
@@ -149,11 +182,12 @@ The normative policy is [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md).
 - [`../scripts/v0.2-start.mjs`](../scripts/v0.2-start.mjs) — v0.2 local runtime entrypoint.
 - [`../src/transport/brain-local.js`](../src/transport/brain-local.js) — assembles the local capability plane.
 
-### Workspace capability
+### Workspace / Local execution capability
 
-- `src/local/workspace.js` — explicit allowed workspace registry / authorization.
-- `src/local/read.js`, `search.js`, `git.js` — bounded read/search/git status/diff.
-- `src/local/change-set.js` — bounded Direct Local change-set mutation.
+- `src/local/workspace.js` — primary-workspace binding plus explicit read-only secondary grant binding inside the Host trust ceiling; the primary workspace is context/default mutation root, not the complete Local read authority set.
+- `src/local/desktop-commander-child.js` — exact-pinned DesktopCommander child MCP lifecycle/stdio adapter used for the accepted commodity execution subset and lazy child recovery.
+- `src/local/read.js`, `search.js`, `git.js` — parent-side authorization, canonicalization, sensitive/special-format/budget checks and fixed dispatch into the DesktopCommander child. They are no longer independent bespoke commodity execution fallbacks.
+- `src/local/change-set.js` — bounded Direct Local change-set mutation; external secondary-read resources do not become writable.
 - `src/local/verify.js` — allowlisted verification.
 - `src/local/sensitive.js` — sensitive-path restrictions.
 
@@ -166,6 +200,7 @@ The normative policy is [`../CAPABILITY_ROUTING.md`](../CAPABILITY_ROUTING.md).
 
 - `src/router/decide.js`, `src/router/capability-router.js` — deterministic routing over structured task facts. Natural-language project reasoning remains with ChatGPT.
 - `src/governance/index.js` — canonical Brain control lifecycle and acceptance/evidence gates.
+- `governance_plan` is the dedicated low-risk PLAN-only MCP wrapper accepted by [#111](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/111). Its Orchestrator implementation is complete; the current observed downstream blocker is an upstream ChatGPT Developer-MCP product safety pre-check **before Local Governance execution**. The accepted response is to preserve Governance semantics and wait for material Product capability change rather than repeatedly retrying, relabeling or weakening the control.
 - Brain Continuity core (`src/governance/store.js`, `writer-guard.js`, `durable.js`, `capsule.js`, `observation.js`) — durable canonical Governance under the existing `dataRoot` (`runtime/governance/<namespace>/`) with versioned schema, atomic write + known-good backup, fail-closed load/migration, one canonical Governance writer per namespace, Parent authority generation/fencing (`stale_authority`), bounded semantic re-entry (0/1/>1), bounded Context Capsule, and ephemeral capability observations. Wired as the canonical runtime Governance service in `src/transport/brain-local.js`.
 
 ### Codex executor
