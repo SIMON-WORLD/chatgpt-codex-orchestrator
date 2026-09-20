@@ -65,6 +65,7 @@ export { createToolsServer } from './mcp/tools.js';
 export { WorkspaceRegistry, WorkspaceError, detectGitRepo } from './local/workspace.js';
 export { READ_DEFAULTS } from './local/read.js';
 export { searchWithOptions, SEARCH_DEFAULTS } from './local/search.js';
+export { STRUCTURED_READ_LIMITS, validateStructuredTarget, inspectZip, readImageWithDesktopCommander, readExcelWithDesktopCommander, searchExcelWithDesktopCommander, readPdfWithDesktopCommander, readDocxWithDesktopCommander } from './local/structured-read.js';
 export { gitStatus, gitDiff, GIT_DIFF_MODES } from './local/git.js';
 export { DesktopCommanderChild, DesktopCommanderChildError, createDesktopCommanderChild, compositeEditBoundaryVerdict, COMPOSITE_EDIT_BOUNDARY_BLOCKED, DESKTOP_COMMANDER_PACKAGE, DESKTOP_COMMANDER_VERSION, DESKTOP_COMMANDER_UPSTREAM_COMMIT, DESKTOP_COMMANDER_LICENSE, DESKTOP_COMMANDER_REQUIRED_TOOLS, fixedGitCommand } from './local/desktop-commander-child.js';
 

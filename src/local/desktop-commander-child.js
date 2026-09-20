@@ -236,6 +236,35 @@ export class DesktopCommanderChild {
     return clipped.text;
   }
 
+  // Internal structured-read seam. The MCP surface never exposes arbitrary
+  // upstream tool calls; structured-read.js supplies the parent-owned
+  // extension, authority, and byte/page/cell budgets before using this exact
+  // pinned child read_file path. Return the raw MCP result so image blocks are
+  // not flattened into base64 text.
+  async readFileStructured({ path: filePath, offset = 0, maxLines = 2000, sheet, range } = {}) {
+    const args = {
+      path: filePath,
+      isUrl: false,
+      offset,
+      length: maxLines,
+      origin: 'llm',
+    };
+    if (sheet !== undefined) args.sheet = sheet;
+    if (range !== undefined) args.range = range;
+    return this.#callTool('read_file', args);
+  }
+
+  // A parent timeout must invalidate the current generation before the next
+  // request can lazily restart it. Pair-identity checks in #callTool/#markDead
+  // prevent a late response from an old child from killing a new generation.
+  async recoverAfterTimeout() {
+    if (this.#closed) return;
+    const pair = this.#detachCurrent();
+    this.#state = 'dead';
+    this.#lastFailureCode = 'CHILD_CALL_FAILED';
+    await closePair(pair.client, pair.transport);
+  }
+
   async readMultipleFiles({ paths = [] } = {}) {
     const result = await this.#callTool('read_multiple_files', { paths, origin: 'llm' });
     return clipUtf8(extractTextContent(result), READ_MAX_BYTES + (64 * 1024)).text;
@@ -319,19 +348,22 @@ export class DesktopCommanderChild {
     if (!DESKTOP_COMMANDER_REQUIRED_TOOLS.includes(name) || (processTool && !internal)) {
       throw new DesktopCommanderChildError('UPSTREAM_TOOL_NOT_ALLOWED');
     }
+    let client = null;
+    let transport = null;
     try {
       await this.ensureReady();
-      const client = this.#client;
+      client = this.#client;
+      transport = this.#transport;
       if (!client) throw new DesktopCommanderChildError('CHILD_CLOSED');
       const result = await client.callTool({ name, arguments: args });
       if (result?.isError) throw new DesktopCommanderChildError('UPSTREAM_TOOL_ERROR');
       return result;
     } catch (error) {
       if (error instanceof DesktopCommanderChildError) {
-        if (!this.#closed && error.code !== 'UPSTREAM_TOOL_ERROR') this.#markDead(error.code);
+        if (!this.#closed && error.code !== 'UPSTREAM_TOOL_ERROR') this.#markDead(error.code, client, transport);
         throw error;
       }
-      if (!this.#closed) this.#markDead('CHILD_CALL_FAILED');
+      if (!this.#closed) this.#markDead('CHILD_CALL_FAILED', client, transport);
       throw new DesktopCommanderChildError('CHILD_CALL_FAILED');
     }
   }
@@ -411,8 +443,10 @@ export class DesktopCommanderChild {
     return pair;
   }
 
-  #markDead(code) {
+  #markDead(code, expectedClient = null, expectedTransport = null) {
     if (this.#closed) return;
+    if (expectedClient && this.#client !== expectedClient) return;
+    if (expectedTransport && this.#transport !== expectedTransport) return;
     const pair = this.#detachCurrent();
     this.#state = 'dead';
     this.#lastFailureCode = safeFailureCode(code, 'CHILD_CALL_FAILED');
