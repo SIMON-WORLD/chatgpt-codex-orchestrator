@@ -60,6 +60,8 @@ export class AppServerClient {
     this.exited = false;
     this._closing = false;
     this._connected = false;
+    this.initializeResult = null;
+    this.codexHome = null;
   }
 
   get stderrTail() { return this._stderr.slice(-2000); }
@@ -86,6 +88,9 @@ export class AppServerClient {
     this.exited = false;
     this._closing = false;
     this._stderr = '';
+    // App Server persistence identity is authoritative only for the exact initialized child.
+    this.initializeResult = null;
+    this.codexHome = null;
     const argv = this.buildSpawnArgv();
     this.child = spawn(this.codexBin, argv, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], env: this.env });
     this._rl = createInterface({ input: this.child.stdout, crlfDelay: Infinity });
@@ -169,6 +174,8 @@ export class AppServerClient {
       clientInfo: { name: this.name, title: 'chatgpt-codex-orchestrator', version: this.version },
       capabilities: { experimentalApi: true, requestAttestation: false },
     }, { timeoutMs: 60000 });
+    this.initializeResult = init && typeof init === 'object' ? init : null;
+    this.codexHome = typeof init?.codexHome === 'string' ? init.codexHome : null;
     this._connected = true;
     return init;
   }
@@ -208,5 +215,7 @@ export class AppServerClient {
     }
     if (this._rl) { try { this._rl.close(); } catch {} }
     this._connected = false;
+    this.initializeResult = null;
+    this.codexHome = null;
   }
 }
