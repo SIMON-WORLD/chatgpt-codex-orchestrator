@@ -278,7 +278,9 @@ export class AppServerExecutor {
     this.client = client || new AppServerClient({ codexBin: codexBin || undefined, listen: listen || undefined, cwd: cwd || undefined });
     this.jobMap = jobMap || new JobMap({ dataRoot });
     this.owner = mutationOwner || new MutationOwner();
-    this.persistenceProfile = persistenceProfile ? path.resolve(String(persistenceProfile)) : null;
+    // Configured runtimeProfile is an expected launch boundary only. The authoritative
+    // effective persistence identity comes from the successful App Server initialize.
+    this.expectedPersistenceProfile = persistenceProfile ? path.resolve(String(persistenceProfile)) : null;
     this._approvals = new Map();
     this._notifiers = new Set();
     this._turnUnits = new Map(); // in-memory cache (durable source of truth is job.turnUnits)
@@ -539,6 +541,14 @@ export class AppServerExecutor {
     else if (!this.client._connected) await this.client.connect();
   }
 
+  _effectivePersistenceProfile() {
+    const reported = this.client && this.client.codexHome;
+    if (typeof reported !== 'string') return null;
+    const trimmed = reported.trim();
+    if (!trimmed || !path.isAbsolute(trimmed)) return null;
+    return path.resolve(trimmed);
+  }
+
   // Resolve which turn belongs to the CURRENT mutation unit (durable identity).
   // Failure returns a stable observationCode for bounded aggregate diagnostics.
   _resolveCurrentUnitTurn(job, turns) {
@@ -575,25 +585,32 @@ export class AppServerExecutor {
   }
 
   _persistenceProfileForPreTurnRecovery(job) {
-    if (!this.persistenceProfile) {
-      return { ok: false, observationCode: 'persistence_profile_unknown', reason: 'current Codex persistence profile is not configured; refusing no-rollout inference' };
-    }
-    if (job.persistenceProfile) {
-      if (!rootsEqual(job.persistenceProfile, this.persistenceProfile)) {
-        return { ok: false, observationCode: 'persistence_profile_mismatch', reason: 'durable job Codex persistence profile differs from the current runtime profile' };
-      }
-      return { ok: true, legacyInferred: false };
+    const effective = this._effectivePersistenceProfile();
+    if (!effective) {
+      return { ok: false, observationCode: 'persistence_profile_unknown', reason: 'App Server initialize did not report a usable absolute CodexHome; refusing no-rollout inference' };
     }
 
-    // Legacy records predate explicit profile storage. The compatibility inference is
-    // limited to records physically in this JobMap/dataRoot, under a configured server-owned
-    // Stable Runtime profile, with the exact durable permission snapshot present.
+    if (this.expectedPersistenceProfile && !rootsEqual(this.expectedPersistenceProfile, effective)) {
+      return { ok: false, observationCode: 'persistence_profile_mismatch', reason: 'reported App Server CodexHome differs from the configured runtimeProfile boundary' };
+    }
+
+    if (job.persistenceProfile) {
+      if (!rootsEqual(job.persistenceProfile, effective)) {
+        return { ok: false, observationCode: 'persistence_profile_mismatch', reason: 'durable job Codex persistence profile differs from the current authoritative App Server CodexHome' };
+      }
+      return { ok: true, legacyInferred: false, effectiveProfile: effective };
+    }
+
+    // Legacy records predate explicit profile storage. Compatibility remains narrowly
+    // limited to structurally legacy recovery_required records in this same JobMap with
+    // an exact durable permission snapshot; the profile itself is now authoritative
+    // initialize.codexHome rather than an inferred conventional filesystem location.
     const isStructurallyLegacy = !Object.prototype.hasOwnProperty.call(job, 'startupPhase')
       && !Object.prototype.hasOwnProperty.call(job, 'persistenceProfile');
     if (!isStructurallyLegacy || job.state !== 'recovery_required' || !job.verifiedAt || !job.verifiedForRequestedContract) {
       return { ok: false, observationCode: 'persistence_profile_unknown', reason: 'durable job Codex persistence profile is unknown' };
     }
-    return { ok: true, legacyInferred: true };
+    return { ok: true, legacyInferred: true, effectiveProfile: effective };
   }
 
   _classifyPreTurnNotMaterialized(job, observed) {
@@ -635,6 +652,7 @@ export class AppServerExecutor {
       state: PRE_TURN_NOT_MATERIALIZED,
       unitId,
       legacyProfileInferred: profile.legacyInferred === true,
+      effectivePersistenceProfile: profile.effectiveProfile || null,
     };
   }
 
@@ -667,7 +685,7 @@ export class AppServerExecutor {
       updatedAt: Date.now(),
     };
     if (classified.legacyProfileInferred === true && !job.persistenceProfile) {
-      patch.persistenceProfile = this.persistenceProfile;
+      patch.persistenceProfile = classified.effectivePersistenceProfile;
       patch.persistenceProfileInferredLegacy = true;
     }
     this.jobMap.update(job.jobId, patch);
@@ -843,7 +861,8 @@ export class AppServerExecutor {
 
     const jobId = makeJobId();
     const mutationUnitId = makeMutationUnitId();
-    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, sandboxPolicy, approvalPolicy, isWriter, workspaceRoot, workspaceId, networkAccess: networkAccess === true, requestPermission: { sandbox, approvalPolicy, sandboxPolicy }, effectiveVerified: false, taskId: taskId || null, stepId: stepId || null, identity: identity || null, threadId: null, turnId: null, startupPhase: null, turnStartDispatched: false, persistenceProfile: this.persistenceProfile, recoveryCode: null, recoveryReason: null, reconciledMutationUnitId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
+    const effectivePersistenceProfile = this._effectivePersistenceProfile();
+    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, sandboxPolicy, approvalPolicy, isWriter, workspaceRoot, workspaceId, networkAccess: networkAccess === true, requestPermission: { sandbox, approvalPolicy, sandboxPolicy }, effectiveVerified: false, taskId: taskId || null, stepId: stepId || null, identity: identity || null, threadId: null, turnId: null, startupPhase: null, turnStartDispatched: false, persistenceProfile: effectivePersistenceProfile, recoveryCode: null, recoveryReason: null, reconciledMutationUnitId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
 
     // Safe bootstrap: start a thread (no turn) with read-only sandbox + 'on-request'
     // approval. These differ from BOTH job targets (read_only=never, workspace_write=workspace-write),
