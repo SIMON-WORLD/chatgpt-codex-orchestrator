@@ -11,12 +11,14 @@ import {
 import { JobMap, PRE_TURN_NOT_MATERIALIZED } from '../../src/executor/job-map.js';
 
 class RecoveryClient {
-  constructor({ resumeError = null, turns = [], historyMode = null, replayBeforeResumeError = null, pages = null } = {}) {
+  constructor({ resumeError = null, turns = [], historyMode = null, replayBeforeResumeError = null, pages = null, codexHome = null, reconnectCodexHome = undefined } = {}) {
     this.resumeError = resumeError;
     this.turns = turns;
     this.historyMode = historyMode;
     this.replayBeforeResumeError = replayBeforeResumeError;
     this.pages = pages;
+    this.codexHome = codexHome;
+    this.reconnectCodexHome = reconnectCodexHome;
     this.requests = [];
     this.isRunning = true;
     this._connected = true;
@@ -25,7 +27,12 @@ class RecoveryClient {
   onNotification(handler) { this.notificationHandler = handler; }
   onServerRequest() {}
   onExit(handler) { this.exitHandler = handler; }
-  async connect() { this.isRunning = true; this._connected = true; return this; }
+  async connect() {
+    this.isRunning = true;
+    this._connected = true;
+    if (this.reconnectCodexHome !== undefined) this.codexHome = this.reconnectCodexHome;
+    return { codexHome: this.codexHome };
+  }
   async close() { this.isRunning = false; this._connected = false; }
   async request(method, params) {
     this.requests.push({ method, params });
@@ -52,7 +59,8 @@ class RecoveryClient {
 }
 
 class StartClient {
-  constructor() {
+  constructor(codexHome = null) {
+    this.codexHome = codexHome;
     this.requests = [];
     this.isRunning = true;
     this._connected = true;
@@ -92,13 +100,14 @@ class StartClient {
   }
 }
 
-function fixture(clientOptions = {}, { persistenceProfile = 'configured' } = {}) {
+function fixture(clientOptions = {}, { persistenceProfile = 'configured', reportedCodexHome = 'profile' } = {}) {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pre-turn-orphan-'));
   const workspaceRoot = path.join(dataRoot, 'repo');
   const profile = path.join(dataRoot, 'codex-home');
   fs.mkdirSync(workspaceRoot, { recursive: true });
   fs.mkdirSync(profile, { recursive: true });
-  const client = new RecoveryClient(clientOptions);
+  const reported = reportedCodexHome === 'profile' ? profile : reportedCodexHome;
+  const client = new RecoveryClient({ ...clientOptions, codexHome: Object.prototype.hasOwnProperty.call(clientOptions, 'codexHome') ? clientOptions.codexHome : reported });
   const jobMap = new JobMap({ dataRoot });
   const exec = new AppServerExecutor({
     client,
@@ -178,7 +187,7 @@ test('startup ordering persists permission -> exact writer -> dispatch intent ->
   const profile = path.join(dataRoot, 'codex-home');
   fs.mkdirSync(workspaceRoot, { recursive: true });
   fs.mkdirSync(profile, { recursive: true });
-  const client = new StartClient();
+  const client = new StartClient(profile);
   const jobMap = new JobMap({ dataRoot });
   const exec = new AppServerExecutor({ client, jobMap, persistenceProfile: profile });
   t.after(() => exec.shutdown());
@@ -246,6 +255,69 @@ test('legacy exact orphan can use narrow same-dataRoot configured-profile compat
   const durable = x.jobMap.load(job.jobId);
   assert.equal(durable.persistenceProfile, path.resolve(x.profile));
   assert.equal(durable.persistenceProfileInferredLegacy, true);
+});
+
+test('no configured runtimeProfile uses authoritative initialize codexHome for legacy no-rollout recovery', async (t) => {
+  const x = fixture({}, { persistenceProfile: null });
+  t.after(() => x.exec.shutdown());
+  const job = seedPreTurn(x, { legacy: true });
+  x.client.resumeError = exactNoRollout(job.threadId);
+
+  const result = await x.exec.reconcile({ jobId: job.jobId });
+  assert.equal(result.resolution, PRE_TURN_NOT_MATERIALIZED);
+  const durable = x.jobMap.load(job.jobId);
+  assert.equal(durable.persistenceProfile, path.resolve(x.profile));
+  assert.equal(durable.persistenceProfileInferredLegacy, true);
+});
+
+test('configured runtimeProfile matching initialize codexHome allows exact no-rollout recovery', async (t) => {
+  const x = fixture();
+  t.after(() => x.exec.shutdown());
+  const job = seedPreTurn(x);
+  x.client.resumeError = exactNoRollout(job.threadId);
+  const result = await x.exec.reconcile({ jobId: job.jobId });
+  assert.equal(result.resolution, PRE_TURN_NOT_MATERIALIZED);
+});
+
+test('configured runtimeProfile mismatching initialize codexHome retains orphan', async (t) => {
+  const x = fixture({}, { reportedCodexHome: path.join(os.tmpdir(), 'different-codex-home') });
+  t.after(() => x.exec.shutdown());
+  const job = seedPreTurn(x);
+  x.client.resumeError = exactNoRollout(job.threadId);
+  const result = await x.exec.reconcile({ jobId: job.jobId });
+  assert.equal(result.reconciled, false);
+  assert.equal(result.observationCode, 'persistence_profile_mismatch');
+  assert.equal(x.jobMap.load(job.jobId).state, 'recovery_required');
+});
+
+test('reconnect reporting changed initialize codexHome cannot overwrite existing job boundary', async (t) => {
+  const x = fixture({ reconnectCodexHome: path.join(os.tmpdir(), 'changed-codex-home') });
+  t.after(() => x.exec.shutdown());
+  const job = seedPreTurn(x);
+  x.client.resumeError = exactNoRollout(job.threadId);
+  x.client.isRunning = false;
+  x.client._connected = false;
+
+  const result = await x.exec.reconcile({ jobId: job.jobId });
+  assert.equal(result.reconciled, false);
+  assert.equal(result.observationCode, 'persistence_profile_mismatch');
+  assert.equal(x.jobMap.load(job.jobId).persistenceProfile, path.resolve(x.profile));
+  assert.equal(x.jobMap.load(job.jobId).state, 'recovery_required');
+});
+
+test('new job persists authoritative initialize codexHome even without configured runtimeProfile', async (t) => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pre-turn-new-job-profile-'));
+  const workspaceRoot = path.join(dataRoot, 'repo');
+  const reportedProfile = path.join(dataRoot, 'reported-codex-home');
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  fs.mkdirSync(reportedProfile, { recursive: true });
+  const client = new StartClient(reportedProfile);
+  const jobMap = new JobMap({ dataRoot });
+  const exec = new AppServerExecutor({ client, jobMap, persistenceProfile: null });
+  t.after(() => exec.shutdown());
+
+  const result = await exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot, workspaceId: 'ws-reported' });
+  assert.equal(jobMap.load(result.jobId).persistenceProfile, path.resolve(reportedProfile));
 });
 
 test('response-lost materialized terminal turn uses normal authoritative turn recovery', async (t) => {
@@ -357,10 +429,20 @@ test('alternate persisted Codex profile cannot authorize no-rollout release', as
   assert.equal(x.jobMap.load(job.jobId).state, 'recovery_required');
 });
 
-test('unknown current Codex persistence profile cannot authorize no-rollout release', async (t) => {
-  const x = fixture({}, { persistenceProfile: null });
+test('missing initialize codexHome with no configured profile cannot authorize no-rollout release', async (t) => {
+  const x = fixture({}, { persistenceProfile: null, reportedCodexHome: null });
   t.after(() => x.exec.shutdown());
-  const job = seedPreTurn(x, { persistenceProfile: null });
+  const job = seedPreTurn(x, { legacy: true });
+  x.client.resumeError = exactNoRollout(job.threadId);
+  const result = await x.exec.reconcile({ jobId: job.jobId });
+  assert.equal(result.reconciled, false);
+  assert.equal(result.observationCode, 'persistence_profile_unknown');
+});
+
+test('unusable relative initialize codexHome with no configured profile remains fail closed', async (t) => {
+  const x = fixture({}, { persistenceProfile: null, reportedCodexHome: 'relative/.codex' });
+  t.after(() => x.exec.shutdown());
+  const job = seedPreTurn(x, { legacy: true });
   x.client.resumeError = exactNoRollout(job.threadId);
   const result = await x.exec.reconcile({ jobId: job.jobId });
   assert.equal(result.reconciled, false);
