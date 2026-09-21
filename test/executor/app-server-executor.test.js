@@ -1229,6 +1229,19 @@ function readFakeTurns(root) {
   } catch { return []; }
 }
 
+test('successful App Server initialize codexHome is captured and persisted as the effective job profile', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-codex-home-'));
+  const ws = path.join(root, 'ws');
+  fs.mkdirSync(ws, { recursive: true });
+  const exec = makeExecutor({ dataRoot: root });
+  t.after(() => exec.shutdown());
+
+  const r = await exec.start({ prompt: 'x', accessMode: 'workspace_write', workspaceRoot: ws, workspaceId: 'w-init-home' });
+  assert.equal(typeof exec.client.codexHome, 'string');
+  assert.equal(path.isAbsolute(exec.client.codexHome), true);
+  assert.equal(exec.load(r.jobId).persistenceProfile, path.resolve(exec.client.codexHome));
+});
+
 test('workspace_write start -> exact workspace-write request/effective contract', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aex-'));
   const ws = path.join(root, 'ws');
@@ -1291,8 +1304,10 @@ test('continue preserves the same permission contract (workspace_write)', async 
   assert.equal(c.accessMode, 'workspace_write');
   assert.equal(c.approvalPolicy, 'on-request');
   assert.equal(c.effectiveSandbox, 'workspace-write');
-  assert.equal(exec.owner.owner, 'codex');
   const job = exec.load(r0.jobId);
+  // The fake turn may complete immediately after continue() returns. Assert the durable
+  // transition identity rather than racing terminal ownership release.
+  assert.equal(job.turnUnits[c.turnId], job.mutationUnitId);
   assert.equal(job.accessMode, 'workspace_write');
   assert.equal(job.networkAccess, true);
   assert.equal(job.sandboxPolicy.type, 'workspaceWrite');
