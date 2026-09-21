@@ -128,8 +128,13 @@ function handle(msg) {
   }
 
   switch (method) {
-    case 'initialize':
-      return respond(id, { userAgent: 'fake-app-server', codexHome: process.cwd(), platformFamily: 'unix', platformOs: 'linux' });
+    case 'initialize': {
+      const init = { userAgent: 'fake-app-server', platformFamily: 'unix', platformOs: 'linux' };
+      if (process.env.FAKE_APP_SERVER_OMIT_CODEX_HOME !== '1') {
+        init.codexHome = process.env.FAKE_APP_SERVER_CODEX_HOME || process.cwd();
+      }
+      return respond(id, init);
+    }
 
     case 'thread/start': {
       const threadId = 'thread-' + (threads.size + 1);
