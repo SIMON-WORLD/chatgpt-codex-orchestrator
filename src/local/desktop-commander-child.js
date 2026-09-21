@@ -17,13 +17,18 @@ export const DESKTOP_COMMANDER_UPSTREAM_COMMIT = '092ce0b841e86455f12e41f4dc3639
 export const DESKTOP_COMMANDER_LICENSE = 'MIT';
 export const COMPOSITE_EDIT_BOUNDARY_BLOCKED = 'COMPOSITE_EDIT_BOUNDARY_BLOCKED';
 
-// These are the only upstream tools required by the adapter. write_file and
-// edit_block are deliberately absent: the existing ChangeSetService remains
-// the sole Direct Local edit engine for this phase.
+// These are the only upstream tools required by the adapter. Mutation tools are
+// kept behind typed parent-owned methods below; the generic callTool seam never
+// exposes them to callers.
 export const DESKTOP_COMMANDER_REQUIRED_TOOLS = Object.freeze([
   'read_file',
   'read_multiple_files',
+  'write_file',
+  'edit_block',
+  'write_pdf',
+  'create_directory',
   'list_directory',
+  'move_file',
   'get_file_info',
   'start_search',
   'get_more_search_results',
@@ -46,6 +51,14 @@ const SAFE_FAILURE_CODES = new Set([
   'UPSTREAM_TOOL_NOT_ALLOWED',
   'GIT_COMMAND_FAILED',
   'GIT_COMMAND_TIMEOUT',
+]);
+
+const PARENT_OWNED_MUTATION_TOOLS = new Set([
+  'write_file',
+  'edit_block',
+  'write_pdf',
+  'create_directory',
+  'move_file',
 ]);
 
 function resolvePackageEntry() {
@@ -270,10 +283,48 @@ export class DesktopCommanderChild {
     return clipUtf8(extractTextContent(result), READ_MAX_BYTES + (64 * 1024)).text;
   }
 
+  async writeFile({ path: filePath, content, mode = 'rewrite' } = {}) {
+    const result = await this.#callTool('write_file', {
+      path: filePath,
+      content,
+      mode,
+      origin: 'llm',
+    });
+    return clipUtf8(extractTextContent(result), 64 * 1024).text;
+  }
+
+  async editBlock({ filePath, oldString, newString, expectedReplacements = 1, range, content } = {}) {
+    const args = { file_path: filePath, origin: 'llm' };
+    if (oldString !== undefined) args.old_string = oldString;
+    if (newString !== undefined) args.new_string = newString;
+    if (expectedReplacements !== undefined) args.expected_replacements = expectedReplacements;
+    if (range !== undefined) args.range = range;
+    if (content !== undefined) args.content = content;
+    const result = await this.#callTool('edit_block', args);
+    return clipUtf8(extractTextContent(result), 64 * 1024).text;
+  }
+
+  async writePdf({ path: filePath, operations, outputPath } = {}) {
+    const args = { path: filePath, content: operations };
+    if (outputPath !== undefined) args.outputPath = outputPath;
+    const result = await this.#callTool('write_pdf', args);
+    return clipUtf8(extractTextContent(result), 64 * 1024).text;
+  }
+
+  async createDirectory({ path: directoryPath } = {}) {
+    const result = await this.#callTool('create_directory', { path: directoryPath, origin: 'llm' });
+    return clipUtf8(extractTextContent(result), 64 * 1024).text;
+  }
+
   async listDirectory({ path: directoryPath, depth = 1 } = {}) {
     const result = await this.#callTool('list_directory', { path: directoryPath, depth, origin: 'llm' });
     const clipped = clipUtf8(extractTextContent(result), 256 * 1024);
     return { output: clipped.text, truncated: clipped.truncated };
+  }
+
+  async moveFile({ source, destination } = {}) {
+    const result = await this.#callTool('move_file', { source, destination });
+    return clipUtf8(extractTextContent(result), 64 * 1024).text;
   }
 
   async getFileInfo({ path: filePath } = {}) {
@@ -337,7 +388,8 @@ export class DesktopCommanderChild {
   async callTool(name, args = {}) {
     // Process/session tools stay behind the fixed internal git boundary. The
     // wrapper never becomes a general shell surface.
-    if (name === 'start_process' || name === 'read_process_output' || name === 'force_terminate') {
+    if (name === 'start_process' || name === 'read_process_output' || name === 'force_terminate'
+        || PARENT_OWNED_MUTATION_TOOLS.has(name)) {
       throw new DesktopCommanderChildError('UPSTREAM_TOOL_NOT_ALLOWED');
     }
     return this.#callTool(name, args);

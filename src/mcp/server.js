@@ -32,7 +32,7 @@ function runtimeRevision() {
   return /^[0-9a-f]{40}$/.test(value) ? value : null;
 }
 
-export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, codexDiagnosticsService = null, activationPreflight = false, desktopCommanderChild = null } = {}) {
+export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, filesystemMutationService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, codexDiagnosticsService = null, activationPreflight = false, desktopCommanderChild = null } = {}) {
   // Normal serving mode keeps the canonical MCP tools surface. Activation preflight
   // intentionally creates no MCP handler at all: only /healthz and /readyz exist as
   // narrow startup evidence, so no Governance/Codex/worktree/generic MCP operation can
@@ -46,7 +46,7 @@ export async function startMcpServer({ workspaceRegistry, appServerExecutor = nu
     const router = capabilityRouter || createCapabilityRouter();
     const gov = governanceService || createGovernanceService();
     const factory = () => {
-      const server = createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, verifyService, verifyChecks, capabilityRouter: router, governanceService: gov, worktreeService, desktopCommanderChild: compositeChild });
+      const server = createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, filesystemMutationService, verifyService, verifyChecks, capabilityRouter: router, governanceService: gov, worktreeService, desktopCommanderChild: compositeChild });
       if (codexDiagnosticsService) registerCodexDiagnosticsTool(server, codexDiagnosticsService);
       return server;
     };

@@ -59,7 +59,12 @@ test('real DesktopCommander child handshakes, validates required tools, and expo
     assert.deepEqual(DESKTOP_COMMANDER_REQUIRED_TOOLS, [
       'read_file',
       'read_multiple_files',
+      'write_file',
+      'edit_block',
+      'write_pdf',
+      'create_directory',
       'list_directory',
+      'move_file',
       'get_file_info',
       'start_search',
       'get_more_search_results',
@@ -68,7 +73,9 @@ test('real DesktopCommander child handshakes, validates required tools, and expo
       'read_process_output',
       'force_terminate',
     ]);
-    await assert.rejects(() => child.callTool('write_file', {}), /UPSTREAM_TOOL_NOT_ALLOWED/);
+    for (const mutationTool of ['write_file', 'edit_block', 'write_pdf', 'create_directory', 'move_file']) {
+      await assert.rejects(() => child.callTool(mutationTool, {}), /UPSTREAM_TOOL_NOT_ALLOWED/);
+    }
     await assert.rejects(() => child.callTool('start_process', { command: 'whoami' }), /UPSTREAM_TOOL_NOT_ALLOWED/);
   } finally {
     await child.close();
@@ -85,6 +92,26 @@ test('real child recovers lazily after an actual child kill', async () => {
     await child.ensureReady();
     assert.equal(child.health().state, 'ready');
     assert.equal(child.health().generation, 2);
+  } finally {
+    await child.close();
+  }
+});
+
+test('real pinned child lazily creates a directory and moves a file while healthy', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'issue137-real-fs-'));
+  const directory = path.join(root, 'created', 'nested');
+  const source = path.join(root, 'source.txt');
+  const destination = path.join(directory, 'moved.txt');
+  fs.writeFileSync(source, 'issue 137\n', 'utf8');
+  const child = new DesktopCommanderChild();
+  try {
+    assert.deepEqual(child.health(), { state: 'idle', version: DESKTOP_COMMANDER_VERSION, generation: 0 });
+    assert.match(await child.createDirectory({ path: directory }), /Successfully created directory/u);
+    assert.match(await child.moveFile({ source, destination }), /Successfully moved/u);
+    assert.equal(fs.existsSync(directory), true);
+    assert.equal(fs.existsSync(source), false);
+    assert.equal(fs.readFileSync(destination, 'utf8'), 'issue 137\n');
+    assert.deepEqual(child.health(), { state: 'ready', version: DESKTOP_COMMANDER_VERSION, generation: 1 });
   } finally {
     await child.close();
   }
@@ -282,8 +309,8 @@ test('git adapter exposes fixed templates only and Phase 4 remains blocked', () 
   assert.match(staged, /diff --cached --no-ext-diff$/);
   assert.throws(() => fixedGitCommand(root, 'status && whoami'), (error) => error?.code === 'GIT_COMMAND_FAILED');
   assert.equal(COMPOSITE_EDIT_BOUNDARY_BLOCKED, 'COMPOSITE_EDIT_BOUNDARY_BLOCKED');
-  assert.equal(DESKTOP_COMMANDER_REQUIRED_TOOLS.includes('write_file'), false);
-  assert.equal(DESKTOP_COMMANDER_REQUIRED_TOOLS.includes('edit_block'), false);
+  assert.equal(DESKTOP_COMMANDER_REQUIRED_TOOLS.includes('write_file'), true);
+  assert.equal(DESKTOP_COMMANDER_REQUIRED_TOOLS.includes('edit_block'), true);
 });
 
 

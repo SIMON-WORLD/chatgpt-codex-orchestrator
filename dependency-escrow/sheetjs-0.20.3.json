@@ -1,0 +1,40 @@
+{
+  "contractVersion": 1,
+  "purpose": "dependency-escrow",
+  "release": {
+    "repository": "SIMON-WORLD/chatgpt-codex-orchestrator",
+    "tag": "dependency-escrow-sheetjs-0.20.3",
+    "prerelease": true,
+    "latest": false,
+    "targetCommit": "b454eaf5c4edfbbdce2e8fe3875fab7d4b9e214f",
+    "manifestAsset": "sheetjs-0.20.3-escrow-manifest.json",
+    "manifestBytes": 3488,
+    "manifestSha256": "4d23d541d200e55b9e1ad83f27456d1fdc2737409d43971c7a1d2808c8cf9a71"
+  },
+  "package": {
+    "name": "xlsx",
+    "product": "SheetJS Community Edition",
+    "version": "0.20.3",
+    "artifact": "xlsx-0.20.3.tgz",
+    "bytes": 2409319,
+    "sha256": "8dc73fc3b00203e72d176e85b50938627c7b086e607c682e8d3c22c02bb99fe8",
+    "integrity": "sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA=="
+  },
+  "license": {
+    "spdx": "Apache-2.0",
+    "asset": "SheetJS-0.20.3-LICENSE",
+    "bytes": 11355,
+    "sha256": "4d2a38ac35cda06a555c84074a819d413339cd3691b822cae50f8f322fe01f64",
+    "sourceArchiveEntry": "package/LICENSE"
+  },
+  "provenance": {
+    "parentDecisionComment": 5757245847,
+    "compatibilityProbeComment": 5757518555
+  },
+  "runtimeAuthority": {
+    "input": "authorized local workbook bytes only",
+    "network": "none",
+    "process": "none",
+    "macroExecution": "none"
+  }
+}

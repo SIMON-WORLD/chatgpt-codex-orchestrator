@@ -80,6 +80,22 @@ test('createToolsServer refuses a verifyService with an independent mutation own
   await exec.shutdown();
 });
 
+test('createToolsServer refuses every injected Issue #137 mutation service with an independent owner', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm3-owner137-'));
+  const registry = new WorkspaceRegistry({ allowedRoots: [root] });
+  const ownerA = new MutationOwner();
+  const ownerB = new MutationOwner();
+  const exec = new AppServerExecutor({ dataRoot: root, client: new AppServerClient({ codexBin: process.execPath, spawnArgs: [fixture] }), mutationOwner: ownerB });
+  const { createToolsServer } = await import('../../src/mcp/tools.js');
+  for (const property of ['filesystemMutationService', 'excelMutationService', 'docxMutationService', 'pdfMutationService']) {
+    assert.throws(
+      () => createToolsServer({ workspaceRegistry: registry, appServerExecutor: exec, [property]: { owner: ownerA } }),
+      new RegExp(`${property}\\.mutationOwner must be shared`),
+    );
+  }
+  await exec.shutdown();
+});
+
 test('codex_owned workspace blocks Direct Local edit apply (fail before mutation)', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm3-x-'));
   const repo = path.join(root, 'repo'); fs.mkdirSync(repo); fs.writeFileSync(path.join(repo, 'a.txt'), 'hello world', 'utf8');

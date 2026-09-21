@@ -71,6 +71,10 @@ export { DesktopCommanderChild, DesktopCommanderChildError, createDesktopCommand
 
 // --- v0.2 M3: bounded Direct Local edit + verify (additive, non-default) -------
 export { ChangeSetService, computeSha256, EDIT_BOUNDS } from './local/change-set.js';
+export { FilesystemMutationService } from './local/filesystem-mutation.js';
+export { ExcelMutationService, EXCEL_MUTATION_LIMITS } from './local/excel-mutation.js';
+export { DocxMutationService } from './local/docx-mutation.js';
+export { PdfMutationService } from './local/pdf-mutation.js';
 export { OperationState, OPERATION_STATUSES } from './state/operation-state.js';
 export { VerifyService, VERIFY_EFFECTS } from './local/verify.js';
 export { isBlockedMutationPath } from './local/sensitive.js';

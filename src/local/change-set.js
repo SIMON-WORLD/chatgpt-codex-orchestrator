@@ -150,16 +150,24 @@ export class ChangeSetService {
         const cur = fs.readFileSync(absolute);
         if (sha256(cur) !== op.baseHash) { this.ops.update(changeSetId, { status: 'previewed', updatedAt: Date.now() }); this.owner.markUnitState('reconciled'); this.owner.release(); throw new WorkspaceError('stale file between preview and apply'); }
       }
-      // Mutation begins: write temp atomically.
+      // Mutation begins: keep ordinary text/file edits on the established
+      // parent-owned atomic temp-file + rename path. The pinned child write_file
+      // is intentionally not used here because its TextFileHandler.write is a
+      // direct fs.writeFile and would weaken this guarantee.
       mutationStarted = true;
+      const proposed = op.createContent !== null ? Buffer.from(op.createContent, 'utf8') : Buffer.from(applyReplacements(fs.readFileSync(absolute, 'utf8'), op.replacements), 'utf8');
       const dir = path.dirname(absolute);
       tempFile = path.join(dir, '.edit-' + changeSetId + '-' + process.pid + '.tmp');
-      const proposed = op.createContent !== null ? Buffer.from(op.createContent, 'utf8') : Buffer.from(applyReplacements(fs.readFileSync(absolute, 'utf8'), op.replacements), 'utf8');
       fs.writeFileSync(tempFile, proposed);
       preserveMode(absolute, tempFile);
       fs.renameSync(tempFile, absolute);
       tempFile = null;
-      const resultHash = sha256(proposed);
+      // Deterministic post-write readback is mandatory. Re-resolve the target
+      // so a preview-to-apply link swap cannot be reported as a successful write.
+      const post = this.registry.resolveWritable(workspaceId, op.path, { forCreate: op.createContent !== null });
+      this._assertWritableTarget(post.workspace, post.absolute, post.canonical, op.path);
+      const readback = fs.readFileSync(post.absolute);
+      const resultHash = sha256(readback);
       if (resultHash !== op.proposedHash) { this.ops.update(changeSetId, { status: 'recovery_required', updatedAt: Date.now() }); throw new WorkspaceError('result hash does not match previewed proposedHash'); }
       this.ops.update(changeSetId, { status: 'applied', updatedAt: Date.now() });
       this.owner.markUnitState('reconciled');
