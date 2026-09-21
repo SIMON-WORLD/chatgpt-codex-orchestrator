@@ -30,7 +30,7 @@
 
 import path from 'node:path';
 import { AppServerClient } from './app-server-client.js';
-import { JobMap, makeJobId, makeMutationUnitId } from './job-map.js';
+import { JobMap, makeJobId, makeMutationUnitId, PRE_TURN_NOT_MATERIALIZED } from './job-map.js';
 import { MutationOwner, MutationOwnerError } from '../state/mutation-owner.js';
 import { normalizeApproval, mapDecision, APPROVAL_DECISIONS, ApprovalError, SUPPORTED_BINARY_METHODS } from './approval.js';
 
@@ -46,6 +46,13 @@ export const APPROVAL_POLICY_BY_ACCESS = Object.freeze({
 
 const WORKSPACE_WRITE = 'workspace-write';
 const READ_ONLY = 'read-only';
+
+export const CODEX_START_PHASES = Object.freeze({
+  THREAD_CREATED: 'thread_created',
+  PERMISSION_VERIFIED: 'permission_verified',
+  WRITER_RESERVED_TURN_START_PENDING: 'writer_reserved_turn_start_pending',
+  TURN_BOUND: 'turn_bound',
+});
 
 const AUTHORITATIVE_TURN_PAGE_SIZE = 25;
 const AUTHORITATIVE_TURN_MAX_PAGES = 8;
@@ -68,6 +75,21 @@ function isMethodUnsupported(error) {
     || text.includes('method not found')
     || text.includes('unsupported method')
     || text.includes('is unavailable');
+}
+
+function noRolloutThreadIds(error) {
+  const text = String((error && error.message) || error || '');
+  const ids = [];
+  const re = /no rollout found for thread id\s+([0-9a-z-]+)/ig;
+  let match;
+  while ((match = re.exec(text)) !== null) ids.push(match[1]);
+  return ids;
+}
+
+function isExactNoRolloutForThread(error, threadId) {
+  if (!threadId) return false;
+  const ids = noRolloutThreadIds(error);
+  return ids.length > 0 && ids.every((id) => id === threadId);
 }
 
 function threadHistoryMode(thread) {
@@ -252,15 +274,17 @@ export class RecoveryError extends Error {
 }
 
 export class AppServerExecutor {
-  constructor({ dataRoot = null, codexBin = null, listen = null, cwd = null, client = null, jobMap = null, mutationOwner = null } = {}) {
+  constructor({ dataRoot = null, codexBin = null, listen = null, cwd = null, client = null, jobMap = null, mutationOwner = null, persistenceProfile = null } = {}) {
     this.client = client || new AppServerClient({ codexBin: codexBin || undefined, listen: listen || undefined, cwd: cwd || undefined });
     this.jobMap = jobMap || new JobMap({ dataRoot });
     this.owner = mutationOwner || new MutationOwner();
+    this.persistenceProfile = persistenceProfile ? path.resolve(String(persistenceProfile)) : null;
     this._approvals = new Map();
     this._notifiers = new Set();
     this._turnUnits = new Map(); // in-memory cache (durable source of truth is job.turnUnits)
     this._settingsWaiters = new Map(); // threadId -> { resolve, reject, timer } for thread/settings/updated
     this._recoveryObservationThreads = new Set(); // suppress replayed turn lifecycle side-effects during bounded remediation
+    this._recoveryObservedTurns = new Map(); // threadId -> replayed authoritative turn lifecycle evidence
     this._setup();
   }
 
@@ -304,7 +328,14 @@ export class AppServerExecutor {
     if (method === 'turn/started' || method === 'turn/completed') {
       const params = note.params || {};
       const threadId = params.threadId;
-      if (this._recoveryObservationThreads.has(threadId)) { this._emit(note); return; }
+      if (this._recoveryObservationThreads.has(threadId)) {
+        const evidence = this._recoveryObservedTurns.get(threadId) || [];
+        const turn = params.turn || {};
+        evidence.push({ method, turnId: turn.id || null, status: turn.status || null });
+        this._recoveryObservedTurns.set(threadId, evidence);
+        this._emit(note);
+        return;
+      }
       const turn = params.turn || {};
       const job = this.jobMap.findByThread(threadId);
       if (!job) { this._emit(note); return; }
@@ -323,7 +354,7 @@ export class AppServerExecutor {
       if (notifiedUnitId && jobUnit && notifiedUnitId !== jobUnit) { this._emit(note); return; }
       if (notifiedUnitId == null) { this._emit(note); return; }
       const state = turn.status || (method === 'turn/completed' ? 'completed' : 'running');
-      this.jobMap.update(job.jobId, { state, turnId: notifiedTurnId || job.turnId, updatedAt: Date.now() });
+      this.jobMap.update(job.jobId, { state, turnId: notifiedTurnId || job.turnId, startupPhase: CODEX_START_PHASES.TURN_BOUND, turnStartDispatched: true, updatedAt: Date.now() });
       if (TERMINAL_TURN_STATES.includes(turn.status)) {
         this._releaseUnitOnTerminal(job, turn.status);
       } else if (turn.status === 'inProgress' && this._isWriter(job)) {
@@ -670,7 +701,7 @@ export class AppServerExecutor {
 
     const jobId = makeJobId();
     const mutationUnitId = makeMutationUnitId();
-    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, sandboxPolicy, approvalPolicy, isWriter, workspaceRoot, workspaceId, networkAccess: networkAccess === true, requestPermission: { sandbox, approvalPolicy, sandboxPolicy }, effectiveVerified: false, taskId: taskId || null, stepId: stepId || null, identity: identity || null, threadId: null, turnId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
+    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, sandboxPolicy, approvalPolicy, isWriter, workspaceRoot, workspaceId, networkAccess: networkAccess === true, requestPermission: { sandbox, approvalPolicy, sandboxPolicy }, effectiveVerified: false, taskId: taskId || null, stepId: stepId || null, identity: identity || null, threadId: null, turnId: null, startupPhase: null, turnStartDispatched: false, persistenceProfile: this.persistenceProfile, recoveryCode: null, recoveryReason: null, reconciledMutationUnitId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
 
     // Safe bootstrap: start a thread (no turn) with read-only sandbox + 'on-request'
     // approval. These differ from BOTH job targets (read_only=never, workspace_write=workspace-write),
@@ -687,7 +718,7 @@ export class AppServerExecutor {
       throw new Error('thread/start returned no thread id');
     }
 
-    this.jobMap.update(jobId, { threadId, legacyThreadSandbox: effectiveSandboxMode(threadRes.sandbox), state: 'thread_ready', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { threadId, legacyThreadSandbox: effectiveSandboxMode(threadRes.sandbox), startupPhase: CODEX_START_PHASES.THREAD_CREATED, state: 'thread_ready', updatedAt: Date.now() });
 
     // Verify the REAL effective permission (thread/settings/updated ThreadSettings)
     // BEFORE executing any turn and BEFORE acquiring a writer. Never infer effective
@@ -710,6 +741,7 @@ export class AppServerExecutor {
       verifiedForRequestedContract: verified.verifiedForRequestedContract,
       verifiedAt: verified.verifiedAt,
       activePermissionProfile: verified.activePermissionProfile ?? null,
+      startupPhase: CODEX_START_PHASES.PERMISSION_VERIFIED,
       updatedAt: Date.now(),
     });
 
@@ -721,8 +753,10 @@ export class AppServerExecutor {
         throw e;
       }
     }
-    this.jobMap.update(jobId, { state: 'starting', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { state: 'starting', startupPhase: isWriter ? CODEX_START_PHASES.WRITER_RESERVED_TURN_START_PENDING : CODEX_START_PHASES.PERMISSION_VERIFIED, turnStartDispatched: false, updatedAt: Date.now() });
 
+    // Persist dispatch intent only after effective permission verification and exact writer acquisition.
+    this.jobMap.update(jobId, { turnStartDispatched: true, updatedAt: Date.now() });
     let turnRes;
     try {
       turnRes = await this.client.request('turn/start', { threadId, input: [{ type: 'text', text: prompt, text_elements: [] }], ...(cwd ? { cwd } : {}), sandboxPolicy, approvalPolicy });
@@ -739,7 +773,7 @@ export class AppServerExecutor {
     }
     this._turnUnits.set(turnId, mutationUnitId);
     const startJob = this.jobMap.load(jobId);
-    this.jobMap.update(jobId, { turnId, turnUnits: { ...(startJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { turnId, turnUnits: { ...(startJob.turnUnits || {}), [turnId]: mutationUnitId }, startupPhase: CODEX_START_PHASES.TURN_BOUND, turnStartDispatched: true, state: 'running', updatedAt: Date.now() });
     const eff = permissionContract(this.jobMap.load(jobId));
     return { jobId, threadId, turnId, state: 'running', accessMode, sandbox, approvalPolicy, isWriter, mutationOwner: this.owner.owner, effectiveSandbox: eff.effectiveSandbox, effectiveApprovalPolicy: eff.effectiveApprovalPolicy, effectiveVerified: eff.effectiveVerified, permissionContract: eff };
   }
@@ -871,11 +905,12 @@ export class AppServerExecutor {
       this.jobMap.update(jobId, { effectiveSandbox: verified.effectiveSandbox, effectiveApprovalPolicy: verified.effectiveApprovalPolicy, effectiveVerified: true, effectiveWritableRoots: verified.effectiveWritableRoots, effectiveNetworkAccess: verified.effectiveNetworkAccess, effectiveWritableRootMatch: verified.effectiveWritableRootMatch, verifiedForRequestedContract: verified.verifiedForRequestedContract, verifiedAt: verified.verifiedAt, activePermissionProfile: verified.activePermissionProfile ?? null, updatedAt: Date.now() });
     }
     if (isWriter) this.owner.acquire('codex', mutationUnitId);
-    const bindingPatch = { mutationUnitId, accessMode, sandbox: job.sandbox || null, sandboxPolicy, approvalPolicy, isWriter, ownershipReleased: false, state: 'starting', updatedAt: Date.now() };
+    const bindingPatch = { mutationUnitId, accessMode, sandbox: job.sandbox || null, sandboxPolicy, approvalPolicy, isWriter, ownershipReleased: false, startupPhase: isWriter ? CODEX_START_PHASES.WRITER_RESERVED_TURN_START_PENDING : CODEX_START_PHASES.PERMISSION_VERIFIED, turnStartDispatched: false, recoveryCode: null, recoveryReason: null, reconciledMutationUnitId: null, state: 'starting', updatedAt: Date.now() };
     if (taskId != null) bindingPatch.taskId = taskId;
     if (stepId != null) bindingPatch.stepId = stepId;
     if (identity != null) bindingPatch.identity = identity;
     this.jobMap.update(jobId, bindingPatch);
+    this.jobMap.update(jobId, { turnStartDispatched: true, updatedAt: Date.now() });
 
     let turnRes;
     try {
@@ -892,7 +927,7 @@ export class AppServerExecutor {
     }
     this._turnUnits.set(turnId, mutationUnitId);
     const contJob = this.jobMap.load(jobId);
-    this.jobMap.update(jobId, { turnId, turnUnits: { ...(contJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { turnId, turnUnits: { ...(contJob.turnUnits || {}), [turnId]: mutationUnitId }, startupPhase: CODEX_START_PHASES.TURN_BOUND, turnStartDispatched: true, state: 'running', updatedAt: Date.now() });
     const contEff = permissionContract(this.jobMap.load(jobId));
     return { jobId, threadId: job.threadId, turnId, state: 'running', accessMode, sandbox: job.sandbox || null, approvalPolicy, isWriter, mutationOwner: this.owner.owner, effectiveSandbox: contEff.effectiveSandbox, effectiveApprovalPolicy: contEff.effectiveApprovalPolicy, effectiveVerified: contEff.effectiveVerified, permissionContract: contEff };
   }
