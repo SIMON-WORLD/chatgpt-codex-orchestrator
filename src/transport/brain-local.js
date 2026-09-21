@@ -95,6 +95,7 @@ export class BrainLocalRuntime {
         dataRoot: c.dataRoot,
         client: new AppServerClient({ codexBin: codex.bin, listen: c.codex.listen, spawnArgs: codex.argv, extraArgs: c.codex.extraArgs || [], cwd: c.codex.cwd || undefined, env: this._codexEnv() }),
         mutationOwner: this.mutationOwner,
+        persistenceProfile: c.codex.runtimeProfile || null,
       });
       this.changeSetService = new ChangeSetService({ workspaceRegistry: this.registry, operationState: this.operationState, mutationOwner: this.mutationOwner });
       this.verifyService = new VerifyService({ workspaceRegistry: this.registry, mutationOwner: this.mutationOwner, verifyChecks: c.verify || {} });
