@@ -30,7 +30,7 @@
 
 import path from 'node:path';
 import { AppServerClient } from './app-server-client.js';
-import { JobMap, makeJobId, makeMutationUnitId } from './job-map.js';
+import { JobMap, makeJobId, makeMutationUnitId, PRE_TURN_NOT_MATERIALIZED } from './job-map.js';
 import { MutationOwner, MutationOwnerError } from '../state/mutation-owner.js';
 import { normalizeApproval, mapDecision, APPROVAL_DECISIONS, ApprovalError, SUPPORTED_BINARY_METHODS } from './approval.js';
 
@@ -46,6 +46,13 @@ export const APPROVAL_POLICY_BY_ACCESS = Object.freeze({
 
 const WORKSPACE_WRITE = 'workspace-write';
 const READ_ONLY = 'read-only';
+
+export const CODEX_START_PHASES = Object.freeze({
+  THREAD_CREATED: 'thread_created',
+  PERMISSION_VERIFIED: 'permission_verified',
+  WRITER_RESERVED_TURN_START_PENDING: 'writer_reserved_turn_start_pending',
+  TURN_BOUND: 'turn_bound',
+});
 
 const AUTHORITATIVE_TURN_PAGE_SIZE = 25;
 const AUTHORITATIVE_TURN_MAX_PAGES = 8;
@@ -68,6 +75,21 @@ function isMethodUnsupported(error) {
     || text.includes('method not found')
     || text.includes('unsupported method')
     || text.includes('is unavailable');
+}
+
+function noRolloutThreadIds(error) {
+  const text = String((error && error.message) || error || '');
+  const ids = [];
+  const re = /no rollout found for thread id\s+([0-9a-z-]+)/ig;
+  let match;
+  while ((match = re.exec(text)) !== null) ids.push(match[1]);
+  return ids;
+}
+
+function isExactNoRolloutForThread(error, threadId) {
+  if (!threadId) return false;
+  const ids = noRolloutThreadIds(error);
+  return ids.length > 0 && ids.every((id) => id === threadId);
 }
 
 function threadHistoryMode(thread) {
@@ -252,15 +274,17 @@ export class RecoveryError extends Error {
 }
 
 export class AppServerExecutor {
-  constructor({ dataRoot = null, codexBin = null, listen = null, cwd = null, client = null, jobMap = null, mutationOwner = null } = {}) {
+  constructor({ dataRoot = null, codexBin = null, listen = null, cwd = null, client = null, jobMap = null, mutationOwner = null, persistenceProfile = null } = {}) {
     this.client = client || new AppServerClient({ codexBin: codexBin || undefined, listen: listen || undefined, cwd: cwd || undefined });
     this.jobMap = jobMap || new JobMap({ dataRoot });
     this.owner = mutationOwner || new MutationOwner();
+    this.persistenceProfile = persistenceProfile ? path.resolve(String(persistenceProfile)) : null;
     this._approvals = new Map();
     this._notifiers = new Set();
     this._turnUnits = new Map(); // in-memory cache (durable source of truth is job.turnUnits)
     this._settingsWaiters = new Map(); // threadId -> { resolve, reject, timer } for thread/settings/updated
     this._recoveryObservationThreads = new Set(); // suppress replayed turn lifecycle side-effects during bounded remediation
+    this._recoveryObservedTurns = new Map(); // threadId -> replayed authoritative turn lifecycle evidence
     this._setup();
   }
 
@@ -304,7 +328,14 @@ export class AppServerExecutor {
     if (method === 'turn/started' || method === 'turn/completed') {
       const params = note.params || {};
       const threadId = params.threadId;
-      if (this._recoveryObservationThreads.has(threadId)) { this._emit(note); return; }
+      if (this._recoveryObservationThreads.has(threadId)) {
+        const evidence = this._recoveryObservedTurns.get(threadId) || [];
+        const turn = params.turn || {};
+        evidence.push({ method, turnId: turn.id || null, status: turn.status || null });
+        this._recoveryObservedTurns.set(threadId, evidence);
+        this._emit(note);
+        return;
+      }
       const turn = params.turn || {};
       const job = this.jobMap.findByThread(threadId);
       if (!job) { this._emit(note); return; }
@@ -323,7 +354,7 @@ export class AppServerExecutor {
       if (notifiedUnitId && jobUnit && notifiedUnitId !== jobUnit) { this._emit(note); return; }
       if (notifiedUnitId == null) { this._emit(note); return; }
       const state = turn.status || (method === 'turn/completed' ? 'completed' : 'running');
-      this.jobMap.update(job.jobId, { state, turnId: notifiedTurnId || job.turnId, updatedAt: Date.now() });
+      this.jobMap.update(job.jobId, { state, turnId: notifiedTurnId || job.turnId, startupPhase: CODEX_START_PHASES.TURN_BOUND, turnStartDispatched: true, updatedAt: Date.now() });
       if (TERMINAL_TURN_STATES.includes(turn.status)) {
         this._releaseUnitOnTerminal(job, turn.status);
       } else if (turn.status === 'inProgress' && this._isWriter(job)) {
@@ -453,7 +484,13 @@ export class AppServerExecutor {
         excludeTurns: true,
       });
     } catch (e) {
-      return { ok: false, reason: 'resume failed: ' + String(e.message || e).slice(0, 160), observationCode: 'resume_failed' };
+      return {
+        ok: false,
+        reason: 'resume failed: ' + String(e.message || e).slice(0, 160),
+        observationCode: 'resume_failed',
+        exactNoRolloutForThread: isExactNoRolloutForThread(e, job.threadId),
+        noRolloutThreadIds: noRolloutThreadIds(e),
+      };
     }
     if (!(resumed && resumed.thread && resumed.thread.id)) {
       return { ok: false, reason: 'thread/resume returned no thread id', observationCode: 'resume_no_thread_identity' };
@@ -516,17 +553,147 @@ export class AppServerExecutor {
     return { ok: false, reason: 'multiple candidate turns for current mutation unit', observationCode: 'turn_binding_multiple', unitId };
   }
 
-  // Read-only authoritative lifecycle observation for one already-selected durable job.
-  // It may bind a uniquely identifiable unseen turn to the persisted mutation unit, but
-  // it never starts/continues/interrupts a turn and never acquires a writer. This is the
-  // primitive used by bounded ambiguity remediation before the normal public recovery path.
+  _verifiedWriterContractForPreTurnRecovery(job) {
+    if (!job || job.accessMode !== 'workspace_write') return { ok: false, observationCode: 'pre_turn_not_workspace_write', reason: 'pre-turn no-materialization recovery requires workspace_write' };
+    if (!job.workspaceRoot) return { ok: false, observationCode: 'pre_turn_workspace_unknown', reason: 'pre-turn recovery requires the exact durable workspace root' };
+    if (job.effectiveVerified !== true) return { ok: false, observationCode: 'pre_turn_permission_unverified', reason: 'effective permission proof is missing' };
+    if (job.effectiveSandbox !== WORKSPACE_WRITE || job.effectiveApprovalPolicy !== 'on-request') {
+      return { ok: false, observationCode: 'pre_turn_permission_mismatch', reason: 'effective workspace-write permission contract does not match' };
+    }
+    if (job.effectiveWritableRootMatch !== true || job.effectiveNetworkAccess !== (job.networkAccess === true)) {
+      return { ok: false, observationCode: 'pre_turn_permission_mismatch', reason: 'effective workspace/network permission proof does not match the requested contract' };
+    }
+    const expected = JSON.stringify({
+      accessMode: 'workspace_write',
+      networkAccess: job.networkAccess === true,
+      sandboxPolicy: buildSandboxPolicy('workspace_write', { workspaceRoot: job.workspaceRoot, networkAccess: job.networkAccess === true }),
+    });
+    if (job.verifiedForRequestedContract !== expected) {
+      return { ok: false, observationCode: 'pre_turn_permission_contract_stale', reason: 'durable permission proof is not for the exact current workspace-write contract' };
+    }
+    return { ok: true };
+  }
+
+  _persistenceProfileForPreTurnRecovery(job) {
+    if (!this.persistenceProfile) {
+      return { ok: false, observationCode: 'persistence_profile_unknown', reason: 'current Codex persistence profile is not configured; refusing no-rollout inference' };
+    }
+    if (job.persistenceProfile) {
+      if (!rootsEqual(job.persistenceProfile, this.persistenceProfile)) {
+        return { ok: false, observationCode: 'persistence_profile_mismatch', reason: 'durable job Codex persistence profile differs from the current runtime profile' };
+      }
+      return { ok: true, legacyInferred: false };
+    }
+
+    // Legacy records predate explicit profile storage. The compatibility inference is
+    // limited to records physically in this JobMap/dataRoot, under a configured server-owned
+    // Stable Runtime profile, with the exact durable permission snapshot present.
+    const isStructurallyLegacy = !Object.prototype.hasOwnProperty.call(job, 'startupPhase')
+      && !Object.prototype.hasOwnProperty.call(job, 'persistenceProfile');
+    if (!isStructurallyLegacy || job.state !== 'recovery_required' || !job.verifiedAt || !job.verifiedForRequestedContract) {
+      return { ok: false, observationCode: 'persistence_profile_unknown', reason: 'durable job Codex persistence profile is unknown' };
+    }
+    return { ok: true, legacyInferred: true };
+  }
+
+  _classifyPreTurnNotMaterialized(job, observed) {
+    if (!observed || observed.observationCode !== 'resume_failed' || observed.exactNoRolloutForThread !== true) {
+      return { ok: false, observationCode: observed?.observationCode || 'lifecycle_unreadable', reason: observed?.reason || 'authoritative lifecycle evidence unavailable' };
+    }
+    if (!job || !job.jobId || !job.mutationUnitId) {
+      return { ok: false, observationCode: 'pre_turn_identity_missing', reason: 'exact durable job/mutation-unit identity is missing' };
+    }
+    const permission = this._verifiedWriterContractForPreTurnRecovery(job);
+    if (!permission.ok) return permission;
+    if (!job.threadId) return { ok: false, observationCode: 'pre_turn_thread_missing', reason: 'durable thread identity is missing' };
+    if (job.turnId != null) return { ok: false, observationCode: 'pre_turn_turn_identity_present', reason: 'a durable turn identity already exists' };
+
+    const unitId = job.mutationUnitId;
+    const turnUnits = job.turnUnits && typeof job.turnUnits === 'object' ? job.turnUnits : {};
+    if (Object.values(turnUnits).some((mappedUnitId) => mappedUnitId === unitId)) {
+      return { ok: false, observationCode: 'pre_turn_unit_turn_binding_present', reason: 'the current mutation unit already has durable turn evidence' };
+    }
+
+    const hasExplicitPhase = Object.prototype.hasOwnProperty.call(job, 'startupPhase');
+    const compatibleExplicitPhase = job.startupPhase === CODEX_START_PHASES.PERMISSION_VERIFIED
+      || job.startupPhase === CODEX_START_PHASES.WRITER_RESERVED_TURN_START_PENDING;
+    const compatibleLegacy = !hasExplicitPhase && job.state === 'recovery_required';
+    if (!compatibleExplicitPhase && !compatibleLegacy) {
+      return { ok: false, observationCode: 'pre_turn_startup_phase_ambiguous', reason: 'durable startup phase is not compatible with a fresh pre-turn orphan' };
+    }
+
+    const replayed = this._recoveryObservedTurns.get(job.threadId) || [];
+    if (replayed.length > 0) {
+      return { ok: false, observationCode: 'pre_turn_replayed_turn_evidence', reason: 'authoritative replay exposed turn lifecycle evidence; normal turn recovery remains required' };
+    }
+
+    const profile = this._persistenceProfileForPreTurnRecovery(job);
+    if (!profile.ok) return profile;
+    return {
+      ok: true,
+      resolution: PRE_TURN_NOT_MATERIALIZED,
+      state: PRE_TURN_NOT_MATERIALIZED,
+      unitId,
+      legacyProfileInferred: profile.legacyInferred === true,
+    };
+  }
+
+  _terminalizePreTurnNotMaterialized(job, classified) {
+    const unitId = job.mutationUnitId || null;
+    if (!classified?.ok || classified.resolution !== PRE_TURN_NOT_MATERIALIZED || !unitId) {
+      return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: 'pre-turn no-materialization classification was not authoritative' };
+    }
+    if (this.owner.owner === 'codex' && this.owner.unitId !== unitId) {
+      this.jobMap.update(job.jobId, { state: 'recovery_required', updatedAt: Date.now() });
+      return { ok: false, resolution: 'unresolved', recoveryRequired: true, observationCode: 'pre_turn_foreign_owner', reason: 'a different Codex mutation unit owns the workspace; refusing release' };
+    }
+    if (this.owner.owner === 'chatgpt') {
+      this.jobMap.update(job.jobId, { state: 'recovery_required', updatedAt: Date.now() });
+      return { ok: false, resolution: 'unresolved', recoveryRequired: true, observationCode: 'pre_turn_foreign_owner', reason: 'ChatGPT owns the workspace; refusing pre-turn Codex terminalization' };
+    }
+
+    let ownershipReleased = this.owner.owner === 'none';
+    if (this.owner.owner === 'codex' && this.owner.unitId === unitId) {
+      this.owner.markUnitState('reconciled');
+      ownershipReleased = this.owner.release().released;
+    }
+
+    const patch = {
+      state: PRE_TURN_NOT_MATERIALIZED,
+      recoveryCode: PRE_TURN_NOT_MATERIALIZED,
+      recoveryReason: 'exact thread has no rollout under the verified same-profile pre-turn contract',
+      reconciledMutationUnitId: unitId,
+      ownershipReleased,
+      updatedAt: Date.now(),
+    };
+    if (classified.legacyProfileInferred === true && !job.persistenceProfile) {
+      patch.persistenceProfile = this.persistenceProfile;
+      patch.persistenceProfileInferredLegacy = true;
+    }
+    this.jobMap.update(job.jobId, patch);
+    return {
+      ok: true,
+      resolution: PRE_TURN_NOT_MATERIALIZED,
+      state: PRE_TURN_NOT_MATERIALIZED,
+      recoveryCode: PRE_TURN_NOT_MATERIALIZED,
+      ownershipReleased,
+      recoveredUnitId: unitId,
+      mutationUnitId: unitId,
+    };
+  }
+
+  // Authoritative lifecycle observation for one already-selected durable job. It may bind
+  // a uniquely identifiable materialized turn, or classify the narrow exact-thread
+  // pre-turn/no-rollout case. It never starts/continues/interrupts a turn.
   async _authoritativeObserveLifecycle(job) {
     if (!job || !job.threadId) return this._authoritativeObserveLifecycleCore(job);
     this._recoveryObservationThreads.add(job.threadId);
+    this._recoveryObservedTurns.set(job.threadId, []);
     try {
       return await this._authoritativeObserveLifecycleCore(job);
     } finally {
       this._recoveryObservationThreads.delete(job.threadId);
+      this._recoveryObservedTurns.delete(job.threadId);
     }
   }
 
@@ -535,8 +702,10 @@ export class AppServerExecutor {
     const unitId = job.mutationUnitId || null;
     const observed = await this._authoritativeTurn(job);
     if (!observed.ok) {
+      const preTurn = this._classifyPreTurnNotMaterialized(job, observed);
+      if (preTurn.ok) return preTurn;
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      return { ok: false, resolution: 'unresolved', reason: observed.reason, observationCode: observed.observationCode || 'lifecycle_unreadable' };
+      return { ok: false, resolution: 'unresolved', reason: preTurn.reason || observed.reason, observationCode: preTurn.observationCode || observed.observationCode || 'lifecycle_unreadable' };
     }
     const turn = observed.turn;
     if (TERMINAL_TURN_STATES.includes(turn.status)) return { ok: true, resolution: 'terminal', state: turn.status, unitId, observationCode: null };
@@ -555,6 +724,10 @@ export class AppServerExecutor {
     const observed = await this._authoritativeObserveLifecycle(job);
     if (!observed.ok) {
       return { ok: false, resolution: 'unresolved', recoveryRequired: true, reason: observed.reason, observationCode: observed.observationCode || 'lifecycle_unreadable' };
+    }
+
+    if (observed.resolution === PRE_TURN_NOT_MATERIALIZED) {
+      return this._terminalizePreTurnNotMaterialized(job, observed);
     }
 
     if (observed.resolution === 'terminal') {
@@ -670,7 +843,7 @@ export class AppServerExecutor {
 
     const jobId = makeJobId();
     const mutationUnitId = makeMutationUnitId();
-    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, sandboxPolicy, approvalPolicy, isWriter, workspaceRoot, workspaceId, networkAccess: networkAccess === true, requestPermission: { sandbox, approvalPolicy, sandboxPolicy }, effectiveVerified: false, taskId: taskId || null, stepId: stepId || null, identity: identity || null, threadId: null, turnId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
+    this.jobMap.save(jobId, { jobId, mutationUnitId, accessMode, sandbox, sandboxPolicy, approvalPolicy, isWriter, workspaceRoot, workspaceId, networkAccess: networkAccess === true, requestPermission: { sandbox, approvalPolicy, sandboxPolicy }, effectiveVerified: false, taskId: taskId || null, stepId: stepId || null, identity: identity || null, threadId: null, turnId: null, startupPhase: null, turnStartDispatched: false, persistenceProfile: this.persistenceProfile, recoveryCode: null, recoveryReason: null, reconciledMutationUnitId: null, state: 'created', ownershipReleased: false, turnUnits: {}, createdAt: Date.now(), updatedAt: Date.now() });
 
     // Safe bootstrap: start a thread (no turn) with read-only sandbox + 'on-request'
     // approval. These differ from BOTH job targets (read_only=never, workspace_write=workspace-write),
@@ -687,7 +860,7 @@ export class AppServerExecutor {
       throw new Error('thread/start returned no thread id');
     }
 
-    this.jobMap.update(jobId, { threadId, legacyThreadSandbox: effectiveSandboxMode(threadRes.sandbox), state: 'thread_ready', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { threadId, legacyThreadSandbox: effectiveSandboxMode(threadRes.sandbox), startupPhase: CODEX_START_PHASES.THREAD_CREATED, state: 'thread_ready', updatedAt: Date.now() });
 
     // Verify the REAL effective permission (thread/settings/updated ThreadSettings)
     // BEFORE executing any turn and BEFORE acquiring a writer. Never infer effective
@@ -710,6 +883,7 @@ export class AppServerExecutor {
       verifiedForRequestedContract: verified.verifiedForRequestedContract,
       verifiedAt: verified.verifiedAt,
       activePermissionProfile: verified.activePermissionProfile ?? null,
+      startupPhase: CODEX_START_PHASES.PERMISSION_VERIFIED,
       updatedAt: Date.now(),
     });
 
@@ -721,8 +895,10 @@ export class AppServerExecutor {
         throw e;
       }
     }
-    this.jobMap.update(jobId, { state: 'starting', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { state: 'starting', startupPhase: isWriter ? CODEX_START_PHASES.WRITER_RESERVED_TURN_START_PENDING : CODEX_START_PHASES.PERMISSION_VERIFIED, turnStartDispatched: false, updatedAt: Date.now() });
 
+    // Persist dispatch intent only after effective permission verification and exact writer acquisition.
+    this.jobMap.update(jobId, { turnStartDispatched: true, updatedAt: Date.now() });
     let turnRes;
     try {
       turnRes = await this.client.request('turn/start', { threadId, input: [{ type: 'text', text: prompt, text_elements: [] }], ...(cwd ? { cwd } : {}), sandboxPolicy, approvalPolicy });
@@ -739,7 +915,7 @@ export class AppServerExecutor {
     }
     this._turnUnits.set(turnId, mutationUnitId);
     const startJob = this.jobMap.load(jobId);
-    this.jobMap.update(jobId, { turnId, turnUnits: { ...(startJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { turnId, turnUnits: { ...(startJob.turnUnits || {}), [turnId]: mutationUnitId }, startupPhase: CODEX_START_PHASES.TURN_BOUND, turnStartDispatched: true, state: 'running', updatedAt: Date.now() });
     const eff = permissionContract(this.jobMap.load(jobId));
     return { jobId, threadId, turnId, state: 'running', accessMode, sandbox, approvalPolicy, isWriter, mutationOwner: this.owner.owner, effectiveSandbox: eff.effectiveSandbox, effectiveApprovalPolicy: eff.effectiveApprovalPolicy, effectiveVerified: eff.effectiveVerified, permissionContract: eff };
   }
@@ -749,6 +925,45 @@ export class AppServerExecutor {
   async get({ jobId }) {
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
+
+    if (job.state === PRE_TURN_NOT_MATERIALIZED) {
+      const eff = permissionContract(job);
+      return {
+        jobId,
+        threadId: job.threadId || null,
+        turnId: null,
+        accessMode: job.accessMode || null,
+        sandbox: job.sandbox || null,
+        effectiveSandbox: job.effectiveSandbox || null,
+        effectiveApprovalPolicy: job.effectiveApprovalPolicy || null,
+        effectiveVerified: job.effectiveVerified === true,
+        effectiveWritableRoots: Array.isArray(job.effectiveWritableRoots) ? job.effectiveWritableRoots : null,
+        effectiveNetworkAccess: job.effectiveNetworkAccess === true,
+        effectiveWritableRootMatch: job.effectiveWritableRootMatch === true,
+        verifiedForRequestedContract: job.verifiedForRequestedContract || null,
+        permissionContract: eff,
+        isWriter: job.isWriter !== false,
+        workspaceRoot: job.workspaceRoot || null,
+        workspaceId: job.workspaceId || null,
+        state: PRE_TURN_NOT_MATERIALIZED,
+        live: false,
+        recoveryRequired: false,
+        nextAction: null,
+        readErrorCode: null,
+        threadStatus: null,
+        result: null,
+        assistantText: null,
+        pendingApprovals: [],
+        mutationOwner: this.owner.owner,
+        jobMutationUnitId: job.mutationUnitId || null,
+        ownerMutationUnitId: this.owner.owner !== 'none' ? this.owner.unitId : null,
+        mutationUnitState: job.ownershipReleased === true ? 'released' : 'none',
+        ownershipReleased: job.ownershipReleased === true,
+        recoveryCode: job.recoveryCode || PRE_TURN_NOT_MATERIALIZED,
+        recoveryReason: job.recoveryReason || null,
+        turn: null,
+      };
+    }
 
     let live = false;
     let recoveryRequired = false;
@@ -849,6 +1064,7 @@ export class AppServerExecutor {
   async continue({ jobId, instruction, taskId = null, stepId = null, identity = null }) {
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
+    if (job.state === PRE_TURN_NOT_MATERIALIZED) throw new Error(`job ${jobId} has no materialized turn/thread rollout to continue`);
     if (!job.threadId) throw new Error(`job ${jobId} has no threadId`);
     if (!instruction || typeof instruction !== 'string' || !instruction.trim()) throw new Error('continue requires a non-empty instruction');
 
@@ -871,11 +1087,12 @@ export class AppServerExecutor {
       this.jobMap.update(jobId, { effectiveSandbox: verified.effectiveSandbox, effectiveApprovalPolicy: verified.effectiveApprovalPolicy, effectiveVerified: true, effectiveWritableRoots: verified.effectiveWritableRoots, effectiveNetworkAccess: verified.effectiveNetworkAccess, effectiveWritableRootMatch: verified.effectiveWritableRootMatch, verifiedForRequestedContract: verified.verifiedForRequestedContract, verifiedAt: verified.verifiedAt, activePermissionProfile: verified.activePermissionProfile ?? null, updatedAt: Date.now() });
     }
     if (isWriter) this.owner.acquire('codex', mutationUnitId);
-    const bindingPatch = { mutationUnitId, accessMode, sandbox: job.sandbox || null, sandboxPolicy, approvalPolicy, isWriter, ownershipReleased: false, state: 'starting', updatedAt: Date.now() };
+    const bindingPatch = { mutationUnitId, accessMode, sandbox: job.sandbox || null, sandboxPolicy, approvalPolicy, isWriter, ownershipReleased: false, startupPhase: isWriter ? CODEX_START_PHASES.WRITER_RESERVED_TURN_START_PENDING : CODEX_START_PHASES.PERMISSION_VERIFIED, turnStartDispatched: false, recoveryCode: null, recoveryReason: null, reconciledMutationUnitId: null, state: 'starting', updatedAt: Date.now() };
     if (taskId != null) bindingPatch.taskId = taskId;
     if (stepId != null) bindingPatch.stepId = stepId;
     if (identity != null) bindingPatch.identity = identity;
     this.jobMap.update(jobId, bindingPatch);
+    this.jobMap.update(jobId, { turnStartDispatched: true, updatedAt: Date.now() });
 
     let turnRes;
     try {
@@ -892,7 +1109,7 @@ export class AppServerExecutor {
     }
     this._turnUnits.set(turnId, mutationUnitId);
     const contJob = this.jobMap.load(jobId);
-    this.jobMap.update(jobId, { turnId, turnUnits: { ...(contJob.turnUnits || {}), [turnId]: mutationUnitId }, state: 'running', updatedAt: Date.now() });
+    this.jobMap.update(jobId, { turnId, turnUnits: { ...(contJob.turnUnits || {}), [turnId]: mutationUnitId }, startupPhase: CODEX_START_PHASES.TURN_BOUND, turnStartDispatched: true, state: 'running', updatedAt: Date.now() });
     const contEff = permissionContract(this.jobMap.load(jobId));
     return { jobId, threadId: job.threadId, turnId, state: 'running', accessMode, sandbox: job.sandbox || null, approvalPolicy, isWriter, mutationOwner: this.owner.owner, effectiveSandbox: contEff.effectiveSandbox, effectiveApprovalPolicy: contEff.effectiveApprovalPolicy, effectiveVerified: contEff.effectiveVerified, permissionContract: contEff };
   }
@@ -914,7 +1131,15 @@ export class AppServerExecutor {
         reasonCounts[code] = (reasonCounts[code] || 0) + 1;
         continue;
       }
-      if (observed.resolution === 'terminal') {
+      if (observed.resolution === PRE_TURN_NOT_MATERIALIZED) {
+        const terminalized = this._terminalizePreTurnNotMaterialized(job, observed);
+        if (!terminalized.ok) {
+          unresolvedCandidateCount += 1;
+          const code = terminalized.observationCode || 'pre_turn_terminalization_failed';
+          reasonCounts[code] = (reasonCounts[code] || 0) + 1;
+          continue;
+        }
+      } else if (observed.resolution === 'terminal') {
         if (this._isWriter(job) && this.owner.owner === 'codex' && this.owner.unitId === (job.mutationUnitId || null)) {
           this._releaseUnitOnTerminal(job, observed.state);
         } else {
@@ -948,6 +1173,9 @@ export class AppServerExecutor {
   async reconcile({ jobId }) {
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
+    if (job.state === PRE_TURN_NOT_MATERIALIZED) {
+      return { jobId, reconciled: true, resolution: PRE_TURN_NOT_MATERIALIZED, state: PRE_TURN_NOT_MATERIALIZED, recoveryCode: PRE_TURN_NOT_MATERIALIZED, ownershipReleased: job.ownershipReleased === true, recoveryRequired: false, mutationUnitId: job.mutationUnitId || null };
+    }
     await this._ensureConnected();
     if (!job.threadId) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
@@ -960,12 +1188,14 @@ export class AppServerExecutor {
     return {
       jobId, reconciled: true, resolution: core.resolution, state: core.state,
       ownershipReleased: core.ownershipReleased === true, recoveryRequired: false, mutationUnitId: core.mutationUnitId || null,
+      ...(core.recoveryCode ? { recoveryCode: core.recoveryCode } : {}),
     };
   }
 
   async resume({ jobId }) {
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
+    if (job.state === PRE_TURN_NOT_MATERIALIZED) return this.get({ jobId });
     await this._ensureConnected();
     if (!job.threadId) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
@@ -1008,6 +1238,7 @@ export class AppServerExecutor {
     }
     const job = inWorkspace[0];
     const jobId = job.jobId;
+    if (job.state === PRE_TURN_NOT_MATERIALIZED) return this.get({ jobId });
     // Determine whether the persisted binding requires authoritative reconciliation.
     // Force reconcile when the binding is already recovery_required, has no thread
     // identity, or the client is not live (local restart). Never infer a stale turn.

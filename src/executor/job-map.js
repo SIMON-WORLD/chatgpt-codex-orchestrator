@@ -21,8 +21,9 @@ export function makeJobId() { return crypto.randomUUID(); }
 
 export function makeMutationUnitId() { return crypto.randomUUID(); }
 
+export const PRE_TURN_NOT_MATERIALIZED = 'pre_turn_not_materialized';
 const RECOVERY_RISK_STATES = new Set(['created', 'thread_ready', 'starting', 'running', 'recovery_required']);
-const TERMINAL_JOB_STATES = new Set(['completed', 'failed', 'interrupted']);
+export const TERMINAL_JOB_STATES = new Set(['completed', 'failed', 'interrupted', PRE_TURN_NOT_MATERIALIZED]);
 
 function jobMapDir(dataRoot) { return path.join(runtimePaths(dataRoot).runtime, 'job-maps'); }
 
@@ -66,6 +67,12 @@ function defaultJobEntry(jobId) {
     mutationUnitId: null,
     workspaceRoot: null,
     workspaceId: null,
+    startupPhase: null,
+    turnStartDispatched: false,
+    persistenceProfile: null,
+    recoveryCode: null,
+    recoveryReason: null,
+    reconciledMutationUnitId: null,
     state: 'none',
     createdAt: Date.now(),
     updatedAt: Date.now(),
