@@ -926,6 +926,45 @@ export class AppServerExecutor {
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
 
+    if (job.state === PRE_TURN_NOT_MATERIALIZED) {
+      const eff = permissionContract(job);
+      return {
+        jobId,
+        threadId: job.threadId || null,
+        turnId: null,
+        accessMode: job.accessMode || null,
+        sandbox: job.sandbox || null,
+        effectiveSandbox: job.effectiveSandbox || null,
+        effectiveApprovalPolicy: job.effectiveApprovalPolicy || null,
+        effectiveVerified: job.effectiveVerified === true,
+        effectiveWritableRoots: Array.isArray(job.effectiveWritableRoots) ? job.effectiveWritableRoots : null,
+        effectiveNetworkAccess: job.effectiveNetworkAccess === true,
+        effectiveWritableRootMatch: job.effectiveWritableRootMatch === true,
+        verifiedForRequestedContract: job.verifiedForRequestedContract || null,
+        permissionContract: eff,
+        isWriter: job.isWriter !== false,
+        workspaceRoot: job.workspaceRoot || null,
+        workspaceId: job.workspaceId || null,
+        state: PRE_TURN_NOT_MATERIALIZED,
+        live: false,
+        recoveryRequired: false,
+        nextAction: null,
+        readErrorCode: null,
+        threadStatus: null,
+        result: null,
+        assistantText: null,
+        pendingApprovals: [],
+        mutationOwner: this.owner.owner,
+        jobMutationUnitId: job.mutationUnitId || null,
+        ownerMutationUnitId: this.owner.owner !== 'none' ? this.owner.unitId : null,
+        mutationUnitState: job.ownershipReleased === true ? 'released' : 'none',
+        ownershipReleased: job.ownershipReleased === true,
+        recoveryCode: job.recoveryCode || PRE_TURN_NOT_MATERIALIZED,
+        recoveryReason: job.recoveryReason || null,
+        turn: null,
+      };
+    }
+
     let live = false;
     let recoveryRequired = false;
     let readErrorCode = null;
@@ -1025,6 +1064,7 @@ export class AppServerExecutor {
   async continue({ jobId, instruction, taskId = null, stepId = null, identity = null }) {
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
+    if (job.state === PRE_TURN_NOT_MATERIALIZED) throw new Error(`job ${jobId} has no materialized turn/thread rollout to continue`);
     if (!job.threadId) throw new Error(`job ${jobId} has no threadId`);
     if (!instruction || typeof instruction !== 'string' || !instruction.trim()) throw new Error('continue requires a non-empty instruction');
 
