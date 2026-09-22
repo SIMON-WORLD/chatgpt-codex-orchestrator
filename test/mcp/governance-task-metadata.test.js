@@ -252,14 +252,15 @@ test('Issue #149: TASK-only wrapper preserves durable TASK authority, lifecycle,
   }));
   assert.equal(result2.machineGate, 'pass');
 
-  const resultBearingReissue = await call(ctx.client, 'governance_task', {
+  const resultBearingReissue = parse(await call(ctx.client, 'governance_task', {
     taskId: 'issue-149-task',
     stepId: 's2',
     authorityToken: parentToken,
     workspaceId: wsA.workspaceId,
     route: 'CHATGPT_DIRECT_LOCAL',
-  });
-  assert.equal(resultBearingReissue.res.isError, true, 'TASK reissue on a result-bearing current step must remain blocked');
+  }));
+  assert.equal(resultBearingReissue.blocked, true, 'TASK reissue on a result-bearing current step must remain blocked');
+  assert.equal(resultBearingReissue.nextAction, 'blocked_task_reissue');
 
   const takeover = parse(await call(ctx.client, 'governance_takeover', {
     taskId: 'issue-149-task',
