@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import JSZip from 'jszip';
 import { DocxFileHandler } from '@wonderwhy-er/desktop-commander/dist/utils/files/docx.js';
 import { WorkspaceRegistry } from '../../src/local/workspace.js';
 import { MutationOwner } from '../../src/state/mutation-owner.js';
@@ -141,5 +142,215 @@ test('Issue #137 DOCX create provider failure leaves no final or temp artifact',
   }), /provider write failed/u);
   assert.equal(fs.existsSync(path.join(f.primary, 'fail.docx')), false);
   assert.equal(fs.readdirSync(f.primary).some((name) => name.startsWith('.docx-create-')), false);
+  assert.equal(owner.owner, 'none');
+});
+
+function fixtureXmlText(value) {
+  return String(value)
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/"/gu, '&quot;')
+    .replace(/'/gu, '&apos;');
+}
+
+function fixtureRun(text) {
+  const preserve = /^\s/u.test(text) || /\s$/u.test(text);
+  const space = preserve ? ' xml:space="preserve"' : '';
+  return '<w:r><w:t' + space + '>' + fixtureXmlText(text) + '</w:t></w:r>';
+}
+
+function fixtureParagraph(parts) {
+  return '<w:p>' + parts.map((part) => fixtureRun(part)).join('') + '</w:p>';
+}
+
+function fixtureTable(cells) {
+  const grid = cells.map(() => '<w:gridCol w:w="2400"/>').join('');
+  const row = cells.map((parts) => (
+    '<w:tc><w:tcPr/>' + fixtureParagraph(parts) + '</w:tc>'
+  )).join('');
+  return '<w:tbl><w:tblPr/><w:tblGrid>' + grid + '</w:tblGrid><w:tr>' + row + '</w:tr></w:tbl>';
+}
+
+async function rewriteDocxBody(file, bodyXml) {
+  const zip = await JSZip.loadAsync(fs.readFileSync(file));
+  const entry = zip.file('word/document.xml');
+  assert.ok(entry, 'word/document.xml must exist');
+  const xml = await entry.async('string');
+  const bodyMatch = xml.match(/<w:body>([\s\S]*?)<\/w:body>/u);
+  assert.ok(bodyMatch, 'w:body must exist');
+  const section = bodyMatch[1].match(/<w:sectPr\b[\s\S]*?<\/w:sectPr>\s*$/u)?.[0] || '';
+  const next = xml.replace(
+    /<w:body>[\s\S]*?<\/w:body>/u,
+    '<w:body>' + bodyXml + section + '</w:body>',
+  );
+  zip.file('word/document.xml', next);
+  const bytes = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  fs.writeFileSync(file, bytes);
+}
+
+function decodeFixtureXml(value) {
+  return String(value).replace(/&(?:#x([0-9a-f]+)|#([0-9]+)|amp|lt|gt|quot|apos);/giu, (token, hex, dec) => {
+    if (hex) return String.fromCodePoint(Number.parseInt(hex, 16));
+    if (dec) return String.fromCodePoint(Number.parseInt(dec, 10));
+    if (token.toLowerCase() === '&amp;') return '&';
+    if (token.toLowerCase() === '&lt;') return '<';
+
+    if (token.toLowerCase() === '&gt;') return '>';
+    if (token.toLowerCase() === '&quot;') return '"';
+    return "'";
+  });
+}
+
+async function rawDocxXml(file) {
+  const out = await new DocxFileHandler().read(file, { offset: 1, length: 10000 });
+  return out.content;
+}
+
+function visibleParagraphTexts(xml) {
+  const paragraphs = [];
+  const paragraphRe = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/gu;
+  let paragraphMatch;
+  while ((paragraphMatch = paragraphRe.exec(String(xml))) !== null) {
+    const texts = [];
+    const nodeRe = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/gu;
+    let nodeMatch;
+    while ((nodeMatch = nodeRe.exec(paragraphMatch[0])) !== null) {
+      texts.push(decodeFixtureXml(nodeMatch[1]));
+    }
+    paragraphs.push(texts.join(''));
+  }
+  return paragraphs;
+}
+
+test('Issue #137 DOCX visible edit matches a phrase split across two runs', async () => {
+  const f = fixture();
+  const file = path.join(f.primary, 'split-two.docx');
+  await makeDocx(file, 'seed');
+  await rewriteDocxBody(file, fixtureParagraph(['Hello ', 'world']));
+  const owner = new MutationOwner();
+  const service = new DocxMutationService({ workspaceRegistry: f.registry, mutationOwner: owner, desktopCommanderChild: exactChild() });
+  await service.editText({
+    workspaceId: f.workspace.workspaceId,
+    path: 'split-two.docx',
+    find: 'Hello world',
+    replace: 'Goodbye',
+    expectedOccurrences: 1,
+    expectedBaseSha256: hashFile(file),
+  });
+  const raw = await rawDocxXml(file);
+  assert.deepEqual(visibleParagraphTexts(raw), ['Goodbye']);
+  assert.equal((raw.match(/<w:r\b/gu) || []).length, 2);
+  assert.equal(owner.owner, 'none');
+});
+
+test('Issue #137 DOCX visible edit preserves partial boundary text and escapes replacement payload', async () => {
+  const f = fixture();
+  const file = path.join(f.primary, 'split-three.docx');
+  await makeDocx(file, 'seed');
+  await rewriteDocxBody(file, fixtureParagraph(['prefix HEL', 'LO ', 'WORLD suffix']));
+
+  const owner = new MutationOwner();
+  const service = new DocxMutationService({ workspaceRegistry: f.registry, mutationOwner: owner, desktopCommanderChild: exactChild() });
+  const replacement = '<w:tab/> & "quoted" \'single\'';
+  await service.editText({
+    workspaceId: f.workspace.workspaceId,
+    path: 'split-three.docx',
+    find: 'HELLO WORLD',
+    replace: replacement,
+    expectedOccurrences: 1,
+    expectedBaseSha256: hashFile(file),
+  });
+  const raw = await rawDocxXml(file);
+  assert.deepEqual(visibleParagraphTexts(raw), ['prefix ' + replacement + ' suffix']);
+  assert.match(raw, /&lt;w:tab\/&gt; &amp; &quot;quoted&quot; &apos;single&apos;/u);
+  assert.doesNotMatch(raw, /<w:tab\s*\/>/u);
+  assert.equal((raw.match(/<w:r\b/gu) || []).length, 3);
+  const outline = await new DocxFileHandler().read(file, {});
+  assert.ok(outline.content);
+  assert.equal(owner.owner, 'none');
+});
+
+test('Issue #137 DOCX expectedOccurrences counts multiple split-run visible matches exactly', async () => {
+  const f = fixture();
+  const file = path.join(f.primary, 'multiple.docx');
+  await makeDocx(file, 'seed');
+  await rewriteDocxBody(file, fixtureParagraph(['Alpha ', 'Beta']) + fixtureParagraph(['Alpha ', 'Beta']));
+  const owner = new MutationOwner();
+
+  const service = new DocxMutationService({ workspaceRegistry: f.registry, mutationOwner: owner, desktopCommanderChild: exactChild() });
+  const base = hashFile(file);
+  await assert.rejects(() => service.editText({
+    workspaceId: f.workspace.workspaceId,
+    path: 'multiple.docx',
+    find: 'Alpha Beta',
+    replace: 'X',
+    expectedOccurrences: 1,
+    expectedBaseSha256: base,
+  }), /expected 1 visible occurrence\(s\) but found 2/u);
+  assert.equal(hashFile(file), base);
+  assert.equal(owner.owner, 'none');
+  await service.editText({
+    workspaceId: f.workspace.workspaceId,
+    path: 'multiple.docx',
+    find: 'Alpha Beta',
+    replace: 'X',
+    expectedOccurrences: 2,
+    expectedBaseSha256: base,
+  });
+  assert.deepEqual(visibleParagraphTexts(await rawDocxXml(file)), ['X', 'X']);
+  assert.equal(owner.owner, 'none');
+});
+
+test('Issue #137 DOCX visible edit matches split runs inside a table cell', async () => {
+  const f = fixture();
+  const file = path.join(f.primary, 'table.docx');
+
+  await makeDocx(file, 'seed');
+  await rewriteDocxBody(file, fixtureTable([['Cell ', 'phrase']]));
+  const owner = new MutationOwner();
+  const service = new DocxMutationService({ workspaceRegistry: f.registry, mutationOwner: owner, desktopCommanderChild: exactChild() });
+  await service.editText({
+    workspaceId: f.workspace.workspaceId,
+    path: 'table.docx',
+    find: 'Cell phrase',
+    replace: 'Replaced',
+    expectedOccurrences: 1,
+    expectedBaseSha256: hashFile(file),
+  });
+  assert.deepEqual(visibleParagraphTexts(await rawDocxXml(file)), ['Replaced']);
+  const outline = await new DocxFileHandler().read(file, {});
+  assert.ok(outline.content);
+  assert.equal(owner.owner, 'none');
+});
+
+test('Issue #137 DOCX visible edit never matches across paragraph or table-cell boundaries', async () => {
+  const f = fixture();
+  const paragraphFile = path.join(f.primary, 'paragraph-boundary.docx');
+  await makeDocx(paragraphFile, 'seed');
+  await rewriteDocxBody(paragraphFile, fixtureParagraph(['Hello ']) + fixtureParagraph(['world']));
+  const owner = new MutationOwner();
+  const service = new DocxMutationService({ workspaceRegistry: f.registry, mutationOwner: owner, desktopCommanderChild: exactChild() });
+
+  await assert.rejects(() => service.editText({
+    workspaceId: f.workspace.workspaceId,
+    path: 'paragraph-boundary.docx',
+    find: 'Hello world',
+    replace: 'Nope',
+    expectedOccurrences: 1,
+    expectedBaseSha256: hashFile(paragraphFile),
+  }), /found 0/u);
+
+  const cellFile = path.join(f.primary, 'cell-boundary.docx');
+  await makeDocx(cellFile, 'seed');
+  await rewriteDocxBody(cellFile, fixtureTable([['Cell '], ['phrase']]));
+  await assert.rejects(() => service.editText({
+    workspaceId: f.workspace.workspaceId,
+    path: 'cell-boundary.docx',
+    find: 'Cell phrase',
+    replace: 'Nope',
+    expectedOccurrences: 1,
+    expectedBaseSha256: hashFile(cellFile),
+  }), /found 0/u);
   assert.equal(owner.owner, 'none');
 });

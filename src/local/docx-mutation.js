@@ -72,6 +72,34 @@ function decodeXml(value) {
   });
 }
 
+function decodeTextWithRawOffsets(encoded) {
+  const source = String(encoded);
+  const rawOffsets = [0];
+  let text = '';
+  let rawIndex = 0;
+  while (rawIndex < source.length) {
+    const rawStart = rawIndex;
+    let decodedChunk;
+    if (source[rawIndex] === '&') {
+      const entity = source.slice(rawIndex).match(/^&(?:#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/iu);
+      if (entity) {
+        rawIndex += entity[0].length;
+        decodedChunk = decodeXml(entity[0]);
+      }
+    }
+    if (decodedChunk === undefined) {
+      const codePoint = source.codePointAt(rawIndex);
+      decodedChunk = String.fromCodePoint(codePoint);
+      rawIndex += decodedChunk.length;
+    }
+    text += decodedChunk;
+    for (let index = 0; index < decodedChunk.length; index += 1) {
+      rawOffsets.push(index === decodedChunk.length - 1 ? rawIndex : rawStart);
+    }
+  }
+  return { text, rawOffsets };
+}
+
 function textNodes(xml) {
   const nodes = [];
   const re = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/gu;
@@ -89,8 +117,164 @@ function textNodes(xml) {
   return nodes;
 }
 
+function paragraphContainers(xml) {
+  const paragraphs = [];
+  const paragraphRe = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/gu;
+  let paragraphMatch;
+  while ((paragraphMatch = paragraphRe.exec(String(xml))) !== null) {
+    const raw = paragraphMatch[0];
+    const nodes = [];
+    const nodeRe = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/gu;
+    let nodeMatch;
+    let logicalOffset = 0;
+    while ((nodeMatch = nodeRe.exec(raw)) !== null) {
+      const nodeRaw = nodeMatch[0];
+      const close = nodeRaw.indexOf('>');
+      const decoded = decodeTextWithRawOffsets(nodeMatch[1]);
+      nodes.push({
+        raw: nodeRaw,
+        open: nodeRaw.slice(0, close + 1),
+        encoded: nodeMatch[1],
+        text: decoded.text,
+        rawOffsets: decoded.rawOffsets,
+        rawStart: nodeMatch.index,
+        rawEnd: nodeMatch.index + nodeRaw.length,
+        logicalStart: logicalOffset,
+        logicalEnd: logicalOffset + decoded.text.length,
+      });
+      logicalOffset += decoded.text.length;
+    }
+    paragraphs.push({
+      raw,
+      nodes,
+      text: nodes.map((node) => node.text).join(''),
+    });
+  }
+  return paragraphs;
+}
+
 function visibleSequence(xml) {
   return textNodes(xml).map((node) => node.text);
+}
+
+function visibleParagraphSequence(xml) {
+  return paragraphContainers(xml).map((paragraph) => paragraph.text);
+}
+
+function findVisibleOccurrences(paragraphs, find) {
+  const occurrences = [];
+  paragraphs.forEach((paragraph, paragraphIndex) => {
+    let cursor = 0;
+    while (cursor <= paragraph.text.length - find.length) {
+      const start = paragraph.text.indexOf(find, cursor);
+      if (start < 0) break;
+      occurrences.push({
+        paragraphIndex,
+        start,
+        end: start + find.length,
+      });
+      cursor = start + find.length;
+    }
+  });
+  return occurrences;
+}
+
+function replaceVisibleText(text, find, replacement) {
+  let cursor = 0;
+  let output = '';
+  while (cursor <= text.length - find.length) {
+    const start = text.indexOf(find, cursor);
+    if (start < 0) break;
+    output += text.slice(cursor, start) + replacement;
+    cursor = start + find.length;
+  }
+  return output + text.slice(cursor);
+}
+
+function shapeTextOpen(open, text) {
+  if (text && (/^\s/u.test(text) || /\s$/u.test(text)) && !/\bxml:space\s*=/u.test(open)) {
+    return open.replace(/>$/u, ' xml:space="preserve">');
+  }
+  return open;
+}
+
+function transformParagraph(paragraph, occurrences, replacement) {
+  const editsByNode = new Map();
+  for (const occurrence of occurrences) {
+    const covered = paragraph.nodes.filter((node) => (
+      node.logicalEnd > occurrence.start && node.logicalStart < occurrence.end
+    ));
+    if (covered.length === 0) {
+      throw new WorkspaceError('DOCX visible-text match could not be mapped to text nodes');
+    }
+    covered.forEach((node, coveredIndex) => {
+      const nodeIndex = paragraph.nodes.indexOf(node);
+      const localStart = Math.max(occurrence.start, node.logicalStart) - node.logicalStart;
+      const localEnd = Math.min(occurrence.end, node.logicalEnd) - node.logicalStart;
+      const edits = editsByNode.get(nodeIndex) || [];
+      edits.push({
+        rawStart: node.rawOffsets[localStart],
+        rawEnd: node.rawOffsets[localEnd],
+        insert: coveredIndex === 0 ? escapeXml(replacement) : '',
+      });
+      editsByNode.set(nodeIndex, edits);
+    });
+  }
+
+  const nodeReplacements = [];
+  for (const [nodeIndex, edits] of editsByNode.entries()) {
+    const node = paragraph.nodes[nodeIndex];
+    let encoded = node.encoded;
+    edits.sort((left, right) => right.rawStart - left.rawStart || right.rawEnd - left.rawEnd);
+    for (const edit of edits) {
+      encoded = encoded.slice(0, edit.rawStart) + edit.insert + encoded.slice(edit.rawEnd);
+    }
+    const finalText = decodeXml(encoded);
+    const newRaw = finalText === ''
+      ? node.open.replace(/>$/u, '/>')
+      : shapeTextOpen(node.open, finalText) + encoded + '</w:t>';
+    if (newRaw !== node.raw) {
+      nodeReplacements.push({
+        start: node.rawStart,
+        end: node.rawEnd,
+        newRaw,
+      });
+    }
+  }
+
+  let transformed = paragraph.raw;
+  nodeReplacements.sort((left, right) => right.start - left.start);
+  for (const replacementItem of nodeReplacements) {
+    transformed = transformed.slice(0, replacementItem.start)
+      + replacementItem.newRaw
+      + transformed.slice(replacementItem.end);
+  }
+  return transformed;
+}
+
+function buildParagraphEditGroups(paragraphs, occurrences, replacement) {
+  const occurrencesByParagraph = new Map();
+  for (const occurrence of occurrences) {
+    const list = occurrencesByParagraph.get(occurrence.paragraphIndex) || [];
+    list.push(occurrence);
+    occurrencesByParagraph.set(occurrence.paragraphIndex, list);
+  }
+
+  const groups = new Map();
+  for (const [paragraphIndex, paragraphOccurrences] of occurrencesByParagraph.entries()) {
+    const paragraph = paragraphs[paragraphIndex];
+    const newString = transformParagraph(paragraph, paragraphOccurrences, replacement);
+    const existing = groups.get(paragraph.raw);
+    if (existing && existing.newString !== newString) {
+      throw new WorkspaceError('DOCX paragraph replacement is ambiguous');
+    }
+    groups.set(paragraph.raw, {
+      oldString: paragraph.raw,
+      newString,
+      expectedReplacements: (existing?.expectedReplacements || 0) + 1,
+    });
+  }
+  return [...groups.values()];
 }
 
 function validateText(value, label, { empty = false } = {}) {
@@ -157,11 +341,13 @@ export class DocxMutationService {
     if (baseSha256 !== expectedBaseSha256.toLowerCase()) throw new WorkspaceError('stale DOCX base hash');
 
     const beforeXml = await this._xml(workspaceId, target.requested);
-    const beforeNodes = textNodes(beforeXml);
-    const matches = beforeNodes.filter((node) => node.text === find);
-    if (matches.length !== expectedOccurrences) {
-      throw new WorkspaceError('expected ' + expectedOccurrences + ' visible occurrence(s) but found ' + matches.length);
+    const beforeParagraphs = paragraphContainers(beforeXml);
+    const occurrences = findVisibleOccurrences(beforeParagraphs, find);
+    if (occurrences.length !== expectedOccurrences) {
+      throw new WorkspaceError('expected ' + expectedOccurrences + ' visible occurrence(s) but found ' + occurrences.length);
     }
+    const editGroups = buildParagraphEditGroups(beforeParagraphs, occurrences, replace);
+    const expectedParagraphs = beforeParagraphs.map((paragraph) => replaceVisibleText(paragraph.text, find, replace));
 
     const unitId = crypto.randomUUID();
     const tempName = '.docx-' + unitId + '-' + process.pid + '.docx';
@@ -178,32 +364,26 @@ export class DocxMutationService {
       fs.writeFileSync(tempFile, current);
       preserveMode(target.absolute, tempFile);
 
-      const groups = new Map();
-      for (const node of matches) groups.set(node.raw, (groups.get(node.raw) || 0) + 1);
-      for (const [oldString, count] of groups.entries()) {
-        const close = oldString.indexOf('>');
-        const open = oldString.slice(0, close + 1);
-        const newString = open + escapeXml(replace) + '</w:t>';
+      for (const group of editGroups) {
         await this.child.editBlock({
           filePath: tempFile,
-          oldString,
-          newString,
-          expectedReplacements: count,
+          oldString: group.oldString,
+          newString: group.newString,
+          expectedReplacements: group.expectedReplacements,
         });
       }
 
       const tempBytes = fs.readFileSync(tempFile);
       assertDocxBytes(tempBytes);
       const afterXml = await this._xml(workspaceId, tempRel);
-      const expected = beforeNodes.map((node) => node.text === find ? replace : node.text);
-      if (JSON.stringify(visibleSequence(afterXml)) !== JSON.stringify(expected)) {
+      if (JSON.stringify(visibleParagraphSequence(afterXml)) !== JSON.stringify(expectedParagraphs)) {
         throw new WorkspaceError('DOCX visible-text readback did not match requested replacement');
       }
 
       fs.renameSync(tempFile, target.absolute);
       renamed = true;
       const finalXml = await this._xml(workspaceId, target.requested);
-      if (JSON.stringify(visibleSequence(finalXml)) !== JSON.stringify(expected)) {
+      if (JSON.stringify(visibleParagraphSequence(finalXml)) !== JSON.stringify(expectedParagraphs)) {
         throw new WorkspaceError('DOCX post-replace readback did not match requested replacement');
       }
       const resultSha256 = sha256(fs.readFileSync(target.absolute));
@@ -243,7 +423,6 @@ export class DocxMutationService {
     if (target.exists) throw new WorkspaceError('DOCX create target already exists');
     const parent = path.dirname(target.absolute);
     if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) throw new WorkspaceError('DOCX create parent directory does not exist');
-
     const expectedTexts = text.split('\n').map((line) => {
       const heading = line.match(/^(#{1,6})\s+(.+)/u);
       return heading ? heading[2] : line;
