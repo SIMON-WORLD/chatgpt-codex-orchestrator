@@ -37,6 +37,7 @@ const DIRECT_LOCAL_DESTRUCTIVE_ANNOTATIONS = { readOnlyHint: false, destructiveH
 const DIRECT_LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
 const DIRECT_LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const GOVERNANCE_PLAN_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
+const GOVERNANCE_TASK_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 const GOVERNANCE_TRANSITION_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 function text(result) { return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }; }
@@ -514,6 +515,24 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       }).strict(),
     }, async (args) => {
       try { return text(invokeGovernanceTransition({ ...args, control: 'PLAN' })); }
+      catch (e) { return errText(e.message); }
+    });
+
+
+    server.registerTool('governance_task', {
+      description: "Advance only a Parent-authorized Governance TASK through the existing transition implementation. Any prior current step must already be hard-ready (executorStatus=success and machineGate=pass); advancing marks that prior step brainAcceptance='accepted', mutates durable Governance control/task-step state, creates/selects the new pending execution step, updates route/localRoute when supplied, appends durable control history, and fences any prior bounded execution claim. This action does not directly mutate workspace file contents, publish, terminate, replan, or invalidate acceptance/proofs. Requires current Parent authority for the established task; bounded execution claims never authorize this tool.",
+      annotations: GOVERNANCE_TASK_ANNOTATIONS,
+      inputSchema: z.object({
+        taskId: z.string(),
+        stepId: z.string(),
+        authorityToken: z.string(),
+        workspaceId: workspaceIdSchema.optional(),
+        route: z.enum(['CHATGPT_NATIVE', 'CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE', 'HYBRID']).optional(),
+        localRoute: z.enum(['CHATGPT_DIRECT_LOCAL', 'CODEX_DELEGATE']).optional(),
+        acceptance: z.array(z.object({ id: z.string(), required: z.boolean().optional(), requiredEvidenceLevel: z.string().optional() })).optional(),
+      }).strict(),
+    }, async (args) => {
+      try { return text(invokeGovernanceTransition({ ...args, control: 'TASK' })); }
       catch (e) { return errText(e.message); }
     });
 
