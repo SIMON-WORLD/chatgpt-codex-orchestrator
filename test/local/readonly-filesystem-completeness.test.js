@@ -163,6 +163,36 @@ test('filename search succeeds in primary/exact grant and fails closed on siblin
   await assert.rejects(() => filenameSearchWithDesktopCommander({ workspaceId: granted.workspaceId, query: 'x', path: secondary, secondaryReadGrants: registry.getSecondaryReadGrants(granted.workspaceId) }, registry, fileSearchChild([path.join(sibling, 'blocked.txt')])), /escaped authorized scope/);
 });
 
+test('filename search polls empty in-progress pages before returning later results', async () => {
+  const { primary, registry, plain } = setup();
+  const primaryHit = path.join(primary, 'dir', 'alpha.txt');
+  const events = [];
+  let getMoreCalls = 0;
+  const child = {
+    startSearch: async () => {
+      events.push('start');
+      return 'Started file search session: f1\nStatus: RUNNING\nTotal results: 0';
+    },
+    getMoreSearchResults: async ({ sessionId, offset }) => {
+      events.push(`getMore:${sessionId}:${offset}`);
+      getMoreCalls += 1;
+      if (getMoreCalls === 1) return 'Search session: f1\nStatus: IN PROGRESS\nTotal results: 0';
+      return `Search session: f1\nStatus: COMPLETED\nTotal results found: 1\nResults:\n📁 ${primaryHit}\n✅ Search completed.`;
+    },
+    stopSearch: async ({ sessionId }) => {
+      events.push(`stop:${sessionId}`);
+      return 'stopped';
+    },
+  };
+  const startedAt = Date.now();
+  const result = await filenameSearchWithDesktopCommander({ workspaceId: plain.workspaceId, query: 'alpha', path: 'dir' }, registry, child);
+  const elapsed = Date.now() - startedAt;
+  assert.deepEqual(result.matches, ['dir/alpha.txt']);
+  assert.equal(getMoreCalls, 2);
+  assert.deepEqual(events, ['start', 'getMore:f1:0', 'getMore:f1:0', 'stop:f1']);
+  assert.ok(elapsed >= 45 && elapsed < 2000, `expected bounded polling delay, got ${elapsed}ms`);
+});
+
 test('real pinned 0.2.51 child executes new read-only filesystem primitives', async () => {
   const { secondary, registry, granted } = setup();
   const child = new DesktopCommanderChild();

@@ -10,6 +10,7 @@ const DEFAULT_LIST_RESULTS = 200;
 const HARD_LIST_RESULTS = 1000;
 const DEFAULT_FILENAME_RESULTS = 100;
 const HARD_FILENAME_RESULTS = 1000;
+const FILENAME_SEARCH_POLL_DELAY_MS = 50;
 
 function isWithin(root, target) {
   const r = path.resolve(root);
@@ -205,6 +206,9 @@ export async function filenameSearchWithDesktopCommander({ workspaceId, query, p
       }
       offset += page.results.length;
       if (page.complete && requestedPage && !page.hasMore) break;
+      if (!page.complete && page.results.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, FILENAME_SEARCH_POLL_DELAY_MS));
+      }
       page = parseFilenameSearchPage(await child.getMoreSearchResults({ sessionId: start.sessionId, offset, length: HARD_FILENAME_RESULTS }));
       requestedPage = true;
     }

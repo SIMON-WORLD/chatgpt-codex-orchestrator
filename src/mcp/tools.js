@@ -13,6 +13,10 @@ import { gitStatus, gitDiff } from '../local/git.js';
 import { DesktopCommanderChild, COMPOSITE_EDIT_BOUNDARY_BLOCKED } from '../local/desktop-commander-child.js';
 import { WorkspaceError } from '../local/workspace.js';
 import { ChangeSetService } from '../local/change-set.js';
+import { FilesystemMutationService } from '../local/filesystem-mutation.js';
+import { ExcelMutationService } from '../local/excel-mutation.js';
+import { DocxMutationService } from '../local/docx-mutation.js';
+import { PdfMutationService } from '../local/pdf-mutation.js';
 import { OperationState } from '../state/operation-state.js';
 import { VerifyService } from '../local/verify.js';
 import { createCapabilityRouter } from '../router/capability-router.js';
@@ -45,6 +49,26 @@ function structured(result) {
 function errText(message) { return { content: [{ type: 'text', text: 'error: ' + message }], isError: true }; }
 
 const workspaceIdSchema = z.string().min(1);
+const mutationPathSchema = z.string().min(1).max(4096);
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/iu);
+const directLocalMutationAuthFields = {
+  taskId: z.string().optional(),
+  authorityToken: z.string().optional(),
+  executionToken: z.string().optional(),
+};
+const excelCellSchema = z.union([z.string().max(1024 * 1024), z.number().finite(), z.boolean(), z.null()]);
+const excelValuesSchema = z.array(z.array(excelCellSchema).min(1).max(50000)).min(1).max(2000);
+const pdfOperationsSchema = z.array(z.union([
+  z.object({
+    type: z.literal('delete_pages'),
+    pages: z.array(z.number().int().min(1).max(32)).min(1).max(32),
+  }).strict(),
+  z.object({
+    type: z.literal('insert_pdf'),
+    atPage: z.number().int().min(1).max(33),
+    sourcePath: mutationPathSchema,
+  }).strict(),
+])).min(1).max(16);
 
 function rootsEqual(a, b) {
   if (!a || !b) return false;
@@ -92,7 +116,7 @@ function requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspa
   return res.taskId;
 }
 
-export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, verifyService = null, operationState = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, desktopCommanderChild = null } = {}) {
+export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, filesystemMutationService = null, excelMutationService = null, docxMutationService = null, pdfMutationService = null, verifyService = null, operationState = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, desktopCommanderChild = null } = {}) {
   const child = desktopCommanderChild || new DesktopCommanderChild();
   // Shared mutation-ownership authority: when a Codex executor is present, Direct
   // Local mutation MUST use the SAME owner instance.
@@ -110,6 +134,14 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   // happens to be present.
   const hasVerifyChecks = Object.keys(verifyChecks || {}).length > 0;
   const changeSet = changeSetService || (operationState && owner ? new ChangeSetService({ workspaceRegistry, operationState, mutationOwner: owner }) : null);
+  if (filesystemMutationService && (!owner || filesystemMutationService.owner !== owner)) throw new Error('filesystemMutationService.mutationOwner must be shared; refusing unsafe concurrency');
+  if (excelMutationService && (!owner || excelMutationService.owner !== owner)) throw new Error('excelMutationService.mutationOwner must be shared; refusing unsafe concurrency');
+  if (docxMutationService && (!owner || docxMutationService.owner !== owner)) throw new Error('docxMutationService.mutationOwner must be shared; refusing unsafe concurrency');
+  if (pdfMutationService && (!owner || pdfMutationService.owner !== owner)) throw new Error('pdfMutationService.mutationOwner must be shared; refusing unsafe concurrency');
+  const filesystemMutation = filesystemMutationService || (owner ? new FilesystemMutationService({ workspaceRegistry, mutationOwner: owner, desktopCommanderChild: child }) : null);
+  const excelMutation = excelMutationService || (owner ? new ExcelMutationService({ workspaceRegistry, mutationOwner: owner, desktopCommanderChild: child }) : null);
+  const docxMutation = docxMutationService || (owner ? new DocxMutationService({ workspaceRegistry, mutationOwner: owner, desktopCommanderChild: child }) : null);
+  const pdfMutation = pdfMutationService || (owner ? new PdfMutationService({ workspaceRegistry, mutationOwner: owner, desktopCommanderChild: child }) : null);
   const verify = verifyService || (owner && hasVerifyChecks ? new VerifyService({ workspaceRegistry, mutationOwner: owner, verifyChecks }) : null);
 
   const server = new McpServer({ name: 'chatgpt-codex-orchestrator', version: '0.2.0-dev' });
@@ -302,6 +334,122 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         if (mode === 'preview') return text(await changeSet.preview({ workspaceId, change }));
         if (mode === 'apply') { requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken }); return text(await changeSet.apply({ workspaceId, changeSetId })); }
         return errText('unsupported edit mode');
+      } catch (e) { return errText(e.message); }
+    });
+  }
+
+  // ---- Direct Local typed filesystem mutation (Issue #137) ---------------
+  // Only these narrow parent-owned operations may reach the child mutation
+  // wrappers. The public generic child callTool seam remains unavailable.
+  if (filesystemMutation) {
+    server.registerTool('filesystem_create_directory', {
+      description: 'Create one bounded directory inside the primary workspace through the exact pinned DesktopCommander child. Parent owns containment, symlink/junction checks, collision checks, MutationOwner, and deterministic post-readback. Secondary writes and traversal are rejected.',
+      annotations: M,
+      inputSchema: z.object({
+        workspaceId: workspaceIdSchema,
+        path: z.string().min(1).max(4096),
+        taskId: z.string().optional(),
+        authorityToken: z.string().optional(),
+        executionToken: z.string().optional(),
+      }).strict(),
+    }, async ({ workspaceId, path: directoryPath, taskId, authorityToken, executionToken }) => {
+      try {
+        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
+        return text(await filesystemMutation.createDirectory({ workspaceId, path: directoryPath }));
+      } catch (e) { return errText(e.message); }
+    });
+
+    server.registerTool('filesystem_move', {
+      description: 'Move one bounded primary-workspace file or directory through the exact pinned DesktopCommander child. Parent owns source/destination containment, symlink/junction checks, collision/type checks, MutationOwner, and deterministic post-readback. Cross-root, traversal, secondary, and delete-like destinations are rejected.',
+      annotations: M,
+      inputSchema: z.object({
+        workspaceId: workspaceIdSchema,
+        source: z.string().min(1).max(4096),
+        destination: z.string().min(1).max(4096),
+        taskId: z.string().optional(),
+        authorityToken: z.string().optional(),
+        executionToken: z.string().optional(),
+      }).strict(),
+    }, async ({ workspaceId, source, destination, taskId, authorityToken, executionToken }) => {
+      try {
+        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
+        return text(await filesystemMutation.movePath({ workspaceId, source, destination }));
+      } catch (e) { return errText(e.message); }
+    });
+  }
+
+  if (excelMutation) {
+    server.registerTool('excel_write_range', {
+      description: 'Write a bounded primary-workspace .xlsx/.xlsm cell range through the exact pinned DesktopCommander child or the bounded .xlsm fidelity path. Leading-equals strings remain literal values; formula creation, legacy .xls, secondary writes, and arbitrary child arguments are unsupported. Requires a matching base hash and Direct Local mutation authorization.',
+      annotations: M,
+      inputSchema: z.object({
+        workspaceId: workspaceIdSchema,
+        path: mutationPathSchema,
+        range: z.string().min(3).max(256),
+        values: excelValuesSchema,
+        expectedBaseSha256: sha256Schema,
+        ...directLocalMutationAuthFields,
+      }).strict(),
+    }, async ({ workspaceId, path: filePath, range, values, expectedBaseSha256, taskId, authorityToken, executionToken }) => {
+      try {
+        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
+        return text(await excelMutation.mutateRange({ workspaceId, path: filePath, range, values, expectedBaseSha256 }));
+      } catch (e) { return errText(e.message); }
+    });
+  }
+
+  if (docxMutation) {
+    server.registerTool('docx_edit_text', {
+      description: 'Replace an exact bounded number of visible text occurrences in a primary-workspace .docx through the exact pinned DesktopCommander child and atomic parent-owned temporary package. Raw XML mutation, secondary writes, and arbitrary child arguments are unsupported. Requires a matching base hash and Direct Local mutation authorization.',
+      annotations: M,
+      inputSchema: z.object({
+        workspaceId: workspaceIdSchema,
+        path: mutationPathSchema,
+        find: z.string().min(1).max(64 * 1024),
+        replace: z.string().max(64 * 1024),
+        expectedOccurrences: z.number().int().min(1).max(100),
+        expectedBaseSha256: sha256Schema,
+        ...directLocalMutationAuthFields,
+      }).strict(),
+    }, async ({ workspaceId, path: filePath, find, replace, expectedOccurrences, expectedBaseSha256, taskId, authorityToken, executionToken }) => {
+      try {
+        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
+        return text(await docxMutation.editText({ workspaceId, path: filePath, find, replace, expectedOccurrences, expectedBaseSha256 }));
+      } catch (e) { return errText(e.message); }
+    });
+
+    server.registerTool('docx_create_text', {
+      description: 'Create one bounded text-based .docx in the primary workspace through the exact pinned DesktopCommander child and atomic parent-owned temporary package. PDF/browser creation, raw XML mutation, secondary writes, and arbitrary child arguments are unsupported. Requires Direct Local mutation authorization.',
+      annotations: M,
+      inputSchema: z.object({
+        workspaceId: workspaceIdSchema,
+        path: mutationPathSchema,
+        text: z.string().max(1024 * 1024),
+        ...directLocalMutationAuthFields,
+      }).strict(),
+    }, async ({ workspaceId, path: filePath, text: content, taskId, authorityToken, executionToken }) => {
+      try {
+        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
+        return text(await docxMutation.createText({ workspaceId, path: filePath, text: content }));
+      } catch (e) { return errText(e.message); }
+    });
+  }
+
+  if (pdfMutation) {
+    server.registerTool('pdf_mutate_pages', {
+      description: 'Delete pages or insert an existing PDF into a primary-workspace .pdf using bounded 1-based operations through the exact pinned DesktopCommander child and atomic parent-owned temporary output. Insert sources may use the workspace handle’s explicit secondary read grants; destinations are always primary-only. Markdown/browser creation, cheap metadata, SVG, and arbitrary child arguments are unsupported.',
+      annotations: M,
+      inputSchema: z.object({
+        workspaceId: workspaceIdSchema,
+        path: mutationPathSchema,
+        operations: pdfOperationsSchema,
+        expectedBaseSha256: sha256Schema,
+        ...directLocalMutationAuthFields,
+      }).strict(),
+    }, async ({ workspaceId, path: filePath, operations, expectedBaseSha256, taskId, authorityToken, executionToken }) => {
+      try {
+        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
+        return text(await pdfMutation.mutatePages({ workspaceId, path: filePath, operations, expectedBaseSha256 }));
       } catch (e) { return errText(e.message); }
     });
   }
