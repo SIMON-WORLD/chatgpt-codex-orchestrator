@@ -33,6 +33,9 @@ import {
 
 const R = { readOnlyHint: true };
 const M = { readOnlyHint: false, destructiveHint: true };
+const DIRECT_LOCAL_DESTRUCTIVE_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
+const DIRECT_LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
+const DIRECT_LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const GOVERNANCE_PLAN_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
 const GOVERNANCE_TRANSITION_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
@@ -319,7 +322,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   if (changeSet) {
     server.registerTool('edit', {
       description: 'Two-phase bounded Direct Local edit (preview or apply). One target file, base-hash stale-write protection, atomic apply. Durable apply accepts current Parent authority or a current-step bounded execution claim.',
-      annotations: M,
+      annotations: DIRECT_LOCAL_DESTRUCTIVE_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         mode: z.enum(['preview', 'apply']),
@@ -343,8 +346,8 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   // wrappers. The public generic child callTool seam remains unavailable.
   if (filesystemMutation) {
     server.registerTool('filesystem_create_directory', {
-      description: 'Create one bounded directory inside the primary workspace through the exact pinned DesktopCommander child. Parent owns containment, symlink/junction checks, collision checks, MutationOwner, and deterministic post-readback. Secondary writes and traversal are rejected.',
-      annotations: M,
+      description: 'Create one bounded directory inside the primary workspace through the exact pinned DesktopCommander child. The destination must not already exist; no existing entry is overwritten. Parent owns containment, symlink/junction checks, collision checks, MutationOwner, and deterministic post-readback. Secondary writes and traversal are rejected.',
+      annotations: DIRECT_LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         path: z.string().min(1).max(4096),
@@ -361,7 +364,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
 
     server.registerTool('filesystem_move', {
       description: 'Move one bounded primary-workspace file or directory through the exact pinned DesktopCommander child. Parent owns source/destination containment, symlink/junction checks, collision/type checks, MutationOwner, and deterministic post-readback. Cross-root, traversal, secondary, and delete-like destinations are rejected.',
-      annotations: M,
+      annotations: DIRECT_LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         source: z.string().min(1).max(4096),
@@ -381,7 +384,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   if (excelMutation) {
     server.registerTool('excel_write_range', {
       description: 'Write a bounded primary-workspace .xlsx/.xlsm cell range through the exact pinned DesktopCommander child or the bounded .xlsm fidelity path. Leading-equals strings remain literal values; formula creation, legacy .xls, secondary writes, and arbitrary child arguments are unsupported. Requires a matching base hash and Direct Local mutation authorization.',
-      annotations: M,
+      annotations: DIRECT_LOCAL_DESTRUCTIVE_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         path: mutationPathSchema,
@@ -401,7 +404,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   if (docxMutation) {
     server.registerTool('docx_edit_text', {
       description: 'Replace an exact bounded number of visible text occurrences in a primary-workspace .docx through the exact pinned DesktopCommander child and atomic parent-owned temporary package. Raw XML mutation, secondary writes, and arbitrary child arguments are unsupported. Requires a matching base hash and Direct Local mutation authorization.',
-      annotations: M,
+      annotations: DIRECT_LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         path: mutationPathSchema,
@@ -419,8 +422,8 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     });
 
     server.registerTool('docx_create_text', {
-      description: 'Create one bounded text-based .docx in the primary workspace through the exact pinned DesktopCommander child and atomic parent-owned temporary package. PDF/browser creation, raw XML mutation, secondary writes, and arbitrary child arguments are unsupported. Requires Direct Local mutation authorization.',
-      annotations: M,
+      description: 'Create one bounded text-based .docx in the primary workspace through the exact pinned DesktopCommander child and atomic parent-owned temporary package. The destination must not already exist; no existing document is overwritten. PDF/browser creation, raw XML mutation, secondary writes, and arbitrary child arguments are unsupported. Requires Direct Local mutation authorization.',
+      annotations: DIRECT_LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         path: mutationPathSchema,
@@ -438,7 +441,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   if (pdfMutation) {
     server.registerTool('pdf_mutate_pages', {
       description: 'Delete pages or insert an existing PDF into a primary-workspace .pdf using bounded 1-based operations through the exact pinned DesktopCommander child and atomic parent-owned temporary output. Insert sources may use the workspace handle’s explicit secondary read grants; destinations are always primary-only. Markdown/browser creation, cheap metadata, SVG, and arbitrary child arguments are unsupported.',
-      annotations: M,
+      annotations: DIRECT_LOCAL_DESTRUCTIVE_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         path: mutationPathSchema,
