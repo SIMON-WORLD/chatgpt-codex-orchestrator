@@ -259,3 +259,168 @@ test('Issue #156 typed reads return exact whole-file hashes while image/search r
     await child.close();
   }
 });
+
+
+test('Issue #156 provider dispatch uses private extension-preserving snapshots and cleans them on success', async () => {
+  const fixture = await makeFixture();
+  const workspaceId = fixture.workspace.workspaceId;
+  const seen = [];
+  const fakeChild = {
+    async getFileInfo({ path: filePath }) {
+      seen.push(filePath);
+      assert.equal(fs.existsSync(filePath), true);
+      return { content: [{ type: 'text', text: '[0] { name: Data, rowCount: 3, colCount: 2 }' }] };
+    },
+    async readFileStructured({ path: filePath, offset = 0 }) {
+      seen.push(filePath);
+      assert.equal(fs.existsSync(filePath), true);
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext === '.pdf') return { content: [{ type: 'text', text: '<!-- Page: 1 -->\nSnapshot PDF' }] };
+      if (ext === '.docx') {
+        if (offset > 0) return { content: [{ type: 'text', text: '[DOCX XML: snapshot]\n<w:document xmlns:w="x"><w:body/></w:document>' }] };
+        return { content: [{ type: 'text', text: 'DOCX Outline: 1 body children, 1 paragraphs, 0 tables, 0 images\nSnapshot DOCX' }] };
+      }
+      return { content: [{ type: 'text', text: '[[\"snapshot\"]]' }] };
+    },
+  };
+
+  const excel = await readExcelWithDesktopCommander({
+    workspaceId,
+    path: 'book.xlsx',
+    mode: 'metadata',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, fakeChild);
+  const pdf = await readPdfWithDesktopCommander({
+    workspaceId,
+    path: 'document.pdf',
+    pageCount: 1,
+    includeImages: false,
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, fakeChild);
+  const docx = await readDocxWithDesktopCommander({
+    workspaceId,
+    path: 'document.docx',
+    mode: 'outline',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, fakeChild);
+
+  assert.deepEqual(seen.map((filePath) => path.extname(filePath).toLowerCase()), ['.xlsx', '.pdf', '.docx']);
+  const publicResults = JSON.stringify([excel, pdf, docx]);
+  for (const snapshotPath of seen) {
+    assert.notEqual(snapshotPath, path.join(fixture.primary, 'book.xlsx'));
+    assert.equal(snapshotPath.startsWith(fixture.primary), false);
+    assert.equal(snapshotPath.startsWith(fixture.external), false);
+    assert.equal(fs.existsSync(snapshotPath), false);
+    assert.equal(fs.existsSync(path.dirname(snapshotPath)), false);
+    assert.equal(publicResults.includes(snapshotPath), false);
+    assert.equal(publicResults.includes(snapshotPath.replace(/\\/g, '/')), false);
+  }
+});
+
+test('Issue #156 persistent source change fails the whole read and cleans scratch state', async () => {
+  const fixture = await makeFixture();
+  const source = path.join(fixture.primary, 'book.xlsx');
+  let snapshotPath;
+  const fakeChild = {
+    async getFileInfo({ path: filePath }) {
+      snapshotPath = filePath;
+      fs.appendFileSync(source, Buffer.from('changed'));
+      return { content: [{ type: 'text', text: '[0] { name: Data, rowCount: 3, colCount: 2 }' }] };
+    },
+  };
+  await assert.rejects(() => readExcelWithDesktopCommander({
+    workspaceId: fixture.workspace.workspaceId,
+    path: 'book.xlsx',
+    mode: 'metadata',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, fakeChild), /source changed during structured read/iu);
+  assert.ok(snapshotPath);
+  assert.equal(fs.existsSync(path.dirname(snapshotPath)), false);
+});
+
+test('Issue #156 source ABA remains content-bound to snapshot A and may return hash A', async () => {
+  const fixture = await makeFixture();
+  const source = path.join(fixture.primary, 'book.xlsx');
+  const original = fs.readFileSync(source);
+  const expectedHash = sha256Bytes(original);
+  let snapshotPath;
+  const fakeChild = {
+    async getFileInfo({ path: filePath }) {
+      snapshotPath = filePath;
+      assert.equal(hashFile(filePath), expectedHash);
+      fs.writeFileSync(source, Buffer.concat([original, Buffer.from('temporary-B')]));
+      fs.writeFileSync(source, original);
+      return { content: [{ type: 'text', text: '[0] { name: SnapshotA, rowCount: 3, colCount: 2 }' }] };
+    },
+  };
+  const result = await readExcelWithDesktopCommander({
+    workspaceId: fixture.workspace.workspaceId,
+    path: 'book.xlsx',
+    mode: 'metadata',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, fakeChild);
+  assert.equal(result.structuredContent.baseSha256, expectedHash);
+  assert.equal(result.structuredContent.sheets[0].name, 'SnapshotA');
+  assert.ok(snapshotPath);
+  assert.equal(fs.existsSync(path.dirname(snapshotPath)), false);
+});
+
+test('Issue #156 snapshot modification fails closed and scratch is cleaned', async () => {
+  const fixture = await makeFixture();
+  let snapshotPath;
+  const fakeChild = {
+    async getFileInfo({ path: filePath }) {
+      snapshotPath = filePath;
+      fs.appendFileSync(filePath, Buffer.from('mutated'));
+      return { content: [{ type: 'text', text: '[0] { name: Data, rowCount: 3, colCount: 2 }' }] };
+    },
+  };
+  await assert.rejects(() => readExcelWithDesktopCommander({
+    workspaceId: fixture.workspace.workspaceId,
+    path: 'book.xlsx',
+    mode: 'metadata',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, fakeChild), /snapshot changed during structured read/iu);
+  assert.ok(snapshotPath);
+  assert.equal(fs.existsSync(path.dirname(snapshotPath)), false);
+});
+
+test('Issue #156 provider failure and timeout both clean private scratch state', async () => {
+  const fixture = await makeFixture();
+  let failedPath;
+  const failingChild = {
+    async getFileInfo({ path: filePath }) {
+      failedPath = filePath;
+      throw new Error('provider failed');
+    },
+  };
+  await assert.rejects(() => readExcelWithDesktopCommander({
+    workspaceId: fixture.workspace.workspaceId,
+    path: 'book.xlsx',
+    mode: 'metadata',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, failingChild), /child read failed/iu);
+  assert.ok(failedPath);
+  assert.equal(fs.existsSync(path.dirname(failedPath)), false);
+
+  let timeoutPath;
+  let recovered = 0;
+  const timeoutChild = {
+    readFileStructured: async ({ path: filePath }) => {
+      timeoutPath = filePath;
+      return new Promise(() => {});
+    },
+    recoverAfterTimeout: async () => { recovered += 1; },
+  };
+  await assert.rejects(() => readPdfWithDesktopCommander({
+    workspaceId: fixture.workspace.workspaceId,
+    path: 'document.pdf',
+    pageCount: 1,
+    includeImages: false,
+    timeoutMs: 30,
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, timeoutChild), /timeout/iu);
+  assert.equal(recovered, 1);
+  assert.ok(timeoutPath);
+  assert.equal(fs.existsSync(path.dirname(timeoutPath)), false);
+});
