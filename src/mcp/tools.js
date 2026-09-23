@@ -38,6 +38,7 @@ const DIRECT_LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, d
 const DIRECT_LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const GOVERNANCE_PLAN_ANNOTATIONS = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
 const GOVERNANCE_TASK_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
+const GOVERNANCE_TAKEOVER_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 const GOVERNANCE_TRANSITION_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 function text(result) { return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }; }
@@ -628,15 +629,15 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     }
 
     server.registerTool('governance_takeover', {
-      description: 'Bounded Parent re-entry/takeover for one uniquely resolved governance task: increments durable Parent authority generation, mints a new opaque Parent fencing token, and returns a bounded Context Capsule. Reconciles any still-valid delegated Codex execution through the existing recover path only. Bounded execution claim tokens never authorize takeover.',
-      annotations: M,
+      description: 'Parent continuity re-entry for exactly one uniquely resolved durable Governance task. Resolution requires at least one semantic selector among taskId/projectKey/identity. A successful takeover increments/rotates the durable Parent authority generation, mints a new opaque Parent token, fences prior Parent authority, and fences any prior bounded Direct Local execution claim. authorityToken is optional; when supplied it is a current/stale-authority guard, not a required Human handoff credential. workspaceId is optional and is a canonical workspace validation/binding selector that supports the existing bounded Codex recovery path. Returns the bounded Context Capsule and execution summary. Codex reconciliation, when applicable, uses only the existing recover path; reconciliation may report failure/recovery-required after authority rotation is already committed, and that authority rotation is not rolled back. Bounded execution claims never authorize takeover.',
+      annotations: GOVERNANCE_TAKEOVER_ANNOTATIONS,
       inputSchema: z.object({
         taskId: z.string().optional(),
         projectKey: z.string().optional(),
         identity: z.string().optional(),
         authorityToken: z.string().optional(),
         workspaceId: workspaceIdSchema.optional(),
-      }),
+      }).strict(),
     }, async ({ taskId, projectKey, identity, authorityToken, workspaceId }) => {
       try {
         let root = null;
