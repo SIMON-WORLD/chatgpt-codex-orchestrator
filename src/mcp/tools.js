@@ -210,7 +210,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   });
 
   server.registerTool('read_excel', {
-    description: 'Read authorized .xlsx/.xlsm workbook metadata or bounded sheet/range values through the exact pinned child and its non-streaming ExcelJS path. Parent owns ZIP, authority, row/cell/input/result budgets. Legacy .xls and all writes/formula creation are blocked.',
+    description: 'Read authorized .xlsx/.xlsm workbook metadata or bounded sheet/range values through a private parent-owned stable snapshot and the exact pinned child ExcelJS path. Successful results include the whole-file baseSha256 for expectedBaseSha256 composition. Parent owns ZIP, authority, row/cell/input/result budgets. Legacy .xls and all writes/formula creation are blocked.',
     annotations: R,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
@@ -254,7 +254,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   });
 
   server.registerTool('read_pdf', {
-    description: 'Read bounded pages and text from one authorized local PDF through the exact pinned child PDF path, preserving typed bounded embedded image blocks. Parent owns page/text/image/input/output budgets, timeout/recovery, authority, and local-only dispatch. No metadata-only shortcut, creation, or mutation.',
+    description: 'Read bounded pages and text from one authorized local PDF through a private parent-owned stable snapshot and the exact pinned child PDF path, preserving typed bounded embedded image blocks. Successful results include the whole-file baseSha256 for expectedBaseSha256 composition. Parent owns page/text/image/input/output budgets, timeout/recovery, authority, and local-only dispatch. No metadata-only shortcut, creation, or mutation.',
     annotations: R,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
@@ -279,7 +279,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   });
 
   server.registerTool('read_docx', {
-    description: 'Read an authorized .docx outline, bounded raw XML page, or safe bounded info through the exact pinned child DOCX path. Parent owns authority, ZIP/decompressed/XML/output/timeout budgets and recovery. No arbitrary XML edit, text edit, or create surface.',
+    description: 'Read an authorized .docx outline, bounded raw XML page, or safe bounded info through a private parent-owned stable snapshot and the exact pinned child DOCX path. Successful results include the whole-file baseSha256 for expectedBaseSha256 composition. Parent owns authority, ZIP/decompressed/XML/output/timeout budgets and recovery. No arbitrary XML edit, text edit, or create surface.',
     annotations: R,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
