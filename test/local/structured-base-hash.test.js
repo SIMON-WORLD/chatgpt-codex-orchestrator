@@ -491,3 +491,197 @@ test('Issue #156 public MCP exposes baseSha256 only on the three mutation-releva
     assert.equal(publicPayload.includes(snapshotPath.replace(/\\/g, '/')), false);
   }
 });
+
+
+test('Issue #156 returned baseSha256 composes with unchanged Excel/PDF/DOCX mutation stale guards', async () => {
+  const fixture = await makeFixture();
+  const workspaceId = fixture.workspace.workspaceId;
+  const child = providerChild();
+
+  const excelRead = await readExcelWithDesktopCommander({
+    workspaceId,
+    path: 'book.xlsx',
+    mode: 'values',
+    sheet: 'Data',
+    range: 'A1:B3',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, child);
+  const excelService = new ExcelMutationService({
+    workspaceRegistry: fixture.registry,
+    mutationOwner: new MutationOwner(),
+    desktopCommanderChild: child,
+  });
+  const excelApplied = await excelService.mutateRange({
+    workspaceId,
+    path: 'book.xlsx',
+    range: 'Data!A2:B2',
+    values: [['changed', 9]],
+    expectedBaseSha256: excelRead.structuredContent.baseSha256,
+  });
+  assert.equal(excelApplied.status, 'applied');
+
+  const pdfRead = await readPdfWithDesktopCommander({
+    workspaceId,
+    path: 'document.pdf',
+    pageCount: 2,
+    includeImages: false,
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, child);
+  const pdfService = new PdfMutationService({
+    workspaceRegistry: fixture.registry,
+    mutationOwner: new MutationOwner(),
+    desktopCommanderChild: child,
+  });
+  const pdfApplied = await pdfService.mutatePages({
+    workspaceId,
+    path: 'document.pdf',
+    operations: [{ type: 'delete_pages', pages: [2] }],
+    expectedBaseSha256: pdfRead.structuredContent.baseSha256,
+  });
+  assert.equal(pdfApplied.status, 'applied');
+
+  const docxRead = await readDocxWithDesktopCommander({
+    workspaceId,
+    path: 'document.docx',
+    mode: 'outline',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, child);
+  const docxService = new DocxMutationService({
+    workspaceRegistry: fixture.registry,
+    mutationOwner: new MutationOwner(),
+    desktopCommanderChild: child,
+  });
+  const docxApplied = await docxService.editText({
+    workspaceId,
+    path: 'document.docx',
+    find: 'Hello DOCX',
+    replace: 'Changed DOCX',
+    expectedOccurrences: 1,
+    expectedBaseSha256: docxRead.structuredContent.baseSha256,
+  });
+  assert.equal(docxApplied.status, 'applied');
+
+  const staleExcel = path.join(fixture.primary, 'stale.xlsx');
+  fs.copyFileSync(path.join(fixture.primary, 'book.xlsx'), staleExcel);
+  const staleExcelRead = await readExcelWithDesktopCommander({
+    workspaceId,
+    path: 'stale.xlsx',
+    mode: 'values',
+    sheet: 'Data',
+    range: 'A1:B2',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, child);
+  await new ExcelFileHandler().editRange(staleExcel, 'Data!A1:A1', [['external change']]);
+  await assert.rejects(() => excelService.mutateRange({
+    workspaceId,
+    path: 'stale.xlsx',
+    range: 'Data!A2:A2',
+    values: [['should reject']],
+    expectedBaseSha256: staleExcelRead.structuredContent.baseSha256,
+  }), /stale Excel base hash/iu);
+
+  const stalePdf = path.join(fixture.primary, 'stale.pdf');
+  await makePdf(stalePdf, ['A', 'B']);
+  const stalePdfRead = await readPdfWithDesktopCommander({
+    workspaceId,
+    path: 'stale.pdf',
+    pageCount: 2,
+    includeImages: false,
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, child);
+  await makePdf(stalePdf, ['A', 'B', 'C']);
+  await assert.rejects(() => pdfService.mutatePages({
+    workspaceId,
+    path: 'stale.pdf',
+    operations: [{ type: 'delete_pages', pages: [2] }],
+    expectedBaseSha256: stalePdfRead.structuredContent.baseSha256,
+  }), /stale PDF base hash/iu);
+
+  const staleDocx = path.join(fixture.primary, 'stale.docx');
+  const docxHandler = new DocxFileHandler();
+  await docxHandler.write(staleDocx, 'Before', 'rewrite');
+  const staleDocxRead = await readDocxWithDesktopCommander({
+    workspaceId,
+    path: 'stale.docx',
+    mode: 'outline',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, child);
+  await docxHandler.write(staleDocx, 'After', 'rewrite');
+  await assert.rejects(() => docxService.editText({
+    workspaceId,
+    path: 'stale.docx',
+    find: 'After',
+    replace: 'Rejected',
+    expectedOccurrences: 1,
+    expectedBaseSha256: staleDocxRead.structuredContent.baseSha256,
+  }), /stale DOCX base hash/iu);
+});
+
+test('Issue #156 secondary typed-read hashes do not widen existing primary-only mutation authority', async () => {
+  const fixture = await makeFixture();
+  const workspaceId = fixture.workspace.workspaceId;
+  const child = providerChild();
+  const excelService = new ExcelMutationService({
+    workspaceRegistry: fixture.registry,
+    mutationOwner: new MutationOwner(),
+    desktopCommanderChild: child,
+  });
+  const pdfService = new PdfMutationService({
+    workspaceRegistry: fixture.registry,
+    mutationOwner: new MutationOwner(),
+    desktopCommanderChild: child,
+  });
+  const docxService = new DocxMutationService({
+    workspaceRegistry: fixture.registry,
+    mutationOwner: new MutationOwner(),
+    desktopCommanderChild: child,
+  });
+
+  const externalExcel = path.join(fixture.external, 'granted.xlsx');
+  const excelRead = await readExcelWithDesktopCommander({
+    workspaceId,
+    path: externalExcel,
+    mode: 'values',
+    sheet: 'Data',
+    range: 'A1:B2',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, child);
+  await assert.rejects(() => excelService.mutateRange({
+    workspaceId,
+    path: externalExcel,
+    range: 'Data!A1:A1',
+    values: [['blocked']],
+    expectedBaseSha256: excelRead.structuredContent.baseSha256,
+  }), /relative|primary workspace/iu);
+
+  const externalPdf = path.join(fixture.external, 'granted.pdf');
+  const pdfRead = await readPdfWithDesktopCommander({
+    workspaceId,
+    path: externalPdf,
+    pageCount: 2,
+    includeImages: false,
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, child);
+  await assert.rejects(() => pdfService.mutatePages({
+    workspaceId,
+    path: externalPdf,
+    operations: [{ type: 'delete_pages', pages: [2] }],
+    expectedBaseSha256: pdfRead.structuredContent.baseSha256,
+  }), /primary workspace|relative/iu);
+
+  const externalDocx = path.join(fixture.external, 'granted.docx');
+  const docxRead = await readDocxWithDesktopCommander({
+    workspaceId,
+    path: externalDocx,
+    mode: 'outline',
+    secondaryReadGrants: grants(fixture),
+  }, fixture.registry, child);
+  await assert.rejects(() => docxService.editText({
+    workspaceId,
+    path: externalDocx,
+    find: 'Hello DOCX',
+    replace: 'blocked',
+    expectedOccurrences: 1,
+    expectedBaseSha256: docxRead.structuredContent.baseSha256,
+  }), /relative|primary workspace/iu);
+});
