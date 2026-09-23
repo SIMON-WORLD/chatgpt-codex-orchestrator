@@ -20,6 +20,7 @@ import { registerCodexDiagnosticsTool } from './codex-diagnostics-tool.js';
 import { createCapabilityRouter } from '../router/capability-router.js';
 import { createGovernanceService } from '../governance/index.js';
 import { createDesktopCommanderChild } from '../local/desktop-commander-child.js';
+import { createProcessService } from '../local/process.js';
 
 function sendJson(res, status, obj) {
   if (res.headersSent) return;
@@ -32,7 +33,7 @@ function runtimeRevision() {
   return /^[0-9a-f]{40}$/.test(value) ? value : null;
 }
 
-export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, filesystemMutationService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, codexDiagnosticsService = null, activationPreflight = false, desktopCommanderChild = null } = {}) {
+export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, filesystemMutationService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, codexDiagnosticsService = null, activationPreflight = false, desktopCommanderChild = null, processService = null } = {}) {
   // Normal serving mode keeps the canonical MCP tools surface. Activation preflight
   // intentionally creates no MCP handler at all: only /healthz and /readyz exist as
   // narrow startup evidence, so no Governance/Codex/worktree/generic MCP operation can
@@ -40,13 +41,16 @@ export async function startMcpServer({ workspaceRegistry, appServerExecutor = nu
   let nodeHandler = null;
   const compositeChild = activationPreflight ? null : (desktopCommanderChild || createDesktopCommanderChild());
   const ownsCompositeChild = !!compositeChild && !desktopCommanderChild;
+  const publicProcessService = activationPreflight
+    ? null
+    : (processService || createProcessService({ workspaceRegistry, desktopCommanderChild: compositeChild }));
   const validateHost = localhostHostValidation();
   const validateOrigin = localhostOriginValidation();
   if (!activationPreflight) {
     const router = capabilityRouter || createCapabilityRouter();
     const gov = governanceService || createGovernanceService();
     const factory = () => {
-      const server = createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, filesystemMutationService, verifyService, verifyChecks, capabilityRouter: router, governanceService: gov, worktreeService, desktopCommanderChild: compositeChild });
+      const server = createToolsServer({ workspaceRegistry, appServerExecutor, mutationOwner, operationState, changeSetService, filesystemMutationService, verifyService, verifyChecks, capabilityRouter: router, governanceService: gov, worktreeService, desktopCommanderChild: compositeChild, processService: publicProcessService });
       if (codexDiagnosticsService) registerCodexDiagnosticsTool(server, codexDiagnosticsService);
       return server;
     };
@@ -85,6 +89,9 @@ export async function startMcpServer({ workspaceRegistry, appServerExecutor = nu
       if (!httpServer.listening) return resolve();
       httpServer.close(() => resolve());
     });
+    if (publicProcessService && typeof publicProcessService.close === 'function') {
+      try { await publicProcessService.close(); } catch {}
+    }
     if (ownsCompositeChild) await compositeChild.close();
   };
   return { httpServer, close, host, port: port2, url: `http://${host}:${port2}/mcp` };
