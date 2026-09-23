@@ -13,8 +13,10 @@
 //   - restart = new DurableGovernanceService over the same dataRoot/namespace
 //   - mutations on an established task require the current opaque Parent authority token,
 //     except for the narrower Issue #34 execution-continuation claim described below
-//   - bounded execution claims are independently fenced and authorize only the already-
-//     approved current CHATGPT_DIRECT_LOCAL step; they never confer Parent control authority
+//   - bounded execution claims are independently fenced and bind only the already-approved
+//     current CHATGPT_DIRECT_LOCAL Governance step for continuation/RESULT accounting;
+//     ordinary Direct Local resource operations do not consume them, and they never
+//     confer Parent control authority
 //   - takeover increments the Parent authority generation and mints a new token for the new
 //     Parent session; it NEVER cancels/restarts/duplicates delegated Codex execution
 //     (execution reconciliation is delegated to the existing executor.recover path)
@@ -596,8 +598,10 @@ export class DurableGovernanceService {
     };
   }
 
-  // Narrow claim authorization used ONLY by Direct Local apply/workspace-effect verify.
-  // Parent-token authorizeMutation remains unchanged for Codex and compatibility paths.
+  // Narrow claim-authorization primitive retained for Governance continuity compatibility.
+  // Ordinary Direct Local apply/workspace-effect verify no longer calls this gate; current
+  // public use of execution claims is Governance continuation/RESULT accounting. Parent-token
+  // authorizeMutation remains unchanged for Codex and other explicit Governance paths.
   authorizeExecution({ taskId = null, executionToken = null, workspaceRoot = null } = {}) {
     this._ensureOpen();
     this._ensureRecoverable();
@@ -612,10 +616,11 @@ export class DurableGovernanceService {
   }
 
   // ---- Task-scoped Parent mutation authorization (Issue #29) -------------------
-  // workspaceId/jobId/changeSetId are lookup selectors, not mission authority. A NEW
-  // mutation unit is authorized against the CURRENT durable Governance task + its
-  // canonical workspace root + CURRENT Parent token. This path remains the only path
-  // for new Codex turns and all other Parent-authorized mutation categories.
+  // workspaceId/jobId are lookup selectors, not mission authority. A NEW Governance-
+  // controlled mutation unit is authorized against the CURRENT durable Governance task +
+  // its canonical workspace root + CURRENT Parent token. This remains the authorization
+  // path for new Codex turns; ordinary Direct Local resource mutation bypasses this
+  // mission-authority gate by design.
   authorizeMutation({ taskId = null, authorityToken = null, workspaceRoot = null } = {}) {
     this._ensureOpen();
     this._ensureRecoverable();

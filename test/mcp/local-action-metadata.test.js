@@ -21,6 +21,14 @@ test('Issue #147 exposes truthful Direct Local mutation annotations without recl
     appServerExecutor,
     mutationOwner: owner,
     operationState,
+    verifyChecks: {
+      effectful: {
+        effect: 'workspace_effect',
+        command: process.execPath,
+        args: ['-e', 'process.exit(0)'],
+        timeoutMs: 5000,
+      },
+    },
     desktopCommanderChild: {},
     host: '127.0.0.1',
     port: 0,
@@ -44,6 +52,7 @@ test('Issue #147 exposes truthful Direct Local mutation annotations without recl
     docx_edit_text: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     docx_create_text: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     pdf_mutate_pages: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    verify: { readOnlyHint: false, destructiveHint: true },
   };
 
   for (const [name, annotations] of Object.entries(expected)) {
@@ -55,6 +64,28 @@ test('Issue #147 exposes truthful Direct Local mutation annotations without recl
   assert.match(byName.filesystem_create_directory.description, /no existing entry is overwritten/iu);
   assert.match(byName.docx_create_text.description, /destination must not already exist/iu);
   assert.match(byName.docx_create_text.description, /no existing document is overwritten/iu);
+
+  const ordinaryDirectLocal = [
+    'edit',
+    'filesystem_create_directory',
+    'filesystem_move',
+    'excel_write_range',
+    'docx_edit_text',
+    'docx_create_text',
+    'pdf_mutate_pages',
+    'verify',
+  ];
+  for (const name of ordinaryDirectLocal) {
+    const properties = byName[name].inputSchema?.properties || {};
+    for (const field of ['taskId', 'authorityToken', 'executionToken']) {
+      assert.equal(Object.hasOwn(properties, field), false, name + ' must not expose ' + field);
+    }
+    assert.doesNotMatch(
+      byName[name].description,
+      /requires current Parent authority|current-step bounded execution claim|Direct Local mutation authorization/iu,
+      name + ' description must not require Governance mission authority',
+    );
+  }
 
   assert.deepEqual(byName.route_decide.annotations, { readOnlyHint: true });
   assert.deepEqual(byName.governance_plan.annotations, {

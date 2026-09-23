@@ -152,15 +152,16 @@ test('Issue #137 existing bounded edit keeps atomic parent apply, base-hash, mod
   assert.equal(owner.owner, 'none');
 });
 
-test('Issue #137 MCP exposes typed filesystem tools, enforces Governance, and exposes no child mutation tool', async (t) => {
+test('Issue #159 MCP mutations use device/workspace resource authorization and expose no generic child mutation tool', async (t) => {
   const f = fixture();
   const owner = new MutationOwner();
   const ops = new OperationState({ dataRoot: f.host });
   const child = fakeChild();
+  let governanceAuthCalls = 0;
   const governance = {
-    authorizeMutation({ authorityToken }) {
-      if (authorityToken !== 'approved') throw new Error('authority required');
-      return { taskId: 'issue-137' };
+    authorizeMutation() {
+      governanceAuthCalls += 1;
+      throw new Error('ordinary Direct Local must not consult Governance authorization');
     },
   };
   const server = await startMcpServer({
@@ -173,7 +174,7 @@ test('Issue #137 MCP exposes typed filesystem tools, enforces Governance, and ex
     port: 0,
   });
   t.after(() => server.close());
-  const client = new Client({ name: 'issue137-filesystem', version: '1' });
+  const client = new Client({ name: 'issue159-filesystem', version: '1' });
   await client.connect(new StreamableHTTPClientTransport(server.url));
   t.after(() => client.close());
   const textOf = (result) => result.content.find((item) => item.type === 'text').text;
@@ -181,47 +182,69 @@ test('Issue #137 MCP exposes typed filesystem tools, enforces Governance, and ex
   const opened = JSON.parse(textOf(await client.callTool({ name: 'workspace_open', arguments: { path: f.primary } })));
   const workspaceId = opened.workspaceId;
   const listed = await client.listTools();
-  const names = new Set(listed.tools.map((tool) => tool.name));
-  assert.equal(names.has('filesystem_create_directory'), true);
-  assert.equal(names.has('filesystem_move'), true);
-  for (const typedMutation of ['excel_write_range', 'docx_edit_text', 'docx_create_text', 'pdf_mutate_pages']) {
-    assert.equal(names.has(typedMutation), true);
-  }
-  assert.equal(names.has('edit'), true);
-  for (const forbidden of ['write_file', 'edit_block', 'write_pdf', 'create_directory', 'move_file', 'callTool', 'start_process']) assert.equal(names.has(forbidden), false);
-
-  const unauthorizedRequests = [
-    { name: 'excel_write_range', arguments: { workspaceId, path: 'book.xlsx', range: 'Sheet1!A1', values: [[1]], expectedBaseSha256: '0'.repeat(64) } },
-    { name: 'docx_edit_text', arguments: { workspaceId, path: 'book.docx', find: 'before', replace: 'after', expectedOccurrences: 1, expectedBaseSha256: '0'.repeat(64) } },
-    { name: 'docx_create_text', arguments: { workspaceId, path: 'book.docx', text: 'content' } },
-    { name: 'pdf_mutate_pages', arguments: { workspaceId, path: 'book.pdf', operations: [{ type: 'delete_pages', pages: [1] }], expectedBaseSha256: '0'.repeat(64) } },
+  const byName = Object.fromEntries(listed.tools.map((tool) => [tool.name, tool]));
+  const mutationTools = [
+    'edit',
+    'filesystem_create_directory',
+    'filesystem_move',
+    'excel_write_range',
+    'docx_edit_text',
+    'docx_create_text',
+    'pdf_mutate_pages',
   ];
-  for (const request of unauthorizedRequests) {
-    const rejected = await client.callTool(request);
-    assert.equal(rejected.isError, true);
-    assert.match(textOf(rejected), /authority required/u);
+  for (const name of mutationTools) assert.ok(byName[name], name + ' must be exposed');
+  for (const forbidden of ['write_file', 'edit_block', 'write_pdf', 'create_directory', 'move_file', 'callTool', 'start_process']) {
+    assert.equal(Object.hasOwn(byName, forbidden), false);
   }
-  assert.equal(child.calls.length, 0, 'Direct Local auth must run before every typed mutation service');
 
-  const rejected = await client.callTool({ name: 'filesystem_create_directory', arguments: { workspaceId, path: 'new-dir' } });
-  assert.equal(rejected.isError, true);
-  assert.equal(child.calls.length, 0);
+  for (const name of mutationTools) {
+    const properties = byName[name].inputSchema?.properties || {};
+    for (const field of ['taskId', 'authorityToken', 'executionToken']) {
+      assert.equal(Object.hasOwn(properties, field), false, name + ' must not expose ' + field);
+    }
+  }
 
-  const created = await client.callTool({ name: 'filesystem_create_directory', arguments: { workspaceId, path: 'new-dir', authorityToken: 'approved' } });
+  const created = await client.callTool({
+    name: 'filesystem_create_directory',
+    arguments: { workspaceId, path: 'new-dir' },
+  });
   assert.equal(JSON.parse(textOf(created)).status, 'applied');
+
   fs.writeFileSync(path.join(f.primary, 'source.txt'), 'source', 'utf8');
-  const moved = await client.callTool({ name: 'filesystem_move', arguments: { workspaceId, source: 'source.txt', destination: 'new-dir/moved.txt', authorityToken: 'approved' } });
+  const moved = await client.callTool({
+    name: 'filesystem_move',
+    arguments: { workspaceId, source: 'source.txt', destination: 'new-dir/moved.txt' },
+  });
   assert.equal(JSON.parse(textOf(moved)).status, 'applied');
 
   const note = path.join(f.primary, 'note.txt');
   fs.writeFileSync(note, 'before', 'utf8');
   const preview = JSON.parse(textOf(await client.callTool({
     name: 'edit',
-    arguments: { workspaceId, mode: 'preview', change: { path: 'note.txt', baseHash: computeSha256(Buffer.from('before')), replacements: [{ oldText: 'before', newText: 'after', expectedOccurrences: 1 }] } },
+    arguments: {
+      workspaceId,
+      mode: 'preview',
+      change: {
+        path: 'note.txt',
+        baseHash: computeSha256(Buffer.from('before')),
+        replacements: [{ oldText: 'before', newText: 'after', expectedOccurrences: 1 }],
+      },
+    },
   })));
-  const editRejected = await client.callTool({ name: 'edit', arguments: { workspaceId, mode: 'apply', changeSetId: preview.changeSetId } });
-  assert.equal(editRejected.isError, true);
-  const editApplied = await client.callTool({ name: 'edit', arguments: { workspaceId, mode: 'apply', changeSetId: preview.changeSetId, authorityToken: 'approved' } });
+  const editApplied = await client.callTool({
+    name: 'edit',
+    arguments: { workspaceId, mode: 'apply', changeSetId: preview.changeSetId },
+  });
   assert.equal(JSON.parse(textOf(editApplied)).status, 'applied');
   assert.equal(fs.readFileSync(note, 'utf8'), 'after');
+  assert.equal(governanceAuthCalls, 0);
+
+  const staleField = await client.callTool({
+    name: 'filesystem_create_directory',
+    arguments: { workspaceId, path: 'must-not-create', authorityToken: 'legacy' },
+  });
+  assert.equal(staleField.isError, true);
+  assert.match(textOf(staleField), /authorityToken|unrecognized|invalid/i);
+  assert.equal(fs.existsSync(path.join(f.primary, 'must-not-create')), false);
+  assert.equal(governanceAuthCalls, 0);
 });

@@ -135,71 +135,93 @@ test('Issue #29: a new Codex turn requires current durable task + canonical root
   assert.equal(cross.res.isError, true); assert.match(cross.text, /cross-task/);
 });
 
-test('Issue #29: stale Parent/task + old handles cannot authorize Direct Local apply / workspace-effect; restart uses refreshed workspaceId', async (t) => {
-  const { root, repoA } = fixtureDirs('mutapply-');
-  const owner = new MutationOwner();
-  const stub = makeStubExecutor(owner);
-  const ctx1 = await startDurableMcp({ dataRoot: root, roots: [repoA], executor: stub });
+test('Issue #159: durable Governance may be present while ordinary Direct Local edit/verify uses only workspace resource authority', async (t) => {
+  const { root, repoA } = fixtureDirs('device-local-');
+  const ctx1 = await startDurableMcp({ dataRoot: root, roots: [repoA] });
   t.after(() => closeAll(ctx1));
+
+  const before = JSON.parse((await call(ctx1.client, 'governance_status', {})).text);
   const wsA = JSON.parse((await call(ctx1.client, 'workspace_open', { path: repoA })).text);
   const wsIdA = wsA.workspaceId;
   const file = path.join(repoA, 'a.txt');
   const baseHash = computeSha256(fs.readFileSync(file));
 
-  const plan = JSON.parse((await call(ctx1.client, 'governance_transition', { taskId: 't1', control: 'PLAN', projectKey: 'repo/local', identity: 'issue-apply', workspaceId: wsIdA })).text);
-  const tokenA = plan.authorityToken;
-  const task = await call(ctx1.client, 'governance_transition', { taskId: 't1', stepId: 's1', control: 'TASK', acceptance: [{ id: 'a1' }], route: 'CHATGPT_DIRECT_LOCAL', authorityToken: tokenA });
-  assert.equal(JSON.parse(task.text).ok, true);
-
-  const change = { path: 'a.txt', baseHash, replacements: [{ oldText: 'hello', newText: 'hello2', expectedOccurrences: 1 }] };
-  const preview = JSON.parse((await call(ctx1.client, 'edit', { workspaceId: wsIdA, mode: 'preview', change })).text);
+  const preview = JSON.parse((await call(ctx1.client, 'edit', {
+    workspaceId: wsIdA,
+    mode: 'preview',
+    change: {
+      path: 'a.txt',
+      baseHash,
+      replacements: [{ oldText: 'hello', newText: 'hello2', expectedOccurrences: 1 }],
+    },
+  })).text);
   assert.ok(preview.changeSetId);
 
-  // Apply without the current Parent token fails closed before any file mutation.
-  const applyNoToken = await call(ctx1.client, 'edit', { workspaceId: wsIdA, mode: 'apply', changeSetId: preview.changeSetId });
-  assert.equal(applyNoToken.res.isError, true);
-  assert.match(applyNoToken.text, /stale_authority/);
-  assert.equal(fs.readFileSync(file, 'utf8'), 'hello');
-
-  const apply = await call(ctx1.client, 'edit', { workspaceId: wsIdA, mode: 'apply', changeSetId: preview.changeSetId, taskId: 't1', authorityToken: tokenA });
+  const apply = await call(ctx1.client, 'edit', {
+    workspaceId: wsIdA,
+    mode: 'apply',
+    changeSetId: preview.changeSetId,
+  });
   assert.notEqual(apply.res.isError, true);
   assert.equal(fs.readFileSync(file, 'utf8'), 'hello2');
 
-  // New Parent authority: takeover increments generation; old token A is now stale.
-  const to = JSON.parse((await call(ctx1.client, 'governance_takeover', { taskId: 't1', workspaceId: wsIdA })).text);
-  assert.equal(to.authority.generation, 1);
-  const tokenB = to.authority.token;
-
-  const staleApply = await call(ctx1.client, 'edit', { workspaceId: wsIdA, mode: 'apply', changeSetId: preview.changeSetId, taskId: 't1', authorityToken: tokenA });
-  assert.equal(staleApply.res.isError, true);
-  assert.match(staleApply.text, /stale_authority/);
-
-  // workspace_effect verify requires the current Parent token; read_only verify does not.
-  const verifyNoToken = await call(ctx1.client, 'verify', { workspaceId: wsIdA, check: 'touch_marker' });
-  assert.equal(verifyNoToken.res.isError, true);
-  assert.match(verifyNoToken.text, /stale_authority/);
-  const verifyOk = JSON.parse((await call(ctx1.client, 'verify', { workspaceId: wsIdA, check: 'touch_marker', taskId: 't1', authorityToken: tokenB })).text);
+  const verifyOk = JSON.parse((await call(ctx1.client, 'verify', {
+    workspaceId: wsIdA,
+    check: 'touch_marker',
+  })).text);
   assert.equal(verifyOk.passed, true);
   assert.ok(fs.existsSync(path.join(repoA, 'verify-marker.txt')));
-  const roOk = JSON.parse((await call(ctx1.client, 'verify', { workspaceId: wsIdA, check: 'noop' })).text);
+  const roOk = JSON.parse((await call(ctx1.client, 'verify', {
+    workspaceId: wsIdA,
+    check: 'noop',
+  })).text);
   assert.equal(roOk.passed, true);
 
-  // "Restart": old workspace handle (wsIdA) no longer exists; the same canonical root
-  // with a refreshed workspaceId + takeover token authorizes a new apply.
+  const after = JSON.parse((await call(ctx1.client, 'governance_status', {})).text);
+  assert.deepEqual(after, before, 'ordinary Direct Local operations must not create or mutate Governance state');
+
+  // Removed mission-authority fields fail schema validation rather than being silently ignored.
+  const rejected = await call(ctx1.client, 'verify', {
+    workspaceId: wsIdA,
+    check: 'noop',
+    authorityToken: 'stale-token',
+  });
+  assert.equal(rejected.res.isError, true);
+  assert.match(rejected.text, /authorityToken|unrecognized|invalid/i);
+
+  // Workspace handles remain session-local resource selectors: after restart the old
+  // handle fails, while reopening the same authorized resource permits another tokenless edit.
   await closeAll(ctx1);
-  const ctx2 = await startDurableMcp({ dataRoot: root, roots: [repoA], executor: stub });
+  const ctx2 = await startDurableMcp({ dataRoot: root, roots: [repoA] });
   t.after(() => closeAll(ctx2));
-  const staleHandle = await call(ctx2.client, 'edit', { workspaceId: wsIdA, mode: 'apply', changeSetId: preview.changeSetId, taskId: 't1', authorityToken: tokenB });
+
+  const staleHandle = await call(ctx2.client, 'read', {
+    workspaceId: wsIdA,
+    path: 'a.txt',
+  });
   assert.equal(staleHandle.res.isError, true);
-  assert.match(staleHandle.text, /unknown workspaceId|workspaceId/);
+  assert.match(staleHandle.text, /unknown workspaceId|workspaceId/i);
+
   const wsA2 = JSON.parse((await call(ctx2.client, 'workspace_open', { path: repoA })).text);
   assert.notEqual(wsA2.workspaceId, wsIdA);
-  assert.equal(path.resolve(wsA2.root), path.resolve(repoA));
-  const to2 = JSON.parse((await call(ctx2.client, 'governance_takeover', { taskId: 't1', workspaceId: wsA2.workspaceId })).text);
-  const tokenC = to2.authority.token;
   const base2 = computeSha256(fs.readFileSync(file));
-  const preview2 = JSON.parse((await call(ctx2.client, 'edit', { workspaceId: wsA2.workspaceId, mode: 'preview', change: { path: 'a.txt', baseHash: base2, replacements: [{ oldText: 'hello2', newText: 'hello3', expectedOccurrences: 1 }] } })).text);
-  const apply2 = await call(ctx2.client, 'edit', { workspaceId: wsA2.workspaceId, mode: 'apply', changeSetId: preview2.changeSetId, taskId: 't1', authorityToken: tokenC });
+  const preview2 = JSON.parse((await call(ctx2.client, 'edit', {
+    workspaceId: wsA2.workspaceId,
+    mode: 'preview',
+    change: {
+      path: 'a.txt',
+      baseHash: base2,
+      replacements: [{ oldText: 'hello2', newText: 'hello3', expectedOccurrences: 1 }],
+    },
+  })).text);
+  const apply2 = await call(ctx2.client, 'edit', {
+    workspaceId: wsA2.workspaceId,
+    mode: 'apply',
+    changeSetId: preview2.changeSetId,
+  });
   assert.notEqual(apply2.res.isError, true);
   assert.equal(fs.readFileSync(file, 'utf8'), 'hello3');
+
+  const afterRestart = JSON.parse((await call(ctx2.client, 'governance_status', {})).text);
+  assert.deepEqual(afterRestart, before, 'ordinary Direct Local restart flow must leave durable Governance unchanged');
 });
