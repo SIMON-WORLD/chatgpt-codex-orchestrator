@@ -21,7 +21,8 @@ function textOf(result) {
 function structuredOf(result) {
   if (result?.structuredContent) return result.structuredContent;
   const text = textOf(result);
-  return text ? JSON.parse(text) : null;
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 async function call(client, name, args) {
