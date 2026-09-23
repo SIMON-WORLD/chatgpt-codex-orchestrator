@@ -34,6 +34,10 @@
 | Role-neutral existing-project adoption | **CLOSED / ACCEPTED** | Issue #85 / #86 / #87 / PR #88；role-neutral seed、per-conversation role separation、new/existing/materialize adoption modes |
 | Scoped materialization locator semantics | **CLOSED / ACCEPTED** | Issue #89 / PR #91；first creation uses `scoped_identity` under exact provider container；existing exact control keeps `existing` |
 | Authorized Local E1 read-only fixture | **CLOSED / ACCEPTED** | Issue #90 / PR #92；`read_only_smoke` alias stays inside preauthorized roots；no root enumeration/trust widening |
+| Device-first Local Connector correction | **CLOSED / ACCEPTED** | Issue #159 / PR #160；ordinary Direct Local access decoupled from Governance mission authority |
+| Device-authorized process / PowerShell | **CLOSED / ACCEPTED** | Issue #161 / PR #162；opaque-handle process lifecycle over the pinned DesktopCommander backend |
+| Plus MCP admission repeatability | **CLOSED / MIXED EVIDENCE** | Issue #167；identical process call both blocked pre-dispatch and dispatched；no tool-shape rewrite authorized |
+| Windows process backend diagnostic | **CLOSED / PASS** | Issue #168；internal Git process path and public PowerShell path both succeeded；real-workload adoption follows |
 | Post-v0.2 stabilization / evidence-driven steady-state | **CURRENT OPERATING STATE** | no automatic v0.2.1/v0.3 scope；new implementation requires new P0/P1 evidence or separately accepted product/architecture outcome |
 
 ## N3 — 已接受基线
@@ -156,6 +160,17 @@ This is post-v0.2 accepted stabilization/recovery truth, not a new milestone, de
 - **[#123](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/123) / [#124](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/124) / [#127](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/127):** accepted resource model is `PRIMARY_WORKSPACE = CONTEXT + DEFAULT MUTATION ROOT` plus a coarse Host trust ceiling plus explicit mission/session-scoped secondary read grants. `workspace_open.secondaryReadGrants` binds auxiliary read/search authority without Governance mutation or per-mission Stable Runtime root churn; ungranted access and external write fail closed. Existing write/process/network/Codex/MutationOwner/Repository Identity/Parent authority boundaries do not widen.
 - **[#111](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/111):** dedicated PLAN-only `governance_plan` implementation is complete; remaining observed blocker is the upstream ChatGPT Developer-MCP product safety pre-check before Local Governance execution. Do not weaken/relabel/retry Governance around unchanged evidence. This closure is not downstream China Demand E2 completion.
 - **[#128](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/128):** DesktopCommander transitive production audit still reports 2 high + 2 moderate package objects, with current underlying advisory paths through `sharp` and `uuid`. Parent accepted them as `NOT_REACHABLE_BY_EVIDENCE` only for the current bounded Local Connector surface; keep the exact pin and current usage, and re-evaluate only when upstream supplies a real fixing candidate or the accepted surface expands into excluded special-format/generic child capabilities.
+
+## Device-first Local Connector / real-workload adoption — accepted through #168
+
+- **#159 / PR #160:** device-first correction accepted and merged. Ordinary Local Connector file/document operations no longer depend on Governance task/Parent/execution tokens；authorization is connected device endpoint + workspace/resource scope + operation-specific safety.
+- **#161 / PR #162:** device-authorized process capability accepted and merged. `process_start/process_read_output/process_terminate` provide bounded process lifecycle with opaque handles while truthfully retaining OS-user-level reach.
+- **#167:** controlled current-Plus repeatability produced mixed admission for the identical harmless PowerShell call：one fresh conversation was blocked before dispatch while another reached the connector. Parent therefore stopped the planned `process_exec(executable,args[])` shape experiment and prohibited wrapper/metadata churn from this evidence.
+- **#168:** real Windows diagnostic passed：read-only `git_status` exercised the pinned DesktopCommander/PowerShell path successfully，and public `process_start(shell="powershell")` completed with `exitCode=0` and exact sentinel output. The earlier single `CHILD_START_FAILED` is non-reproduced transient evidence，not an accepted runtime defect.
+- **Current operating state:** use Local Connector as the first local provider when the current ChatGPT runtime admits the needed action；treat Remote Desktop Commander and other providers as fallback capacity. Promote new repository/runtime work only from reproducible connector-reached P0/P1 evidence. Pre-dispatch product blocks remain provider-availability evidence unless a supported product contract supplies an actionable implementation path.
+- **Transport/tool-shape discipline:** retain Secure MCP Tunnel as the baseline；Quick Tunnel is diagnostic-only；do not rename/re-annotate/repackage tools or reintroduce Governance merely to chase product safety admission.
+
+This is post-v0.2 stabilization truth，not a new release/default milestone.
 
 ## Operating-model corrections — Issue #43 and Issue #48
 
