@@ -6,7 +6,9 @@
 // authorized canonical path, performs cheap signature/container checks, owns
 // all budgets, and only then dispatches the exact pinned child read path.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { WorkspaceError } from './workspace.js';
 import { isSensitivePath } from './sensitive.js';
@@ -143,15 +145,97 @@ export function validateStructuredTarget({
   };
 }
 
-function readBounded(target, maxBytes) {
+function readPathBounded(canonical, maxBytes, { directRegularFile = false } = {}) {
   let stat;
-  try { stat = fs.statSync(target.canonical); } catch { throw structuredError('file disappeared'); }
+  try { stat = directRegularFile ? fs.lstatSync(canonical) : fs.statSync(canonical); }
+  catch { throw structuredError('file disappeared'); }
   if (!stat.isFile()) throw structuredError('target is not a regular file');
   if (stat.size > maxBytes) throw structuredError('input byte budget exceeded');
   let buffer;
-  try { buffer = fs.readFileSync(target.canonical); } catch { throw structuredError('file is not readable'); }
+  try { buffer = fs.readFileSync(canonical); } catch { throw structuredError('file is not readable'); }
   if (buffer.length > maxBytes) throw structuredError('input byte budget exceeded');
   return buffer;
+}
+
+function readBounded(target, maxBytes) {
+  return readPathBounded(target.canonical, maxBytes);
+}
+
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function createPrivateSnapshot(sourceBytes, extension) {
+  const container = fs.mkdtempSync(path.join(os.tmpdir(), 'chatgpt-codex-structured-'));
+  const snapshotPath = path.join(container, 'source' + extension);
+  try {
+    if (process.platform !== 'win32') fs.chmodSync(container, 0o700);
+    fs.writeFileSync(snapshotPath, sourceBytes, { flag: 'wx', mode: 0o600 });
+    if (process.platform !== 'win32') fs.chmodSync(snapshotPath, 0o600);
+    return { container, snapshotPath };
+  } catch (error) {
+    try { fs.rmSync(container, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 }); } catch {}
+    throw structuredError('failed to create private structured-read snapshot');
+  }
+}
+
+function cleanupPrivateSnapshot(container) {
+  try {
+    fs.rmSync(container, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+  } catch {
+    throw structuredError('failed to clean private structured-read snapshot');
+  }
+  if (fs.existsSync(container)) throw structuredError('failed to clean private structured-read snapshot');
+}
+
+function scratchMarkers(scratch) {
+  const values = [scratch.container, scratch.snapshotPath];
+  const markers = new Set();
+  for (const value of values) {
+    markers.add(value);
+    markers.add(value.replace(/\\/g, '/'));
+  }
+  return [...markers];
+}
+
+function containsScratchPath(value, markers) {
+  if (typeof value === 'string') return markers.some((marker) => marker && value.includes(marker));
+  if (Array.isArray(value)) return value.some((item) => containsScratchPath(item, markers));
+  if (value && typeof value === 'object') return Object.values(value).some((item) => containsScratchPath(item, markers));
+  return false;
+}
+
+function assertNoScratchLeak(value, scratch) {
+  if (containsScratchPath(value, scratchMarkers(scratch))) {
+    throw structuredError('internal snapshot path leaked from provider output');
+  }
+}
+
+async function withStableStructuredSnapshot({ target, maxInputBytes, sourceBytes }, operation) {
+  const baseSha256 = sha256(sourceBytes);
+  const scratch = createPrivateSnapshot(sourceBytes, target.extension.canonical);
+  try {
+    const beforeProvider = readPathBounded(scratch.snapshotPath, maxInputBytes, { directRegularFile: true });
+    if (sha256(beforeProvider) !== baseSha256) throw structuredError('snapshot hash mismatch before provider dispatch');
+
+    const result = await operation({
+      snapshotPath: scratch.snapshotPath,
+      baseSha256,
+      sourceBytes: sourceBytes.length,
+    });
+    assertNoScratchLeak(result, scratch);
+
+    const afterProvider = readPathBounded(scratch.snapshotPath, maxInputBytes, { directRegularFile: true });
+    if (sha256(afterProvider) !== baseSha256) throw structuredError('snapshot changed during structured read');
+
+    const currentSource = readPathBounded(target.canonical, maxInputBytes, { directRegularFile: true });
+    if (sha256(currentSource) !== baseSha256) throw structuredError('source changed during structured read');
+
+    assertNoScratchLeak(result, scratch);
+    return result;
+  } finally {
+    cleanupPrivateSnapshot(scratch.container);
+  }
 }
 
 function hasBytes(buffer, offset, bytes) {
@@ -485,7 +569,7 @@ export async function readImageWithDesktopCommander(args = {}, registry, child) 
   return { structuredContent, content };
 }
 
-function preflightExcel(args, registry) {
+function validateExcelSource(args, registry) {
   const maxInputBytes = assertIntegerBudget(args.maxInputBytes, STRUCTURED_READ_LIMITS.excel.inputBytes, STRUCTURED_READ_LIMITS.excel.inputBytes, 'maxInputBytes');
   const target = validateStructuredTarget({
     ...args,
@@ -493,11 +577,20 @@ function preflightExcel(args, registry) {
     allowedExtensions: EXCEL_EXTENSIONS,
     maxInputBytes,
   });
-  const zip = inspectZip(readBounded(target, maxInputBytes), {
+  return { target, maxInputBytes };
+}
+
+function preflightExcelBytes(buffer) {
+  const zip = inspectZip(buffer, {
     maxExpandedBytes: STRUCTURED_READ_LIMITS.excel.expandedBytes,
   });
   requireZipEntry(zip, '[Content_Types].xml');
   requireZipEntry(zip, 'xl/workbook.xml');
+}
+
+function preflightExcel(args, registry) {
+  const { target, maxInputBytes } = validateExcelSource(args, registry);
+  preflightExcelBytes(readBounded(target, maxInputBytes));
   return { target, maxInputBytes };
 }
 
@@ -507,48 +600,54 @@ export async function readExcelWithDesktopCommander(args = {}, registry, child) 
   const maxOutputBytes = assertIntegerBudget(args.maxOutputBytes, STRUCTURED_READ_LIMITS.excel.outputBytes, STRUCTURED_READ_LIMITS.excel.outputBytes, 'maxOutputBytes');
   const maxRows = assertIntegerBudget(args.maxRows, STRUCTURED_READ_LIMITS.excel.rows, STRUCTURED_READ_LIMITS.excel.rows, 'maxRows');
   const maxCells = assertIntegerBudget(args.maxCells, STRUCTURED_READ_LIMITS.excel.cells, STRUCTURED_READ_LIMITS.excel.cells, 'maxCells');
-  const preflight = preflightExcel(args, registry);
-  const target = preflight.target;
-  if (mode === 'metadata') {
-    const raw = await callStructuredChild(child, 'getFileInfo', { path: target.canonical }, 30000, STRUCTURED_READ_LIMITS.excel.rawChildBytes);
-    const metadata = parseMetadataText(textBlocks(raw), target.size);
-    return {
-      structuredContent: enforceOutput({
-        kind: 'excel',
-        mode,
-        path: publicPath(target),
-        size: metadata.size,
-        sheets: metadata.sheets,
-      }, maxOutputBytes),
-      content: [],
-    };
-  }
-  const range = rangeBudget(args.range);
-  if (range && (range.rows > maxRows || range.cells > maxCells)) {
-    throw structuredError('requested range exceeds row or cell budget');
-  }
-  const offset = assertNonNegativeInteger(args.offset, 0, 1048575, 'offset');
-  const raw = await callStructuredChild(child, 'readFileStructured', {
-    path: target.canonical,
-    offset,
-    maxLines: maxRows,
-    sheet: args.sheet,
-    range: args.range,
-  }, 30000, STRUCTURED_READ_LIMITS.excel.rawChildBytes);
-  const parsed = parseExcelValues(raw, maxRows, maxCells);
-  const result = enforceOutput({
-    kind: 'excel',
-    mode,
-    path: publicPath(target),
-    sheet: args.sheet || null,
-    range: args.range || null,
-    offset,
-    rows: parsed.rows,
-    cells: parsed.cells,
-    values: parsed.values,
-    truncated: parsed.rows >= maxRows,
-  }, maxOutputBytes);
-  return { structuredContent: result, content: [] };
+  const { target, maxInputBytes } = validateExcelSource(args, registry);
+  const sourceBuffer = readBounded(target, maxInputBytes);
+  preflightExcelBytes(sourceBuffer);
+
+  return withStableStructuredSnapshot({ target, maxInputBytes, sourceBytes: sourceBuffer }, async ({ snapshotPath, baseSha256, sourceBytes }) => {
+    if (mode === 'metadata') {
+      const raw = await callStructuredChild(child, 'getFileInfo', { path: snapshotPath }, 30000, STRUCTURED_READ_LIMITS.excel.rawChildBytes);
+      const metadata = parseMetadataText(textBlocks(raw), sourceBytes);
+      return {
+        structuredContent: enforceOutput({
+          kind: 'excel',
+          mode,
+          path: publicPath(target),
+          size: metadata.size,
+          baseSha256,
+          sheets: metadata.sheets,
+        }, maxOutputBytes),
+        content: [],
+      };
+    }
+    const range = rangeBudget(args.range);
+    if (range && (range.rows > maxRows || range.cells > maxCells)) {
+      throw structuredError('requested range exceeds row or cell budget');
+    }
+    const offset = assertNonNegativeInteger(args.offset, 0, 1048575, 'offset');
+    const raw = await callStructuredChild(child, 'readFileStructured', {
+      path: snapshotPath,
+      offset,
+      maxLines: maxRows,
+      sheet: args.sheet,
+      range: args.range,
+    }, 30000, STRUCTURED_READ_LIMITS.excel.rawChildBytes);
+    const parsed = parseExcelValues(raw, maxRows, maxCells);
+    const result = enforceOutput({
+      kind: 'excel',
+      mode,
+      path: publicPath(target),
+      sheet: args.sheet || null,
+      range: args.range || null,
+      offset,
+      rows: parsed.rows,
+      cells: parsed.cells,
+      values: parsed.values,
+      truncated: parsed.rows >= maxRows,
+      baseSha256,
+    }, maxOutputBytes);
+    return { structuredContent: result, content: [] };
+  });
 }
 
 function parseExcelSearchPage(raw, expectedPath) {
@@ -632,9 +731,9 @@ function preflightPdf(args, registry) {
     allowedExtensions: PDF_EXTENSIONS,
     maxInputBytes,
   });
-  const probe = readBounded(target, Math.min(maxInputBytes, 16 * 1024));
-  if (!hasBytes(probe, 0, Buffer.from('%PDF-', 'ascii'))) throw structuredError('PDF signature mismatch');
-  return { target, maxInputBytes };
+  const sourceBuffer = readBounded(target, maxInputBytes);
+  if (!hasBytes(sourceBuffer, 0, Buffer.from('%PDF-', 'ascii'))) throw structuredError('PDF signature mismatch');
+  return { target, maxInputBytes, sourceBuffer };
 }
 
 function parsePdfContent(raw, pageOffset, pageCount, maxTextBytes, maxImages, maxImageBytes, includeImages) {
@@ -701,34 +800,37 @@ export async function readPdfWithDesktopCommander(args = {}, registry, child) {
   const maxImageBytes = assertIntegerBudget(args.maxImageBytes, STRUCTURED_READ_LIMITS.pdf.imageBytes, STRUCTURED_READ_LIMITS.pdf.imageBytes, 'maxImageBytes');
   const maxOutputBytes = assertIntegerBudget(args.maxOutputBytes, STRUCTURED_READ_LIMITS.pdf.outputBytes, STRUCTURED_READ_LIMITS.pdf.outputBytes, 'maxOutputBytes');
   const timeoutMs = assertIntegerBudget(args.timeoutMs, STRUCTURED_READ_LIMITS.pdf.timeoutMs, STRUCTURED_READ_LIMITS.pdf.timeoutMs, 'timeoutMs');
-  const target = preflightPdf(args, registry).target;
+  const { target, maxInputBytes, sourceBuffer } = preflightPdf(args, registry);
   const includeImages = args.includeImages !== false;
-  const raw = await callStructuredChild(child, 'readFileStructured', {
-    path: target.canonical,
-    offset: pageOffset,
-    maxLines: maxPages,
-  }, timeoutMs, STRUCTURED_READ_LIMITS.pdf.rawChildBytes);
-  const pages = parsePdfContent(raw, pageOffset, maxPages, maxTextBytes, maxImages, maxImageBytes, includeImages);
-  const publicPages = pages.map((page) => ({
-    pageNumber: page.pageNumber,
-    text: page.text,
-    images: page.images.map((image) => ({ mimeType: image.mimeType, bytes: image.bytes })),
-  }));
-  const result = enforceOutput({
-    kind: 'pdf',
-    path: publicPath(target),
-    pageOffset,
-    pageCount: publicPages.length,
-    pages: publicPages,
-  }, maxOutputBytes);
-  const content = [];
-  for (const page of pages) {
-    if (includeImages) content.push(...page.images.map((image) => ({ type: 'image', data: image.data, mimeType: image.mimeType })));
-    content.push({ type: 'text', text: '<!-- Page: ' + page.pageNumber + ' -->\n' + page.text });
-  }
-  const structuredBytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
-  enforceContentBytes(content, Math.max(1, maxOutputBytes - structuredBytes));
-  return { structuredContent: result, content };
+  return withStableStructuredSnapshot({ target, maxInputBytes, sourceBytes: sourceBuffer }, async ({ snapshotPath, baseSha256 }) => {
+    const raw = await callStructuredChild(child, 'readFileStructured', {
+      path: snapshotPath,
+      offset: pageOffset,
+      maxLines: maxPages,
+    }, timeoutMs, STRUCTURED_READ_LIMITS.pdf.rawChildBytes);
+    const pages = parsePdfContent(raw, pageOffset, maxPages, maxTextBytes, maxImages, maxImageBytes, includeImages);
+    const publicPages = pages.map((page) => ({
+      pageNumber: page.pageNumber,
+      text: page.text,
+      images: page.images.map((image) => ({ mimeType: image.mimeType, bytes: image.bytes })),
+    }));
+    const result = enforceOutput({
+      kind: 'pdf',
+      path: publicPath(target),
+      pageOffset,
+      pageCount: publicPages.length,
+      pages: publicPages,
+      baseSha256,
+    }, maxOutputBytes);
+    const content = [];
+    for (const page of pages) {
+      if (includeImages) content.push(...page.images.map((image) => ({ type: 'image', data: image.data, mimeType: image.mimeType })));
+      content.push({ type: 'text', text: '<!-- Page: ' + page.pageNumber + ' -->\n' + page.text });
+    }
+    const structuredBytes = Buffer.byteLength(JSON.stringify(result), 'utf8');
+    enforceContentBytes(content, Math.max(1, maxOutputBytes - structuredBytes));
+    return { structuredContent: result, content };
+  });
 }
 
 function preflightDocx(args, registry, maxXmlBytes) {
@@ -739,7 +841,8 @@ function preflightDocx(args, registry, maxXmlBytes) {
     allowedExtensions: DOCX_EXTENSIONS,
     maxInputBytes,
   });
-  const zip = inspectZip(readBounded(target, maxInputBytes), {
+  const sourceBuffer = readBounded(target, maxInputBytes);
+  const zip = inspectZip(sourceBuffer, {
     maxExpandedBytes: STRUCTURED_READ_LIMITS.docx.expandedBytes,
   });
   requireZipEntry(zip, '[Content_Types].xml');
@@ -748,7 +851,7 @@ function preflightDocx(args, registry, maxXmlBytes) {
   if (!documentEntry || documentEntry.expanded > maxXmlBytes) {
     throw structuredError('DOCX XML byte budget exceeded');
   }
-  return target;
+  return { target, maxInputBytes, sourceBuffer };
 }
 
 function stripDocxMutationHints(text) {
@@ -780,56 +883,60 @@ export async function readDocxWithDesktopCommander(args = {}, registry, child) {
   const maxXmlBytes = assertIntegerBudget(args.maxXmlBytes, STRUCTURED_READ_LIMITS.docx.xmlBytes, STRUCTURED_READ_LIMITS.docx.xmlBytes, 'maxXmlBytes');
   const maxLines = assertIntegerBudget(args.maxLines, STRUCTURED_READ_LIMITS.docx.lines, STRUCTURED_READ_LIMITS.docx.lines, 'maxLines');
   const timeoutMs = assertIntegerBudget(args.timeoutMs, STRUCTURED_READ_LIMITS.docx.timeoutMs, STRUCTURED_READ_LIMITS.docx.timeoutMs, 'timeoutMs');
-  const target = preflightDocx(args, registry, maxXmlBytes);
+  const { target, maxInputBytes, sourceBuffer } = preflightDocx(args, registry, maxXmlBytes);
 
-  if (mode === 'xml') {
-    const requestedOffset = assertNonNegativeInteger(args.offset, 1, maxLines - 1, 'offset');
-    // DesktopCommander 0.2.51 intentionally selects its raw XML child path
-    // only for a non-zero offset. Offset 1 is therefore the bounded raw-read
-    // entry point; the returned typed offset records that child semantic.
-    const childOffset = Math.max(1, requestedOffset);
+  return withStableStructuredSnapshot({ target, maxInputBytes, sourceBytes: sourceBuffer }, async ({ snapshotPath, baseSha256, sourceBytes }) => {
+    if (mode === 'xml') {
+      const requestedOffset = assertNonNegativeInteger(args.offset, 1, maxLines - 1, 'offset');
+      // DesktopCommander 0.2.51 intentionally selects its raw XML child path
+      // only for a non-zero offset. Offset 1 is therefore the bounded raw-read
+      // entry point; the returned typed offset records that child semantic.
+      const childOffset = Math.max(1, requestedOffset);
+      const raw = await callStructuredChild(child, 'readFileStructured', {
+        path: snapshotPath,
+        offset: childOffset,
+        maxLines,
+      }, timeoutMs, STRUCTURED_READ_LIMITS.docx.rawChildBytes);
+      const text = textBlocks(raw);
+      const xml = text.replace(/^\[DOCX XML:[^\n]*\]\n?/iu, '').trim();
+      if (!xml || Buffer.byteLength(xml, 'utf8') > maxXmlBytes) throw structuredError('DOCX XML byte budget exceeded');
+      if (xml.split(/\r?\n/u).length > maxLines) throw structuredError('DOCX XML line budget exceeded');
+      const result = enforceOutput({
+        kind: 'docx',
+        mode,
+        path: publicPath(target),
+        offset: childOffset,
+        xml,
+        truncated: true,
+        baseSha256,
+      }, maxOutputBytes);
+      const content = [{ type: 'text', text: xml }];
+      enforceContentBytes(content, Math.max(1, maxOutputBytes - Buffer.byteLength(JSON.stringify(result), 'utf8')));
+      return { structuredContent: result, content };
+    }
+
     const raw = await callStructuredChild(child, 'readFileStructured', {
-      path: target.canonical,
-      offset: childOffset,
+      path: snapshotPath,
+      offset: 0,
       maxLines,
     }, timeoutMs, STRUCTURED_READ_LIMITS.docx.rawChildBytes);
-    const text = textBlocks(raw);
-    const xml = text.replace(/^\[DOCX XML:[^\n]*\]\n?/iu, '').trim();
-    if (!xml || Buffer.byteLength(xml, 'utf8') > maxXmlBytes) throw structuredError('DOCX XML byte budget exceeded');
-    if (xml.split(/\r?\n/u).length > maxLines) throw structuredError('DOCX XML line budget exceeded');
-    const result = enforceOutput({
+    const outline = parseDocxOutline(textBlocks(raw));
+    const base = {
       kind: 'docx',
       mode,
       path: publicPath(target),
-      offset: childOffset,
-      xml,
-      truncated: true,
-    }, maxOutputBytes);
-    const content = [{ type: 'text', text: xml }];
+      compressedBytes: sourceBytes,
+      baseSha256,
+      bodyChildren: outline.bodyChildren,
+      paragraphs: outline.paragraphs,
+      tables: outline.tables,
+      images: outline.images,
+    };
+    const result = mode === 'info'
+      ? enforceOutput(base, maxOutputBytes)
+      : enforceOutput({ ...base, outline: outline.outline }, maxOutputBytes);
+    const content = mode === 'outline' ? [{ type: 'text', text: outline.outline }] : [];
     enforceContentBytes(content, Math.max(1, maxOutputBytes - Buffer.byteLength(JSON.stringify(result), 'utf8')));
     return { structuredContent: result, content };
-  }
-
-  const raw = await callStructuredChild(child, 'readFileStructured', {
-    path: target.canonical,
-    offset: 0,
-    maxLines,
-  }, timeoutMs, STRUCTURED_READ_LIMITS.docx.rawChildBytes);
-  const outline = parseDocxOutline(textBlocks(raw));
-  const base = {
-    kind: 'docx',
-    mode,
-    path: publicPath(target),
-    compressedBytes: target.size,
-    bodyChildren: outline.bodyChildren,
-    paragraphs: outline.paragraphs,
-    tables: outline.tables,
-    images: outline.images,
-  };
-  const result = mode === 'info'
-    ? enforceOutput(base, maxOutputBytes)
-    : enforceOutput({ ...base, outline: outline.outline }, maxOutputBytes);
-  const content = mode === 'outline' ? [{ type: 'text', text: outline.outline }] : [];
-  enforceContentBytes(content, Math.max(1, maxOutputBytes - Buffer.byteLength(JSON.stringify(result), 'utf8')));
-  return { structuredContent: result, content };
+  });
 }
