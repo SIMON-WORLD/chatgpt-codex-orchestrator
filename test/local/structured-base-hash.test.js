@@ -136,3 +136,126 @@ function structuredResult(callResult) {
   const block = callResult?.content?.find((item) => item.type === 'text');
   return block ? JSON.parse(block.text) : null;
 }
+
+
+test('Issue #156 typed reads return exact whole-file hashes while image/search remain unbroadened', async () => {
+  const fixture = await makeFixture();
+  const child = new DesktopCommanderChild();
+  const workspaceId = fixture.workspace.workspaceId;
+  try {
+    const xlsx = path.join(fixture.primary, 'book.xlsx');
+    const xlsxHash = hashFile(xlsx);
+    const metadata = await readExcelWithDesktopCommander({
+      workspaceId,
+      path: 'book.xlsx',
+      mode: 'metadata',
+      secondaryReadGrants: grants(fixture),
+    }, fixture.registry, child);
+    assert.equal(metadata.structuredContent.baseSha256, xlsxHash);
+    assert.equal(metadata.structuredContent.size, fs.statSync(xlsx).size);
+
+    const values = await readExcelWithDesktopCommander({
+      workspaceId,
+      path: 'book.xlsx',
+      mode: 'values',
+      sheet: 'Data',
+      range: 'A1:B2',
+      maxRows: 2,
+      maxCells: 4,
+      secondaryReadGrants: grants(fixture),
+    }, fixture.registry, child);
+    assert.equal(values.structuredContent.baseSha256, xlsxHash);
+
+    const offsetValues = await readExcelWithDesktopCommander({
+      workspaceId,
+      path: 'book.xlsx',
+      mode: 'values',
+      sheet: 'Data',
+      offset: 1,
+      maxRows: 1,
+      maxCells: 10,
+      secondaryReadGrants: grants(fixture),
+    }, fixture.registry, child);
+    assert.equal(offsetValues.structuredContent.baseSha256, xlsxHash);
+
+    const xlsm = path.join(fixture.primary, 'macro.xlsm');
+    const xlsmHash = hashFile(xlsm);
+    const xlsmMetadata = await readExcelWithDesktopCommander({
+      workspaceId,
+      path: 'macro.xlsm',
+      mode: 'metadata',
+      secondaryReadGrants: grants(fixture),
+    }, fixture.registry, child);
+    const xlsmValues = await readExcelWithDesktopCommander({
+      workspaceId,
+      path: 'macro.xlsm',
+      mode: 'values',
+      sheet: 'Data',
+      range: 'A1:B2',
+      secondaryReadGrants: grants(fixture),
+    }, fixture.registry, child);
+    assert.equal(xlsmMetadata.structuredContent.baseSha256, xlsmHash);
+    assert.equal(xlsmValues.structuredContent.baseSha256, xlsmHash);
+
+    const pdf = path.join(fixture.primary, 'document.pdf');
+    const pdfHash = hashFile(pdf);
+    const partialPdf = await readPdfWithDesktopCommander({
+      workspaceId,
+      path: 'document.pdf',
+      pageOffset: 1,
+      pageCount: 1,
+      includeImages: false,
+      secondaryReadGrants: grants(fixture),
+    }, fixture.registry, child);
+    assert.equal(partialPdf.structuredContent.baseSha256, pdfHash);
+    assert.match(partialPdf.structuredContent.pages[0].text, /Second PDF marker/iu);
+
+    const docx = path.join(fixture.primary, 'document.docx');
+    const docxHash = hashFile(docx);
+    for (const mode of ['outline', 'info', 'xml']) {
+      const result = await readDocxWithDesktopCommander({
+        workspaceId,
+        path: 'document.docx',
+        mode,
+        offset: mode === 'xml' ? 1 : undefined,
+        secondaryReadGrants: grants(fixture),
+      }, fixture.registry, child);
+      assert.equal(result.structuredContent.baseSha256, docxHash);
+      if (mode !== 'xml') assert.equal(result.structuredContent.compressedBytes, fs.statSync(docx).size);
+    }
+
+    for (const [name, reader] of [
+      ['granted.xlsx', (sourcePath) => readExcelWithDesktopCommander({
+        workspaceId, path: sourcePath, mode: 'metadata', secondaryReadGrants: grants(fixture),
+      }, fixture.registry, child)],
+      ['granted.pdf', (sourcePath) => readPdfWithDesktopCommander({
+        workspaceId, path: sourcePath, pageCount: 1, includeImages: false, secondaryReadGrants: grants(fixture),
+      }, fixture.registry, child)],
+      ['granted.docx', (sourcePath) => readDocxWithDesktopCommander({
+        workspaceId, path: sourcePath, mode: 'info', secondaryReadGrants: grants(fixture),
+      }, fixture.registry, child)],
+    ]) {
+      const sourcePath = path.join(fixture.external, name);
+      const result = await reader(sourcePath);
+      assert.equal(result.structuredContent.baseSha256, hashFile(sourcePath));
+    }
+
+    const image = await readImageWithDesktopCommander({
+      workspaceId,
+      path: 'image.png',
+      secondaryReadGrants: grants(fixture),
+    }, fixture.registry, child);
+    assert.equal(Object.hasOwn(image.structuredContent, 'baseSha256'), false);
+
+    const search = await searchExcelWithDesktopCommander({
+      workspaceId,
+      path: 'book.xlsx',
+      query: 'marker',
+      maxResults: 10,
+      secondaryReadGrants: grants(fixture),
+    }, fixture.registry, child);
+    assert.equal(Object.hasOwn(search.structuredContent, 'baseSha256'), false);
+  } finally {
+    await child.close();
+  }
+});
