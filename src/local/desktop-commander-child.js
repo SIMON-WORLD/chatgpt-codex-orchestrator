@@ -344,6 +344,44 @@ export class DesktopCommanderChild {
     return extractTextContent(await this.#callTool('stop_search', args));
   }
 
+  async startProcess({ command, timeoutMs = 5000, shell } = {}) {
+    const text = extractTextContent(await this.#callTool('start_process', {
+      command,
+      timeout_ms: timeoutMs,
+      ...(shell ? { shell } : {}),
+      origin: 'llm',
+    }, { internal: true }));
+    const pid = processPid(text);
+    if (!Number.isInteger(pid) || pid <= 0) throw new DesktopCommanderChildError('UPSTREAM_TOOL_ERROR');
+    return {
+      pid,
+      output: processOutput(text),
+      status: processComplete(text) ? 'completed' : 'running',
+      exitCode: processExitCode(text),
+      truncated: false,
+    };
+  }
+
+  async readProcessOutput({ pid, offset = 0, length = 1000, timeoutMs = 1000 } = {}) {
+    const text = extractTextContent(await this.#callTool('read_process_output', {
+      pid,
+      offset,
+      length,
+      timeout_ms: timeoutMs,
+    }, { internal: true }));
+    return {
+      output: processOutput(text),
+      status: processComplete(text) ? 'completed' : 'running',
+      exitCode: processExitCode(text),
+      truncated: false,
+    };
+  }
+
+  async forceTerminate({ pid } = {}) {
+    extractTextContent(await this.#callTool('force_terminate', { pid }, { internal: true }));
+    return { terminated: true };
+  }
+
   async runGit({ workspaceRoot, mode = 'worktree' } = {}) {
     const command = fixedGitCommand(workspaceRoot, mode);
     const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/sh';
@@ -386,8 +424,8 @@ export class DesktopCommanderChild {
   }
 
   async callTool(name, args = {}) {
-    // Process/session tools stay behind the fixed internal git boundary. The
-    // wrapper never becomes a general shell surface.
+    // Raw process/session tools stay behind parent-owned typed methods. The generic
+    // wrapper never becomes a public child callTool seam.
     if (name === 'start_process' || name === 'read_process_output' || name === 'force_terminate'
         || PARENT_OWNED_MUTATION_TOOLS.has(name)) {
       throw new DesktopCommanderChildError('UPSTREAM_TOOL_NOT_ALLOWED');
