@@ -89,7 +89,7 @@ async function closeContext(ctx) {
   try { ctx.governance.close(); } catch {}
 }
 
-test('Issue #34: fresh bounded session recovers, claims, applies/verifies, records SAME-step RESULT without Parent takeover', async (t) => {
+test('Issue #34/#159: execution claims remain Governance-only while Direct Local mutation is resource-authorized', async (t) => {
   const f = fixture();
   const ctx1 = await startContext(f);
   t.after(() => closeContext(ctx1));
@@ -171,7 +171,7 @@ test('Issue #34: fresh bounded session recovers, claims, applies/verifies, recor
     executionToken: token1,
   });
   assert.equal(staleApply.res.isError, true);
-  assert.match(staleApply.text, /stale_execution_claim/);
+  assert.match(staleApply.text, /taskId|executionToken|unrecognized|invalid/i);
   assert.equal(fs.readFileSync(path.join(f.repo, 'a.txt'), 'utf8'), 'hello world');
 
   const staleVerify = await call(ctx2.client, 'verify', {
@@ -181,7 +181,7 @@ test('Issue #34: fresh bounded session recovers, claims, applies/verifies, recor
     executionToken: token1,
   });
   assert.equal(staleVerify.res.isError, true);
-  assert.match(staleVerify.text, /stale_execution_claim/);
+  assert.match(staleVerify.text, /taskId|executionToken|unrecognized|invalid/i);
 
   const staleResult = await call(ctx2.client, 'governance_record_result', {
     taskId: 't1', stepId: 's1', executionToken: token1, executorStatus: 'success',
@@ -225,8 +225,6 @@ test('Issue #34: fresh bounded session recovers, claims, applies/verifies, recor
     workspaceId: ws2.workspaceId,
     mode: 'apply',
     changeSetId: preview.changeSetId,
-    taskId: 't1',
-    executionToken: token2,
   })).text);
   assert.equal(applied.status, 'applied');
   assert.equal(fs.readFileSync(path.join(f.repo, 'a.txt'), 'utf8'), 'hello there');
@@ -234,8 +232,6 @@ test('Issue #34: fresh bounded session recovers, claims, applies/verifies, recor
   const verified = JSON.parse((await call(ctx2.client, 'verify', {
     workspaceId: ws2.workspaceId,
     check: 'effectful',
-    taskId: 't1',
-    executionToken: token2,
   })).text);
   assert.equal(verified.passed, true);
 
@@ -292,6 +288,15 @@ test('Issue #34: fresh bounded session recovers, claims, applies/verifies, recor
     executionToken: token3,
   });
   assert.equal(fencedApply.res.isError, true);
-  assert.match(fencedApply.text, /stale_execution_claim/);
+  assert.match(fencedApply.text, /taskId|executionToken|unrecognized|invalid/i);
   assert.equal(fs.readFileSync(path.join(f.repo, 'a.txt'), 'utf8'), 'hello there');
+
+  // Parent Governance fencing no longer gates ordinary Direct Local resource mutation.
+  const independentApply = JSON.parse((await call(ctx2.client, 'edit', {
+    workspaceId: ws2.workspaceId,
+    mode: 'apply',
+    changeSetId: preview2.changeSetId,
+  })).text);
+  assert.equal(independentApply.status, 'applied');
+  assert.equal(fs.readFileSync(path.join(f.repo, 'a.txt'), 'utf8'), 'hello again');
 });
