@@ -11,6 +11,7 @@ import { searchWithOptions } from '../local/search.js';
 import { fileInfoWithDesktopCommander, filenameSearchWithDesktopCommander, listDirectoryWithDesktopCommander, readMultipleFilesWithDesktopCommander } from '../local/filesystem.js';
 import { gitStatus, gitDiff } from '../local/git.js';
 import { DesktopCommanderChild, COMPOSITE_EDIT_BOUNDARY_BLOCKED } from '../local/desktop-commander-child.js';
+import { ProcessService, PROCESS_LIMITS } from '../local/process.js';
 import { WorkspaceError } from '../local/workspace.js';
 import { ChangeSetService } from '../local/change-set.js';
 import { FilesystemMutationService } from '../local/filesystem-mutation.js';
@@ -40,6 +41,8 @@ const GOVERNANCE_PLAN_ANNOTATIONS = { readOnlyHint: false, destructiveHint: fals
 const GOVERNANCE_TASK_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 const GOVERNANCE_TAKEOVER_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 const GOVERNANCE_TRANSITION_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
+const PROCESS_START_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: true };
+const PROCESS_TERMINATE_ANNOTATIONS = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 function text(result) { return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }; }
 function structured(result) {
@@ -99,7 +102,7 @@ function requireTaskMutationAuth(governance, workspaceRegistry, { workspaceId = 
   return res.taskId;
 }
 
-export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, filesystemMutationService = null, excelMutationService = null, docxMutationService = null, pdfMutationService = null, verifyService = null, operationState = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, desktopCommanderChild = null } = {}) {
+export function createToolsServer({ workspaceRegistry, appServerExecutor = null, mutationOwner = null, changeSetService = null, filesystemMutationService = null, excelMutationService = null, docxMutationService = null, pdfMutationService = null, verifyService = null, operationState = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, desktopCommanderChild = null, processService = null } = {}) {
   const child = desktopCommanderChild || new DesktopCommanderChild();
   // Shared mutation-ownership authority: when a Codex executor is present, Direct
   // Local mutation MUST use the SAME owner instance.
@@ -126,6 +129,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   const docxMutation = docxMutationService || (owner ? new DocxMutationService({ workspaceRegistry, mutationOwner: owner, desktopCommanderChild: child }) : null);
   const pdfMutation = pdfMutationService || (owner ? new PdfMutationService({ workspaceRegistry, mutationOwner: owner, desktopCommanderChild: child }) : null);
   const verify = verifyService || (owner && hasVerifyChecks ? new VerifyService({ workspaceRegistry, mutationOwner: owner, verifyChecks }) : null);
+  const processes = processService || new ProcessService({ workspaceRegistry, desktopCommanderChild: child });
 
   const server = new McpServer({ name: 'chatgpt-codex-orchestrator', version: '0.2.0-dev' });
   const router = capabilityRouter || createCapabilityRouter();
@@ -148,6 +152,47 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   },
   async ({ path, fixture, secondaryReadGrants }) => {
     try { return text(workspaceRegistry.open({ path, fixture, secondaryReadGrants })); }
+    catch (e) { return errText(e.message); }
+  });
+
+  server.registerTool('process_start', {
+    description: 'Start one bounded command on the authorized device endpoint. General process execution can mutate device state and access files, network, and other resources permitted to the Stable Runtime OS user. workspaceId validates and sets the initial working-directory context; it is not a shell sandbox. The pinned DesktopCommander command policy remains authoritative.',
+    annotations: PROCESS_START_ANNOTATIONS,
+    inputSchema: z.object({
+      workspaceId: workspaceIdSchema,
+      command: z.string().min(1).max(PROCESS_LIMITS.commandBytes),
+      shell: z.enum(['default', 'powershell', 'pwsh', 'cmd', 'sh']).optional(),
+      timeoutMs: z.number().int().min(1).max(PROCESS_LIMITS.startTimeoutMs).optional(),
+    }).strict(),
+  }, async (args) => {
+    try { return text(await processes.start(args)); }
+    catch (e) { return errText(e.message); }
+  });
+
+  server.registerTool('process_read_output', {
+    description: 'Read bounded output and state for one opaque processHandle created by this Local Connector runtime and bound to the same workspace/device context. Raw OS process identifiers are never accepted or returned.',
+    annotations: R,
+    inputSchema: z.object({
+      workspaceId: workspaceIdSchema,
+      processHandle: z.string().min(1).max(128),
+      offset: z.number().int().min(-PROCESS_LIMITS.maxOffset).max(PROCESS_LIMITS.maxOffset).optional(),
+      length: z.number().int().min(1).max(PROCESS_LIMITS.maxReadLines).optional(),
+      timeoutMs: z.number().int().min(1).max(PROCESS_LIMITS.readTimeoutMs).optional(),
+    }).strict(),
+  }, async (args) => {
+    try { return text(await processes.readOutput(args)); }
+    catch (e) { return errText(e.message); }
+  });
+
+  server.registerTool('process_terminate', {
+    description: 'Terminate one active opaque processHandle created by this Local Connector runtime after exact workspace/device ownership validation. Arbitrary OS PIDs are never accepted. This operation is destructive-capable but closed-world to the already-created local process handle.',
+    annotations: PROCESS_TERMINATE_ANNOTATIONS,
+    inputSchema: z.object({
+      workspaceId: workspaceIdSchema,
+      processHandle: z.string().min(1).max(128),
+    }).strict(),
+  }, async (args) => {
+    try { return text(await processes.terminate(args)); }
     catch (e) { return errText(e.message); }
   });
 
