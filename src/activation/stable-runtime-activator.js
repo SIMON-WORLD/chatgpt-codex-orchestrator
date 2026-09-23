@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadV02Config } from '../config.js';
+import { FILESYSTEM_SCOPE_POLICIES, loadV02Config } from '../config.js';
 
 const EXACT_SHA_RE = /^[0-9a-f]{40}$/i;
 const STATE_FILE = 'stable-runtime-active.json';
@@ -34,6 +34,7 @@ export function stableProfileSnapshot(config) {
     dataRoot: config.dataRoot,
     governanceNamespace: config.governanceNamespace || 'default',
     workspaceRoots: [...(config.workspaceRoots || [])],
+    filesystemScope: config.filesystemScope || FILESYSTEM_SCOPE_POLICIES.SELECTED_ROOTS,
     worktree: {
       poolRoot: config.worktree?.poolRoot || null,
       trustedRepos: [...(config.worktree?.trustedRepos || [])],

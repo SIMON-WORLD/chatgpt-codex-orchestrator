@@ -10,6 +10,7 @@
 //   { mcp, localMcp, appServer, tunnel, workspace, healthz, readyz, readyForChatGPT }
 
 import { createBrainLocalRuntime, loadV02Config } from '../src/transport/brain-local.js';
+import { FILESYSTEM_SCOPE_POLICIES } from '../src/config.js';
 
 function parseArgs(argv) {
   const out = {};
@@ -48,8 +49,8 @@ try {
   process.exit(2);
 }
 
-if (!config.workspaceRoots.length) {
-  process.stderr.write('v0.2 runtime requires a workspace root (--workspace-root or config.workspaceRoot/workspaceRoots)\n');
+if (!config.workspaceRoots.length && config.filesystemScope !== FILESYSTEM_SCOPE_POLICIES.OS_USER_SCOPE) {
+  process.stderr.write('v0.2 runtime requires a workspace root (--workspace-root or config.workspaceRoot/workspaceRoots) for selected_roots scope\n');
   process.exit(2);
 }
 
