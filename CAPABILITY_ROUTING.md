@@ -35,7 +35,7 @@ Project-level Parent 是持续的 logical role，不等于某一条 conversation
 
 - **Full Parent replacement**：新 session 被明确指定为 ongoing project Parent，并在需要时完成 overlapping writer / Local Governance reconciliation；之后它持续承担 project-level Parent role，直到后续明确 superseded。完成某一个 mission 本身不终止 ongoing Parent role。
 - **Bounded Parent delegation / takeover**：session 只在明确 Issue / mission / mutation scope 内临时使用 Parent authority；scope 完成后该授权结束，不因此自动成为 ongoing project Parent。
-- Conversation title、`Gnn`、`ACTIVE/RETIRED` 标签或其他人类可读编号都不授予 authority。进入 Local Capability Plane 时，现有 durable Governance authority generation / fencing / execution-claim semantics 仍是 machine-enforced control truth。
+- Conversation title、`Gnn`、`ACTIVE/RETIRED` 标签或其他人类可读编号都不授予 authority。对显式进入 Governance mission control / Brain Continuity / Codex sustained execution 的路径，现有 durable Governance authority generation / fencing / execution-claim semantics 仍是对应控制面的 machine-enforced truth；**ordinary Direct Local read/write 不以这些 mission tokens 作为设备或资源授权条件**。
 - `Gnn` 只表示同一个 durable ongoing Parent 的 human-facing conversation continuity ordinal；当前采用从 `G01` 开始，不回溯计数 adoption 前的历史 conversation。它不是 project-level registry，也不把 task-scoped Governance generation 重新解释为 project Parent generation。Human-facing discoverability 不得制造第二套 authority source。
 
 ### Thin Parent / Strong Mission
@@ -82,7 +82,7 @@ Outcome Preservation Fence：Human-authorized North Star / outcome 在被 Human 
 
 在 project / milestone `ACCEPT / DONE` 前，每个尚未 delivered 的 material original outcome element 必须有一个 explicit disposition：`DELIVERED`、`ROUTED_ELSEWHERE_WITH_EQUIVALENT_OUTCOME`、`DEFERRED`、`REJECTED_WITH_MATERIAL_REASON` 或 `SUPERSEDED_BY_HUMAN_DECISION`。这一 fence 是 acceptance discipline，不引入 requirements DB、traceability service、watcher / scheduler、scorecard、static capability registry 或新的 Governance runtime / schema。
 
-Bounded implementation-session continuity 使用 execution claim 时，该 claim 只授权已经 Parent-approved 的 current task/step/workspace Direct Local execution；它不授予 Parent generation，也不能发起 `PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE`、Parent takeover、scope/acceptance 变化或 project-level final decision。
+Bounded implementation-session continuity 使用 execution claim 时，该 claim 只用于已经 Parent-approved 的 current task/step 的 **Governance continuation / RESULT accounting**；它不授予 Parent generation，也不能发起 `PLAN/TASK/REVISE/REPLAN/ASK_USER/PUBLISH/DONE`、Parent takeover、scope/acceptance 变化或 project-level final decision。Ordinary Direct Local file/workspace operation 不要求、也不公开接收 execution claim。
 
 Session naming：
 
@@ -156,6 +156,24 @@ Executor RESULT 不是 Brain truth。能由 Brain 直接取得的 authoritative 
 
 - `CHATGPT_DIRECT_LOCAL`：workspace-scoped read/search/status/diff、small bounded edit、allowlisted verify；
 - `CODEX_DELEGATE`：multi-file coding、unknown-root-cause debugging、refactor、shell-heavy work、iterative tests/builds、sustained local execution。
+
+Ordinary Direct Local 的授权 layering 是：
+
+```text
+ChatGPT account / connected provider authorization
+        ↓
+authorized device endpoint / Secure Tunnel
+        ↓
+workspaceId + host trust ceiling + workspace/resource scope
+        ↓
+ordinary Direct Local read/write capability
+
+optional overlays:
+Governance mission control / Brain Continuity / acceptance
+Codex sustained executor
+```
+
+`workspaceId` 是当前设备 endpoint 内的 local resource handle：它绑定 primary workspace 与显式 secondary read-only grants；它不是 task/Parent/step identity，也不隐含某个 project-authoritative Governance task 拥有整台机器。未来即使 account-level provider 在多个 authorized device endpoint 间路由，ordinary file-operation semantics 仍保持资源级而不是 mission-token 级。
 
 ## 4. Route / Capability / Provider
 
@@ -362,11 +380,13 @@ Executor RESULT / self-report
 
 ## 9. Governance Semantics
 
-Governance 属于 Brain control semantics，不等于 Local MCP transport。
+Governance 属于 Brain control semantics，不等于 Local MCP transport，也不等于 ordinary Local Connector authorization。
 
-Native-only 任务不应为了形式统一强制经过 Secure Tunnel / Local MCP。
+Native-only 任务不应为了形式统一强制经过 Secure Tunnel / Local MCP。反过来，ordinary Direct Local 任务也不应为了形式统一先创建/恢复 Governance task、取得 Parent authority 或 execution claim。
 
-当任务进入 Local Capability Plane 时，Local Governance Service 负责 local execution lifecycle 的持久控制与证据记录；Brain 仍拥有最终 `ACCEPT / REVISE / DONE`。
+对 ordinary Direct Local read/write，连接到已授权 Local Connector/device endpoint 后，由 `workspaceId`、host trust ceiling、primary/secondary resource scope 与 operation-specific safety checks 直接授权；普通 `edit/filesystem/Excel/DOCX/PDF/workspace-effect verify` 不公开或验证 `taskId/authorityToken/executionToken`。
+
+Governance Service 继续作为 **optional orchestration overlay**：显式 mission 可以使用 PLAN/TASK/RESULT/REVISE、Brain Continuity、acceptance/evidence lifecycle 等 durable control；这些控制不得成为 routine local file capability 的 prerequisite，也不得由 ordinary Direct Local operation 隐式创建、推进或修改。Codex sustained-execution 的现有 Governance/authority contract 在本层保持独立、未由 ordinary Direct Local 简化自动放宽。Brain 仍拥有最终 `ACCEPT / REVISE / DONE`。
 
 ## 10. Mutation Policy
 
