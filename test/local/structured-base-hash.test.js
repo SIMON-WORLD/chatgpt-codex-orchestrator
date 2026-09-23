@@ -578,7 +578,7 @@ test('Issue #156 returned baseSha256 composes with unchanged Excel/PDF/DOCX muta
     range: 'Data!A2:A2',
     values: [['should reject']],
     expectedBaseSha256: staleExcelRead.structuredContent.baseSha256,
-  }), /stale Excel base hash/iu);
+  }), /stale Excel (?:workbook )?base hash/iu);
 
   const stalePdf = path.join(fixture.primary, 'stale.pdf');
   await makePdf(stalePdf, ['A', 'B']);
