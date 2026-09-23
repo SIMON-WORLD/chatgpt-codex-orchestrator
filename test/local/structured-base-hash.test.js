@@ -424,3 +424,70 @@ test('Issue #156 provider failure and timeout both clean private scratch state',
   assert.ok(timeoutPath);
   assert.equal(fs.existsSync(path.dirname(timeoutPath)), false);
 });
+
+
+test('Issue #156 public MCP exposes baseSha256 only on the three mutation-relevant typed reads', async (t) => {
+  const fixture = await makeFixture();
+  const seen = [];
+  const fakeChild = {
+    async getFileInfo({ path: filePath }) {
+      seen.push(filePath);
+      return { content: [{ type: 'text', text: '[0] { name: Data, rowCount: 3, colCount: 2 }' }] };
+    },
+    async readFileStructured({ path: filePath, offset = 0 }) {
+      seen.push(filePath);
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext === '.pdf') return { content: [{ type: 'text', text: '<!-- Page: 1 -->\nMCP PDF' }] };
+      if (ext === '.docx') {
+        if (offset > 0) return { content: [{ type: 'text', text: '[DOCX XML: snapshot]\n<w:document xmlns:w="x"><w:body/></w:document>' }] };
+        return { content: [{ type: 'text', text: 'DOCX Outline: 1 body children, 1 paragraphs, 0 tables, 0 images\nMCP DOCX' }] };
+      }
+      return { content: [{ type: 'text', text: '[[\"mcp\"]]' }] };
+    },
+  };
+  const server = await startMcpServer({
+    workspaceRegistry: fixture.registry,
+    host: '127.0.0.1',
+    port: 0,
+    desktopCommanderChild: fakeChild,
+  });
+  t.after(() => server.close());
+  const client = new Client({ name: 'issue156-base-hash', version: '1.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(server.url));
+  t.after(() => client.close());
+
+  const listed = await client.listTools();
+  const byName = Object.fromEntries(listed.tools.map((tool) => [tool.name, tool]));
+  for (const name of ['read_excel', 'read_pdf', 'read_docx']) {
+    assert.match(byName[name].description, /baseSha256/u);
+  }
+  for (const name of ['read_image', 'search_excel', 'read', 'file_info']) {
+    assert.doesNotMatch(byName[name].description, /baseSha256/u);
+  }
+  assert.equal(Object.hasOwn(byName, 'hash_file'), false);
+
+  const workspaceId = fixture.workspace.workspaceId;
+  const excel = await client.callTool({
+    name: 'read_excel',
+    arguments: { workspaceId, path: 'book.xlsx', mode: 'metadata' },
+  });
+  const pdf = await client.callTool({
+    name: 'read_pdf',
+    arguments: { workspaceId, path: 'document.pdf', pageCount: 1, includeImages: false },
+  });
+  const docx = await client.callTool({
+    name: 'read_docx',
+    arguments: { workspaceId, path: 'document.docx', mode: 'info' },
+  });
+
+  assert.equal(structuredResult(excel).baseSha256, hashFile(path.join(fixture.primary, 'book.xlsx')));
+  assert.equal(structuredResult(pdf).baseSha256, hashFile(path.join(fixture.primary, 'document.pdf')));
+  assert.equal(structuredResult(docx).baseSha256, hashFile(path.join(fixture.primary, 'document.docx')));
+
+  const publicPayload = JSON.stringify([excel, pdf, docx]);
+  for (const snapshotPath of seen) {
+    assert.equal(fs.existsSync(path.dirname(snapshotPath)), false);
+    assert.equal(publicPayload.includes(snapshotPath), false);
+    assert.equal(publicPayload.includes(snapshotPath.replace(/\\/g, '/')), false);
+  }
+});
