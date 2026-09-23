@@ -56,11 +56,6 @@ function errText(message) { return { content: [{ type: 'text', text: 'error: ' +
 const workspaceIdSchema = z.string().min(1);
 const mutationPathSchema = z.string().min(1).max(4096);
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/iu);
-const directLocalMutationAuthFields = {
-  taskId: z.string().optional(),
-  authorityToken: z.string().optional(),
-  executionToken: z.string().optional(),
-};
 const excelCellSchema = z.union([z.string().max(1024 * 1024), z.number().finite(), z.boolean(), z.null()]);
 const excelValuesSchema = z.array(z.array(excelCellSchema).min(1).max(50000)).min(1).max(2000);
 const pdfOperationsSchema = z.array(z.union([
@@ -92,31 +87,14 @@ function assertSameWorkspace(registry, workspaceId, job) {
 }
 
 // Parent-token task-scoped mutation authorization (Issue #29, durable Governance only).
-// workspaceId/jobId/changeSetId are lookup selectors, never mission authority. This path
-// remains the ONLY authorization path for new Codex turns and all Parent-controlled
-// mutation categories.
+// workspaceId/jobId are lookup selectors, never mission authority. This path remains the
+// authorization boundary for new Codex turns. Ordinary Direct Local resource mutations
+// are intentionally authorized by the connected device endpoint + workspace/resource
+// scope instead and do not consume Governance mission authority.
 function requireTaskMutationAuth(governance, workspaceRegistry, { workspaceId = null, taskId = null, authorityToken = null } = {}) {
   if (!governance || typeof governance.authorizeMutation !== 'function') return taskId || null;
   if (!workspaceId) throw new WorkspaceError('workspaceId is required for an authorized mutation');
   const ws = workspaceRegistry.get(workspaceId);
-  const res = governance.authorizeMutation({ taskId: taskId || null, authorityToken: authorityToken || null, workspaceRoot: ws.root });
-  return res.taskId;
-}
-
-// Direct Local execution authorization (Issue #34). Parent authority remains valid for
-// backward compatibility; a bounded execution token is accepted only by the dedicated
-// durable authorizeExecution gate, which is step/route/workspace scoped. Never use this
-// helper for Codex or Governance control tools.
-function requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId = null, taskId = null, authorityToken = null, executionToken = null } = {}) {
-  if (!governance || typeof governance.authorizeMutation !== 'function') return taskId || null;
-  if (!workspaceId) throw new WorkspaceError('workspaceId is required for an authorized mutation');
-  if (authorityToken != null && executionToken != null) throw new WorkspaceError('provide either authorityToken or executionToken, not both');
-  const ws = workspaceRegistry.get(workspaceId);
-  if (executionToken != null) {
-    if (typeof governance.authorizeExecution !== 'function') throw new WorkspaceError('bounded execution claims are not supported by this governance runtime');
-    const res = governance.authorizeExecution({ taskId: taskId || null, executionToken, workspaceRoot: ws.root });
-    return res.taskId;
-  }
   const res = governance.authorizeMutation({ taskId: taskId || null, authorityToken: authorityToken || null, workspaceRoot: ws.root });
   return res.taskId;
 }
@@ -192,7 +170,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
     async ({ workspaceId, query, path, maxResults }) => { try { return text(await searchWithOptions({ workspaceId, query, path, maxResults, secondaryReadGrants: secondaryReadGrantsFor(workspaceId) }, workspaceRegistry, { child })); } catch (e) { return errText(e.message); } });
 
   server.registerTool('read_image', {
-    description: 'Read one authorized local PNG/JPEG/GIF/WebP/BMP through the exact pinned DesktopCommander image path. Parent-owned signature, authority, input/output byte bounds, and typed MCP image content. SVG is blocked.',
+    description: 'Read one authorized local PNG/JPEG/GIF/WebP/BMP through the exact pinned DesktopCommander image path. Server-owned signature/resource-policy checks, input/output byte bounds, and typed MCP image content. SVG is blocked.',
     annotations: R,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
@@ -210,7 +188,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   });
 
   server.registerTool('read_excel', {
-    description: 'Read authorized .xlsx/.xlsm workbook metadata or bounded sheet/range values through a private parent-owned stable snapshot and the exact pinned child ExcelJS path. Successful results include the whole-file baseSha256 for expectedBaseSha256 composition. Parent owns ZIP, authority, row/cell/input/result budgets. Legacy .xls and all writes/formula creation are blocked.',
+    description: 'Read authorized .xlsx/.xlsm workbook metadata or bounded sheet/range values through a private server-owned stable snapshot and the exact pinned child ExcelJS path. Successful results include the whole-file baseSha256 for expectedBaseSha256 composition. The server owns ZIP/resource-policy and row/cell/input/result budgets. Legacy .xls and all writes/formula creation are blocked.',
     annotations: R,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
@@ -234,7 +212,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   });
 
   server.registerTool('search_excel', {
-    description: 'Targeted literal content search in one authorized .xlsx/.xlsm workbook through the pinned child ExcelJS path. Parent owns authority and result/input budgets; no recursive arbitrary search and no .xls/write surface.',
+    description: 'Targeted literal content search in one authorized .xlsx/.xlsm workbook through the pinned child ExcelJS path. The server owns resource-policy and result/input budgets; no recursive arbitrary search and no .xls/write surface.',
     annotations: R,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
@@ -254,7 +232,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   });
 
   server.registerTool('read_pdf', {
-    description: 'Read bounded pages and text from one authorized local PDF through a private parent-owned stable snapshot and the exact pinned child PDF path, preserving typed bounded embedded image blocks. Successful results include the whole-file baseSha256 for expectedBaseSha256 composition. Parent owns page/text/image/input/output budgets, timeout/recovery, authority, and local-only dispatch. No metadata-only shortcut, creation, or mutation.',
+    description: 'Read bounded pages and text from one authorized local PDF through a private server-owned stable snapshot and the exact pinned child PDF path, preserving typed bounded embedded image blocks. Successful results include the whole-file baseSha256 for expectedBaseSha256 composition. The server owns page/text/image/input/output budgets, timeout/recovery, resource-policy enforcement, and local-only dispatch. No metadata-only shortcut, creation, or mutation.',
     annotations: R,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
@@ -279,7 +257,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   });
 
   server.registerTool('read_docx', {
-    description: 'Read an authorized .docx outline, bounded raw XML page, or safe bounded info through a private parent-owned stable snapshot and the exact pinned child DOCX path. Successful results include the whole-file baseSha256 for expectedBaseSha256 composition. Parent owns authority, ZIP/decompressed/XML/output/timeout budgets and recovery. No arbitrary XML edit, text edit, or create surface.',
+    description: 'Read an authorized .docx outline, bounded raw XML page, or safe bounded info through a private server-owned stable snapshot and the exact pinned child DOCX path. Successful results include the whole-file baseSha256 for expectedBaseSha256 composition. The server owns resource-policy enforcement, ZIP/decompressed/XML/output/timeout budgets and recovery. No arbitrary XML edit, text edit, or create surface.',
     annotations: R,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
@@ -323,21 +301,18 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   // ---- Direct Local bounded edit (M3) -------------------------------------
   if (changeSet) {
     server.registerTool('edit', {
-      description: 'Two-phase bounded Direct Local edit (preview or apply). One target file, base-hash stale-write protection, atomic apply. Durable apply accepts current Parent authority or a current-step bounded execution claim.',
+      description: 'Two-phase bounded Direct Local edit (preview or apply). One target file, base-hash stale-write protection, atomic apply. Authorization is the connected Local Connector device endpoint plus workspace/resource scope; no Governance task, Parent-authority, or execution-claim token is required.',
       annotations: DIRECT_LOCAL_DESTRUCTIVE_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         mode: z.enum(['preview', 'apply']),
         changeSetId: z.string().optional(),
         change: z.object({ path: z.string(), baseHash: z.string().nullable().optional(), replacements: z.array(z.object({ oldText: z.string(), newText: z.string(), expectedOccurrences: z.number().int().positive().optional() })).optional(), createContent: z.string().nullable().optional() }).optional(),
-        taskId: z.string().optional(),
-        authorityToken: z.string().optional(),
-        executionToken: z.string().optional(),
-      }),
-    }, async ({ workspaceId, mode, changeSetId, change, taskId, authorityToken, executionToken }) => {
+      }).strict(),
+    }, async ({ workspaceId, mode, changeSetId, change }) => {
       try {
         if (mode === 'preview') return text(await changeSet.preview({ workspaceId, change }));
-        if (mode === 'apply') { requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken }); return text(await changeSet.apply({ workspaceId, changeSetId })); }
+        if (mode === 'apply') return text(await changeSet.apply({ workspaceId, changeSetId }));
         return errText('unsupported edit mode');
       } catch (e) { return errText(e.message); }
     });
@@ -348,36 +323,28 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   // wrappers. The public generic child callTool seam remains unavailable.
   if (filesystemMutation) {
     server.registerTool('filesystem_create_directory', {
-      description: 'Create one bounded directory inside the primary workspace through the exact pinned DesktopCommander child. The destination must not already exist; no existing entry is overwritten. Parent owns containment, symlink/junction checks, collision checks, MutationOwner, and deterministic post-readback. Secondary writes and traversal are rejected.',
+      description: 'Create one bounded directory inside the primary workspace through the exact pinned DesktopCommander child. The destination must not already exist; no existing entry is overwritten. The server enforces containment, symlink/junction checks, collision checks, MutationOwner, and deterministic post-readback. Secondary writes and traversal are rejected; no Governance mission token is required.',
       annotations: DIRECT_LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         path: z.string().min(1).max(4096),
-        taskId: z.string().optional(),
-        authorityToken: z.string().optional(),
-        executionToken: z.string().optional(),
       }).strict(),
-    }, async ({ workspaceId, path: directoryPath, taskId, authorityToken, executionToken }) => {
+    }, async ({ workspaceId, path: directoryPath }) => {
       try {
-        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
         return text(await filesystemMutation.createDirectory({ workspaceId, path: directoryPath }));
       } catch (e) { return errText(e.message); }
     });
 
     server.registerTool('filesystem_move', {
-      description: 'Move one bounded primary-workspace file or directory through the exact pinned DesktopCommander child. Parent owns source/destination containment, symlink/junction checks, collision/type checks, MutationOwner, and deterministic post-readback. Cross-root, traversal, secondary, and delete-like destinations are rejected.',
+      description: 'Move one bounded primary-workspace file or directory through the exact pinned DesktopCommander child. The server enforces source/destination containment, symlink/junction checks, collision/type checks, MutationOwner, and deterministic post-readback. Cross-root, traversal, secondary, and delete-like destinations are rejected; no Governance mission token is required.',
       annotations: DIRECT_LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         source: z.string().min(1).max(4096),
         destination: z.string().min(1).max(4096),
-        taskId: z.string().optional(),
-        authorityToken: z.string().optional(),
-        executionToken: z.string().optional(),
       }).strict(),
-    }, async ({ workspaceId, source, destination, taskId, authorityToken, executionToken }) => {
+    }, async ({ workspaceId, source, destination }) => {
       try {
-        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
         return text(await filesystemMutation.movePath({ workspaceId, source, destination }));
       } catch (e) { return errText(e.message); }
     });
@@ -385,7 +352,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
 
   if (excelMutation) {
     server.registerTool('excel_write_range', {
-      description: 'Write a bounded primary-workspace .xlsx/.xlsm cell range through the exact pinned DesktopCommander child or the bounded .xlsm fidelity path. Leading-equals strings remain literal values; formula creation, legacy .xls, secondary writes, and arbitrary child arguments are unsupported. Requires a matching base hash and Direct Local mutation authorization.',
+      description: 'Write a bounded primary-workspace .xlsx/.xlsm cell range through the exact pinned DesktopCommander child or the bounded .xlsm fidelity path. Leading-equals strings remain literal values; formula creation, legacy .xls, secondary writes, and arbitrary child arguments are unsupported. Requires a matching base hash; workspace/resource authorization is sufficient and no Governance mission token is required.',
       annotations: DIRECT_LOCAL_DESTRUCTIVE_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
@@ -393,11 +360,9 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         range: z.string().min(3).max(256),
         values: excelValuesSchema,
         expectedBaseSha256: sha256Schema,
-        ...directLocalMutationAuthFields,
       }).strict(),
-    }, async ({ workspaceId, path: filePath, range, values, expectedBaseSha256, taskId, authorityToken, executionToken }) => {
+    }, async ({ workspaceId, path: filePath, range, values, expectedBaseSha256 }) => {
       try {
-        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
         return text(await excelMutation.mutateRange({ workspaceId, path: filePath, range, values, expectedBaseSha256 }));
       } catch (e) { return errText(e.message); }
     });
@@ -405,7 +370,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
 
   if (docxMutation) {
     server.registerTool('docx_edit_text', {
-      description: 'Replace an exact bounded number of visible text occurrences in a primary-workspace .docx through the exact pinned DesktopCommander child and atomic parent-owned temporary package. Raw XML mutation, secondary writes, and arbitrary child arguments are unsupported. Requires a matching base hash and Direct Local mutation authorization.',
+      description: 'Replace an exact bounded number of visible text occurrences in a primary-workspace .docx through the exact pinned DesktopCommander child and an atomic server-owned temporary package. Raw XML mutation, secondary writes, and arbitrary child arguments are unsupported. Requires a matching base hash; workspace/resource authorization is sufficient and no Governance mission token is required.',
       annotations: DIRECT_LOCAL_DESTRUCTIVE_IDEMPOTENT_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
@@ -414,27 +379,23 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
         replace: z.string().max(64 * 1024),
         expectedOccurrences: z.number().int().min(1).max(100),
         expectedBaseSha256: sha256Schema,
-        ...directLocalMutationAuthFields,
       }).strict(),
-    }, async ({ workspaceId, path: filePath, find, replace, expectedOccurrences, expectedBaseSha256, taskId, authorityToken, executionToken }) => {
+    }, async ({ workspaceId, path: filePath, find, replace, expectedOccurrences, expectedBaseSha256 }) => {
       try {
-        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
         return text(await docxMutation.editText({ workspaceId, path: filePath, find, replace, expectedOccurrences, expectedBaseSha256 }));
       } catch (e) { return errText(e.message); }
     });
 
     server.registerTool('docx_create_text', {
-      description: 'Create one bounded text-based .docx in the primary workspace through the exact pinned DesktopCommander child and atomic parent-owned temporary package. The destination must not already exist; no existing document is overwritten. PDF/browser creation, raw XML mutation, secondary writes, and arbitrary child arguments are unsupported. Requires Direct Local mutation authorization.',
+      description: 'Create one bounded text-based .docx in the primary workspace through the exact pinned DesktopCommander child and an atomic server-owned temporary package. The destination must not already exist; no existing document is overwritten. PDF/browser creation, raw XML mutation, secondary writes, and arbitrary child arguments are unsupported. Workspace/resource authorization is sufficient and no Governance mission token is required.',
       annotations: DIRECT_LOCAL_ADDITIVE_IDEMPOTENT_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         path: mutationPathSchema,
         text: z.string().max(1024 * 1024),
-        ...directLocalMutationAuthFields,
       }).strict(),
-    }, async ({ workspaceId, path: filePath, text: content, taskId, authorityToken, executionToken }) => {
+    }, async ({ workspaceId, path: filePath, text: content }) => {
       try {
-        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
         return text(await docxMutation.createText({ workspaceId, path: filePath, text: content }));
       } catch (e) { return errText(e.message); }
     });
@@ -442,18 +403,16 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
 
   if (pdfMutation) {
     server.registerTool('pdf_mutate_pages', {
-      description: 'Delete pages or insert an existing PDF into a primary-workspace .pdf using bounded 1-based operations through the exact pinned DesktopCommander child and atomic parent-owned temporary output. Insert sources may use the workspace handle’s explicit secondary read grants; destinations are always primary-only. Markdown/browser creation, cheap metadata, SVG, and arbitrary child arguments are unsupported.',
+      description: 'Delete pages or insert an existing PDF into a primary-workspace .pdf using bounded 1-based operations through the exact pinned DesktopCommander child and atomic server-owned temporary output. Insert sources may use the workspace handle’s explicit secondary read grants; destinations are always primary-only. Markdown/browser creation, cheap metadata, SVG, and arbitrary child arguments are unsupported; no Governance mission token is required.',
       annotations: DIRECT_LOCAL_DESTRUCTIVE_ANNOTATIONS,
       inputSchema: z.object({
         workspaceId: workspaceIdSchema,
         path: mutationPathSchema,
         operations: pdfOperationsSchema,
         expectedBaseSha256: sha256Schema,
-        ...directLocalMutationAuthFields,
       }).strict(),
-    }, async ({ workspaceId, path: filePath, operations, expectedBaseSha256, taskId, authorityToken, executionToken }) => {
+    }, async ({ workspaceId, path: filePath, operations, expectedBaseSha256 }) => {
       try {
-        requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken });
         return text(await pdfMutation.mutatePages({ workspaceId, path: filePath, operations, expectedBaseSha256 }));
       } catch (e) { return errText(e.message); }
     });
@@ -462,11 +421,11 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   // ---- Narrow allowlisted verify (M3) -------------------------------------
   if (verify) {
     server.registerTool('verify', {
-      description: 'Run a server-configured allowlisted verification check (read_only or workspace_effect). workspace_effect requires current Parent authority or a current-step bounded execution claim in durable Governance.',
+      description: 'Run a server-configured allowlisted verification check (read_only or workspace_effect). workspace_effect remains bounded by workspace/resource scope and MutationOwner; no Governance mission token is required.',
       annotations: M,
-      inputSchema: z.object({ workspaceId: workspaceIdSchema, check: z.string(), taskId: z.string().optional(), authorityToken: z.string().optional(), executionToken: z.string().optional() }),
-    }, async ({ workspaceId, check, taskId, authorityToken, executionToken }) => {
-      try { const spec = verifyChecks[check]; if (spec && spec.effect === 'workspace_effect') requireDirectLocalMutationAuth(governance, workspaceRegistry, { workspaceId, taskId, authorityToken, executionToken }); return text(await verify.run({ workspaceId, check })); } catch (e) { return errText(e.message); }
+      inputSchema: z.object({ workspaceId: workspaceIdSchema, check: z.string() }).strict(),
+    }, async ({ workspaceId, check }) => {
+      try { return text(await verify.run({ workspaceId, check })); } catch (e) { return errText(e.message); }
     });
   }
 
