@@ -3,8 +3,9 @@
 // server with the OpenAI tunnel-client. Direct Local and Codex Delegate share a
 // single MutationOwner. No auth token / API key is stored or printed here.
 //
-// Readiness semantics (M5 r1):
-//   readyForLocalMcp  = local v0.2 MCP server is up
+// Readiness semantics:
+//   localMcp.up       = local HTTP listener/process liveness
+//   readyForLocalMcp  = /readyz proves the local MCP execution backend ready
 //   readyForTunnel    = Secure Tunnel is real-ready (probes its /readyz)
 //   readyForChatGPT   = readyForLocalMcp AND readyForTunnel
 //
@@ -153,15 +154,21 @@ export class BrainLocalRuntime {
     } catch { this.tunnelProcess = null; }
   }
 
-  // Local MCP readiness (in-process listening + optional loopback probe).
-  async _localReady() {
-    if (!this.mcp) return false;
-    if (this.mcp.httpServer && this.mcp.httpServer.listening) return true;
+  // Listener liveness is descriptive only. Readiness always consumes the
+  // fail-closed /readyz proof, including the normal serving executor.
+  async _localReadiness() {
+    if (!this.mcp) return { listening: false, ready: false, body: null };
+    const listening = !!(this.mcp.httpServer && this.mcp.httpServer.listening);
     try {
       const host = this.mcp.host === '0.0.0.0' ? '127.0.0.1' : this.mcp.host;
       const res = await fetch(`http://${host}:${this.mcp.port}/readyz`);
-      return res.ok;
-    } catch { return false; }
+      const body = await res.json().catch(() => null);
+      return { listening, ready: res.ok, body };
+    } catch { return { listening, ready: false, body: null }; }
+  }
+
+  async _localReady() {
+    return (await this._localReadiness()).ready;
   }
 
   async _tunnelReady() {
@@ -184,16 +191,23 @@ export class BrainLocalRuntime {
 
   async status() {
     const c = this.config;
-    const localMcpUp = await this._localReady();
+    const localReadiness = await this._localReadiness();
+    const localMcpUp = localReadiness.listening;
+    const localMcpReady = localReadiness.ready;
     const appLive = !!(this.appServerExecutor && this.appServerExecutor.client && this.appServerExecutor.client.isRunning);
     const tunnelPresent = this._tunnelExecutablePresent();
     const tunnelProcessAlive = !this.activationPreflight && tunnelPresent && !!this.tunnelProcess && this.tunnelProcess.exitCode === null;
     const tunnelReady = this.activationPreflight ? false : await this._tunnelReady();
-    const readyForLocalMcp = localMcpUp;
+    const readyForLocalMcp = localMcpReady;
     const readyForTunnel = tunnelReady;
     const readyForChatGPT = readyForLocalMcp && readyForTunnel;
     return {
-      localMcp: { up: localMcpUp, url: this._mcpUrl() },
+      localMcp: {
+        up: localMcpUp,
+        ready: localMcpReady,
+        executorReady: localReadiness.body?.executorReady ?? null,
+        url: this._mcpUrl(),
+      },
       appServer: { configured: !!this.appServerExecutor, live: appLive },
       tunnel: {
         present: tunnelPresent,

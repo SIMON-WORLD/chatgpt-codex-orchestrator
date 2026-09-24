@@ -33,6 +33,44 @@ function runtimeRevision() {
   return /^[0-9a-f]{40}$/.test(value) ? value : null;
 }
 
+const EXECUTOR_READY_TIMEOUT_MS = 5000;
+const EXECUTOR_READY_TIMEOUT = 'EXECUTOR_READY_TIMEOUT';
+
+async function runExecutorProbe(child) {
+  let timer = null;
+  try {
+    const proof = await Promise.race([
+      Promise.resolve().then(() => {
+        if (typeof child.probeReady === 'function') return child.probeReady();
+        if (typeof child.ensureReady === 'function') return child.ensureReady();
+        throw new Error('executor readiness probe unavailable');
+      }),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error('executor readiness timeout'), { code: EXECUTOR_READY_TIMEOUT })), EXECUTOR_READY_TIMEOUT_MS);
+      }),
+    ]);
+    const health = typeof child.health === 'function' ? child.health() : proof;
+    return { ready: health?.state === 'ready' || proof?.state === 'ready', health };
+  } catch (error) {
+    if (error?.code === EXECUTOR_READY_TIMEOUT) {
+      try { await child.recoverAfterTimeout?.(); } catch {}
+    }
+    return { ready: false, health: typeof child.health === 'function' ? child.health() : null };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function probeCompositeExecutor(child) {
+  if (!child) return { ready: false, health: null };
+  const before = typeof child.health === 'function' ? child.health() : null;
+  if (before && (before.state === 'dead' || before.state === 'failed')) {
+    void runExecutorProbe(child);
+    return { ready: false, health: before };
+  }
+  return runExecutorProbe(child);
+}
+
 export async function startMcpServer({ workspaceRegistry, appServerExecutor = null, host = '127.0.0.1', port = 0, allowedRoots = null, mutationOwner = null, operationState = null, changeSetService = null, filesystemMutationService = null, verifyService = null, verifyChecks = {}, capabilityRouter = null, governanceService = null, worktreeService = null, codexDiagnosticsService = null, activationPreflight = false, desktopCommanderChild = null, processService = null } = {}) {
   // Normal serving mode keeps the canonical MCP tools surface. Activation preflight
   // intentionally creates no MCP handler at all: only /healthz and /readyz exist as
@@ -62,9 +100,15 @@ export async function startMcpServer({ workspaceRegistry, appServerExecutor = nu
     const url = (req.url || '').split('?')[0];
     const revision = runtimeRevision();
 
-    if (req.method === 'GET' && url === '/healthz') return sendJson(res, 200, { status: 'ok', revision, activationPreflight: !!activationPreflight, ...(compositeChild ? { compositeDesktopCommander: compositeChild.health() } : {}) });
+    if (req.method === 'GET' && url === '/healthz') return sendJson(res, 200, { status: 'ok', revision, activationPreflight: !!activationPreflight, processLive: true, ...(compositeChild ? { compositeDesktopCommander: compositeChild.health() } : {}) });
     if (req.method === 'GET' && url === '/readyz') {
-      return sendJson(res, 200, { status: 'ready', revision, activationPreflight: !!activationPreflight, loopback: host === '127.0.0.1' || host === '::1', hasAllowedRoots: !!workspaceRegistry && workspaceRegistry.hasAllowedRoots, ...(compositeChild ? { compositeDesktopCommander: compositeChild.health() } : {}) });
+      const localMcpListening = httpServer.listening;
+      if (activationPreflight) {
+        return sendJson(res, 200, { status: 'ready', revision, activationPreflight: true, processLive: true, localMcpListening, executorRequired: false, executorReady: null, loopback: host === '127.0.0.1' || host === '::1', hasAllowedRoots: !!workspaceRegistry && workspaceRegistry.hasAllowedRoots });
+      }
+      const executor = await probeCompositeExecutor(compositeChild);
+      const ready = localMcpListening && executor.ready;
+      return sendJson(res, ready ? 200 : 503, { status: ready ? 'ready' : 'not_ready', revision, activationPreflight: false, processLive: true, localMcpListening, executorRequired: true, executorReady: executor.ready, loopback: host === '127.0.0.1' || host === '::1', hasAllowedRoots: !!workspaceRegistry && workspaceRegistry.hasAllowedRoots, ...(executor.health ? { compositeDesktopCommander: executor.health } : {}) });
     }
 
     if (url === '/mcp' || url === '/mcp/') {

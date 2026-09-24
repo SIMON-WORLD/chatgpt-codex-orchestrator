@@ -111,3 +111,24 @@ test('preflight child-process failure is phase prepare and refuses cutover befor
   assert.equal(stopped, 0);
   assert.equal(started, 0);
 });
+
+test('Stable Runtime readiness rejects a live listener whose executor-aware /readyz is non-ready', async () => {
+  const { config } = binding();
+  const activator = new StableRuntimeActivator({
+    probeJson: async (url) => {
+      if (url === config.tunnel.healthUrl) return { ok: true, status: 200, body: { status: 'ready' } };
+      if (url.endsWith('/healthz')) return { ok: true, status: 200, body: { status: 'ok', revision: SHA } };
+      return { ok: false, status: 503, body: { status: 'not_ready', revision: SHA, executorReady: false } };
+    },
+    sleep: async () => {},
+  });
+  await assert.rejects(
+    () => activator._waitForExactReady(config, 'http://127.0.0.1:8745', SHA, 1),
+    (error) => {
+      assert.ok(error instanceof StableRuntimeActivationError);
+      assert.equal(error.details.phase, 'readiness');
+      assert.equal(error.details.sha, SHA);
+      return true;
+    },
+  );
+});

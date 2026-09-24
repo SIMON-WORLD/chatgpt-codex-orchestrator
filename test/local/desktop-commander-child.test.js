@@ -53,7 +53,10 @@ test('real DesktopCommander child handshakes, validates required tools, and expo
     assert.equal(health.state, 'ready');
     assert.equal(health.version, DESKTOP_COMMANDER_VERSION);
     assert.equal(health.generation, 1);
-    assert.deepEqual(Object.keys(health).sort(), ['generation', 'state', 'version']);
+    assert.equal(health.failureCode, null);
+    await child.probeReady();
+    assert.equal(child.health().generation, 1);
+    assert.deepEqual(Object.keys(health).sort(), ['failureCode', 'generation', 'state', 'version']);
     assert.equal('pid' in health, false);
     assert.equal('entryPoint' in health, false);
     assert.deepEqual(DESKTOP_COMMANDER_REQUIRED_TOOLS, [
@@ -105,13 +108,13 @@ test('real pinned child lazily creates a directory and moves a file while health
   fs.writeFileSync(source, 'issue 137\n', 'utf8');
   const child = new DesktopCommanderChild();
   try {
-    assert.deepEqual(child.health(), { state: 'idle', version: DESKTOP_COMMANDER_VERSION, generation: 0 });
+    assert.deepEqual(child.health(), { state: 'idle', version: DESKTOP_COMMANDER_VERSION, generation: 0, failureCode: null });
     assert.match(await child.createDirectory({ path: directory }), /Successfully created directory/u);
     assert.match(await child.moveFile({ source, destination }), /Successfully moved/u);
     assert.equal(fs.existsSync(directory), true);
     assert.equal(fs.existsSync(source), false);
     assert.equal(fs.readFileSync(destination, 'utf8'), 'issue 137\n');
-    assert.deepEqual(child.health(), { state: 'ready', version: DESKTOP_COMMANDER_VERSION, generation: 1 });
+    assert.deepEqual(child.health(), { state: 'ready', version: DESKTOP_COMMANDER_VERSION, generation: 1, failureCode: null });
   } finally {
     await child.close();
   }
@@ -162,7 +165,7 @@ test('child-backed read rejects special formats before fake or real child dispat
       () => readFileWithDesktopCommander({ workspaceId: workspace.workspaceId, path: 'crafted.pdf' }, registry, realChild),
       /special-format read blocked/,
     );
-    assert.deepEqual(realChild.health(), { state: 'idle', version: DESKTOP_COMMANDER_VERSION, generation: 0 });
+    assert.deepEqual(realChild.health(), { state: 'idle', version: DESKTOP_COMMANDER_VERSION, generation: 0, failureCode: null });
   } finally {
     await realChild.close();
   }
