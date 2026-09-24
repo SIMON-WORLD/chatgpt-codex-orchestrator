@@ -267,7 +267,7 @@ test('agent consumes #177 readiness and same-runtime requestId redelivery is ded
   const second = await agent.pollOnce({ holdMs: 0 });
   assert.equal(second.envelope.requestId, firstRequestId);
   assert.equal(executions, 1);
-  assert.deepEqual(await dispatchPromise, { ok: true, value: { echoed: 'opaque-payload-secret' } });
+  assert.deepEqual(await dispatchPromise, { echoed: 'opaque-payload-secret' });
 
   const text = JSON.stringify(logs);
   assert.equal(text.includes('opaque-payload-secret'), false);
