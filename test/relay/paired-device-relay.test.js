@@ -235,6 +235,9 @@ test('agent consumes #177 readiness and same-runtime requestId redelivery is ded
     fetchFn: readinessFetch(ready),
     execute: async (payload) => {
       executions += 1;
+      if (payload.sentinel === 'local-error') {
+        throw Object.assign(new Error('local sentinel failed'), { code: 'LOCAL_SENTINEL_FAILED' });
+      }
       return { echoed: payload.sentinel };
     },
     logger: (entry) => logs.push(entry),
@@ -267,7 +270,17 @@ test('agent consumes #177 readiness and same-runtime requestId redelivery is ded
   const second = await agent.pollOnce({ holdMs: 0 });
   assert.equal(second.envelope.requestId, firstRequestId);
   assert.equal(executions, 1);
-  assert.deepEqual(await dispatchPromise, { ok: true, value: { echoed: 'opaque-payload-secret' } });
+  assert.deepEqual(await dispatchPromise, { echoed: 'opaque-payload-secret' });
+
+  const failedDispatch = core.dispatch({
+    bearerToken: 'acct-a',
+    deviceId: paired.deviceId,
+    payload: { sentinel: 'local-error' },
+    deadlineMs: 5_000,
+  });
+  const failed = rejectsCode(failedDispatch, 'LOCAL_SENTINEL_FAILED');
+  await agent.pollOnce({ holdMs: 0 });
+  await failed;
 
   const text = JSON.stringify(logs);
   assert.equal(text.includes('opaque-payload-secret'), false);
@@ -413,7 +426,7 @@ test('HTTP long-poll control plane preserves account/device auth boundaries and 
   await agent.pollOnce({ holdMs: 1_000 });
   const dispatchResponse = await dispatchFetch;
   assert.equal(dispatchResponse.status, 200);
-  assert.deepEqual(await dispatchResponse.json(), { ok: true, value: { local: 'relay-secret-action' } });
+  assert.deepEqual(await dispatchResponse.json(), { local: 'relay-secret-action' });
 
   const wrongAccount = await fetch(relay.url + '/devices/' + encodeURIComponent(paired.deviceId), { headers: { authorization: 'Bearer acct-b' } });
   assert.equal(wrongAccount.status, 404);

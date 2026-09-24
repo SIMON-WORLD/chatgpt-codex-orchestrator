@@ -180,6 +180,9 @@ test('Stable Runtime relay-agent mode wires readiness, poll/respond, bounded rec
     transportFactory,
   });
   const firstRuntimeId = mode.runtimeId;
+  t.after(async () => {
+    await mode.stop();
+  });
   mode.start();
 
   const onlineNotReady = await waitFor(async () => {
@@ -202,7 +205,7 @@ test('Stable Runtime relay-agent mode wires readiness, poll/respond, bounded rec
     payload: { value: 'sentinel' },
     deadlineMs: 2000,
   });
-  assert.deepEqual(await dispatched, { ok: true, value: { echoed: 'sentinel' } });
+  assert.deepEqual(await dispatched, { echoed: 'sentinel' });
   assert.equal(executions, 1);
 
   const epochBeforeReconnect = (await core.getDevice({ bearerToken: 'acct-a', deviceId: paired.deviceId })).connectionEpoch;
