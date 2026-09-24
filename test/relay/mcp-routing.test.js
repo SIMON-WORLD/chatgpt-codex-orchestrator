@@ -86,9 +86,13 @@ async function answerNext(core, device, responseFactory, pending, holdMs = 1000)
 
 test('device selection is account-isolated, display-name independent, and list_devices leaks no relay/device secrets', async (t) => {
   const { core, facade } = harness(t);
-  const a1 = await pair(core, 'acct-a', 'Same Name', 'runtime-a1');
   const accountA = await core.accountForBearer('acct-a');
+  await assert.rejects(
+    () => facade.workspaceOpen(accountA.account_id, { path: '/tmp/no-device' }),
+    (error) => error?.code === 'NO_READY_DEVICE',
+  );
 
+  const a1 = await pair(core, 'acct-a', 'Same Name', 'runtime-a1');
   const listedA = facade.listDevices(accountA.account_id);
   assert.equal(listedA.length, 1);
   assert.equal(listedA[0].deviceId, a1.deviceId);
