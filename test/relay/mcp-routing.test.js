@@ -82,14 +82,14 @@ test('device selection is account-isolated, display-name independent, and list_d
   const a1 = await pair(core, 'acct-a', 'Same Name', 'runtime-a1');
   const accountA = await core.accountForBearer('acct-a');
 
-  assert.deepEqual(facade.listDevices(accountA.account_id), [{
-    deviceId: a1.deviceId,
-    displayName: 'Same Name',
-    online: true,
-    executorReady: true,
-    ready: true,
-    lastSeenAt: assert.anything(),
-  }]);
+  const listedA = facade.listDevices(accountA.account_id);
+  assert.equal(listedA.length, 1);
+  assert.equal(listedA[0].deviceId, a1.deviceId);
+  assert.equal(listedA[0].displayName, 'Same Name');
+  assert.equal(listedA[0].online, true);
+  assert.equal(listedA[0].executorReady, true);
+  assert.equal(listedA[0].ready, true);
+  assert.ok(Number.isInteger(listedA[0].lastSeenAt));
   const publicText = JSON.stringify(facade.listDevices(accountA.account_id));
   assert.equal(publicText.includes(a1.credential), false);
   assert.equal(publicText.includes('runtime-a1'), false);
