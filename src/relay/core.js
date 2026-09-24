@@ -376,17 +376,21 @@ export class RelayCore {
   }
 
   connectAgent({ deviceId, credential, runtimeId, executorReady, protocolVersion = RELAY_PROTOCOL_VERSION, agentVersion = null }) {
-    this.store.authenticateDevice(deviceId, credential);
+    const persistedBefore = this.store.authenticateDevice(deviceId, credential);
     if (!runtimeId) fail('INVALID_RUNTIME_ID');
     const previous = this.activeSessions.get(deviceId);
+    const now = this.now();
     const row = this.store.openSession({
       deviceId,
       runtimeId,
       executorReady: executorReady === true,
       protocolVersion,
       agentVersion,
-      now: this.now(),
+      now,
     });
+    if (persistedBefore.last_runtime_id && persistedBefore.last_runtime_id !== runtimeId) {
+      this.store.invalidateDeviceAffinities(deviceId, now);
+    }
     const session = { deviceId, runtimeId, connectionEpoch: Number(row.connection_epoch), protocolVersion: String(protocolVersion), agentVersion };
     this.activeSessions.set(deviceId, session);
     this.#cancelPoll(deviceId, new RelayError('STALE_CONNECTION_EPOCH', 'newer connection established', 409));
