@@ -71,6 +71,12 @@ These capabilities are **not reimplemented locally merely for architectural unif
 
 The human-facing custom App is **Local Connector**: `Connect ChatGPT to authorized files, workspaces, and local execution capabilities on your computer.` Repository/server/programmatic identity remains `chatgpt-codex-orchestrator`; DesktopCommander is dependency/provenance rather than product branding ([#119](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/119)).
 
+The accepted device-first authority chain is `ChatGPT account -> authorized devices -> per-device local policy -> workspace/resource context -> operation`. The per-device filesystem policy is locally owned as `selected_roots` (legacy/default) or explicit `os_user_scope`; no remote Relay/MCP call can widen it.
+
+Through [#185](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/185), the accepted multi-device product path is `ChatGPT -> one account-facing Local Connector Relay -> exact paired device -> device-local Stable Runtime/Local MCP`. Paired devices use stable opaque `deviceId`; account-facing state exposes Online / Last seen / executorReady / Ready and revoke. Ready is derived from the #177 executor-aware normal-serving readiness proof, not transport presence alone. Relay-owned workspace/process handles preserve account + device + runtime affinity; same-runtime reconnect preserves handles, while runtime restart/revoke fences stale handles. Exact-device routing never silently fails over.
+
+The canonical single-device Secure Tunnel path remains available as rollback/migration capacity. The dedicated relay dogfood path is proven but does not itself authorize production relay hosting, final OAuth/OIDC binding, default flip, release, or retirement of the canonical path. Remote Desktop Commander remains fallback/bootstrap/control capacity, not a dependency of accepted relay execution. Generic CLI/batch applications continue to use the typed process capability rather than per-app wrappers absent evidence.
+
 `Custom MCP App + Secure Tunnel + thin Orchestrator HTTP MCP façade` supplies capability that the ChatGPT product cannot directly provide for the user's local machine. It is not a mandatory hop for native-only work.
 
 The accepted Local execution architecture is the **composite DesktopCommander engine** ([#116](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/116), [#117](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/117), [#120](https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator/issues/120)):

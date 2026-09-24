@@ -152,6 +152,39 @@ Executor RESULT 不是 Brain truth。能由 Brain 直接取得的 authoritative 
 
 它不是所有任务的必经 transport。
 
+### Device-first Local Connector / multi-device routing
+
+当前 accepted device-first authority chain 是：
+
+```text
+ChatGPT account
+→ authorized devices
+→ per-device local policy
+→ workspace/resource context
+→ operation
+```
+
+其中 per-device filesystem policy 由设备本地 Human/operator 显式拥有：legacy/default `selected_roots` 或 explicit `os_user_scope`。Relay / MCP public surface 不能扩大、切换或替代这一本地 policy。
+
+#185 已证明当前 accepted multi-device product path：
+
+```text
+ChatGPT
+→ one account-facing Local Connector Relay
+→ exact paired device
+→ device-local Stable Runtime / Local MCP
+```
+
+- paired device 使用 stable opaque `deviceId`；account-facing surface exposes Online / Last seen / executorReady / Ready and revoke semantics；
+- **Ready is executor-aware**：它来自 #177 normal-serving readiness，必须重新证明 device-local execution backend 可用；transport/listener presence alone ≠ Ready；
+- exact-device routing 不按 displayName 选择，也不 silent fail over；bound device offline/not-ready 必须对该 device fail closed；
+- relay-owned `workspaceId` / processHandle 只作为 resource/context handles；它们绑定 account + device + runtime（process handle 还绑定 relay workspace/local process context），不重新引入 `taskId`、Parent authority 或 Governance execution token；
+- `connectionEpoch/runtimeId/requestId` 提供 transport/runtime/request fencing；same-runtime reconnect 保留既有 handles，runtime restart 或 revoke 使旧 handles stale/invalid；
+- device-local Local MCP 仍最终执行 #176 filesystem scope、canonical/symlink/sensitive-path、mutation/stale-write/atomic-readback、process 与 tool-specific safety；Relay 只做 account/device routing 和 opaque affinity，不提升 local authority；
+- canonical single-device Secure Tunnel path 继续可用作 rollback/migration path；dedicated relay dogfood path 已被 #185 证明，但这 **不等于** production relay hosting、final OAuth/OIDC binding、default flip、release 或 retirement of the canonical path；
+- Remote Desktop Commander 只保留 fallback/bootstrap/control capacity；#185 acceptance execution path 不依赖 RDC；
+- generic CLI / batch application 继续复用 existing typed process capability；在没有新 evidence 时不为每个 app 新增 wrapper。
+
 当前 local execution family：
 
 - `CHATGPT_DIRECT_LOCAL`：workspace-scoped read/search/status/diff、small bounded edit、allowlisted verify；
@@ -162,18 +195,22 @@ Ordinary Direct Local 的授权 layering 是：
 ```text
 ChatGPT account / connected provider authorization
         ↓
-authorized device endpoint / Secure Tunnel
+authorized device
         ↓
-workspaceId + host trust ceiling + workspace/resource scope
+per-device local policy (selected_roots | os_user_scope)
         ↓
-ordinary Direct Local read/write capability
+workspace/resource context
+        ↓
+ordinary Direct Local typed operation
 
 optional overlays:
 Governance mission control / Brain Continuity / acceptance
 Codex sustained executor
 ```
 
-`workspaceId` 是当前设备 endpoint 内的 local resource handle：它绑定 primary workspace 与显式 secondary read-only grants；它不是 task/Parent/step identity，也不隐含某个 project-authoritative Governance task 拥有整台机器。未来即使 account-level provider 在多个 authorized device endpoint 间路由，ordinary file-operation semantics 仍保持资源级而不是 mission-token 级。
+对 canonical single-device Secure Tunnel，authorized device 由该 endpoint 直接确定；对 accepted multi-device Relay，`workspace_open(deviceId?)` 先选择 exact paired device，再返回 relay-owned opaque `workspaceId`。后续 workspace/process operations 通过该 opaque handle 的 account + device + runtime affinity 回到同一 device，不要求重复传 `deviceId`。
+
+`workspaceId` 始终是 local resource/context handle：它绑定 primary workspace 与显式 secondary read-only grants；通过 Relay 时再附加 account/device/runtime affinity。它不是 task/Parent/step identity，也不隐含某个 project-authoritative Governance task 拥有整台机器。Ordinary file/process semantics 保持资源级，而不是 mission-token 级。
 
 ## 4. Route / Capability / Provider
 
@@ -436,6 +473,7 @@ Capability execution 失败时，Brain 基于真实失败原因决定：
 - capability 本身不可用 → runtime snapshot 更新，选择可用 provider/route；
 - executor implementation failure → `REVISE`；
 - local mutation state ambiguous → fail closed，先 authoritative reconciliation；
+- exact paired device offline / non-ready / stale handle → 对该 device fail closed；不得 silent fail over 到另一台 device；
 - user-owned destructive / irreversible / ownership-transfer decision → `ASK_USER`；
 - 不因为某个 provider 失败就自动把所有任务 fallback 到 Codex。
 

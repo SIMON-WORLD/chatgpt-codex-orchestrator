@@ -1,6 +1,8 @@
 # Local Connection Journey Contract
 
 > Issue #110 design candidate. This document implements the Parent-accepted #109 `UX_ONLY_REPLAN` direction as a product/lifecycle contract only. It does not authorize runtime implementation, provider-default changes, relay/auth/device-service work, deletion of existing Local surfaces, or release/default-flip work.
+>
+> **Historical-scope note (current through #185):** the body below preserves the #109/#110 design decision at its original baseline. Statements such as “do not create a relay”, “true multi-device out of implementation scope”, and “future Option-2/3” are historical to that bounded design slice and are **not** current project architecture. Subsequent accepted #178/#181/#183 work implemented the paired-device Relay path, and #185 Parent acceptance proved one ChatGPT-facing Local Connector Relay across two real devices. For current routing/status truth use `CAPABILITY_ROUTING.md`, `PROJECT_STATUS.md`, `ROADMAP.md`, and current GitHub implementation/evidence. This note does not rewrite the original #110 decision or imply production/default/release acceptance.
 
 ## 1. Scope and baseline
 
