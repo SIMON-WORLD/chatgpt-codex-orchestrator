@@ -18,14 +18,21 @@ function harness(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-183-relay-'));
   const store = new RelayStore(path.join(dir, 'relay.sqlite'));
   const logs = [];
-  const core = new RelayCore({ store, verifyBearer, presenceWindowMs: 60_000, logger: (entry) => logs.push(entry) });
+  let clock = Date.now();
+  const core = new RelayCore({
+    store,
+    verifyBearer,
+    now: () => clock,
+    presenceWindowMs: 60_000,
+    logger: (entry) => logs.push(entry),
+  });
   const facade = new RelayMcpFacade({ core });
   t.after(() => {
     core.close();
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  return { store, core, facade, logs };
+  return { store, core, facade, logs, advance: (ms) => { clock += ms; } };
 }
 
 async function pair(core, bearerToken, displayName, runtimeId, executorReady = true) {
@@ -131,7 +138,7 @@ test('device selection is account-isolated, display-name independent, and list_d
 });
 
 test('relay workspace/process handles preserve exact device+runtime affinity and fail closed on restart, revoke, readiness loss and forgery', async (t) => {
-  const { core, facade, logs } = harness(t);
+  const { core, facade, logs, advance } = harness(t);
   let a = await pair(core, 'acct-a', 'Device A', 'runtime-a');
   const b = await pair(core, 'acct-a', 'Device B', 'runtime-b');
   const account = await core.accountForBearer('acct-a');
@@ -184,6 +191,18 @@ test('relay workspace/process handles preserve exact device+runtime affinity and
   }, outputPending);
   assert.deepEqual(textJson(await output), { processHandle: relayProcessHandle, status: 'running', output: 'ok' });
 
+  const terminatePending = facade.workspaceTool(account.account_id, 'process_terminate', {
+    workspaceId: relayWorkspaceId,
+    processHandle: relayProcessHandle,
+  });
+  const terminated = await answerNext(core, a, async (payload) => {
+    assert.equal(payload.params.name, 'process_terminate');
+    assert.equal(payload.params.arguments.processHandle, 'local-process-secret');
+    assert.equal(payload.params.arguments.workspaceId, 'local-workspace-secret');
+    return mcpResult({ processHandle: 'local-process-secret', status: 'terminated' });
+  }, terminatePending);
+  assert.deepEqual(textJson(await terminated), { processHandle: relayProcessHandle, status: 'terminated' });
+
   a = {
     ...a,
     session: core.connectAgent({
@@ -218,6 +237,33 @@ test('relay workspace/process handles preserve exact device+runtime affinity and
     (error) => error?.code === 'STALE_WORKSPACE_HANDLE',
   );
 
+  a = {
+    ...a,
+    runtimeId: 'runtime-a',
+    session: core.connectAgent({
+      deviceId: a.deviceId,
+      credential: a.credential,
+      runtimeId: 'runtime-a',
+      executorReady: true,
+      protocolVersion: '1',
+    }),
+  };
+  await assert.rejects(
+    () => facade.workspaceTool(account.account_id, 'read', { workspaceId: relayWorkspaceId, path: 'must-not-revive.txt' }),
+    (error) => error?.code === 'STALE_WORKSPACE_HANDLE',
+  );
+
+  a = {
+    ...a,
+    runtimeId: 'runtime-a-new',
+    session: core.connectAgent({
+      deviceId: a.deviceId,
+      credential: a.credential,
+      runtimeId: 'runtime-a-new',
+      executorReady: true,
+      protocolVersion: '1',
+    }),
+  };
   const openAgainPending = facade.workspaceOpen(account.account_id, { path: '/workspace/a2', deviceId: a.deviceId });
   const openedAgain = await answerNext(core, a, async () => mcpResult({ workspaceId: 'local-ws-a2' }), openAgainPending);
   const relayWorkspace2 = textJson(await openedAgain).workspaceId;
@@ -236,6 +282,10 @@ test('relay workspace/process handles preserve exact device+runtime affinity and
     () => facade.workspaceTool(account.account_id, 'read', { workspaceId: relayWorkspace2, path: 'not-ready.txt' }),
     (error) => error?.code === 'DEVICE_NOT_READY',
   );
+  await assert.rejects(
+    () => facade.workspaceOpen(account.account_id, { path: '/must-not-failover', deviceId: a.deviceId }),
+    (error) => error?.code === 'DEVICE_NOT_READY',
+  );
   const bPollAfterNotReady = await core.pollAgent({
     deviceId: b.deviceId,
     credential: b.credential,
@@ -246,6 +296,31 @@ test('relay workspace/process handles preserve exact device+runtime affinity and
     holdMs: 0,
   });
   assert.equal(bPollAfterNotReady, null, 'not-ready bound device must never fail over');
+
+  a = {
+    ...a,
+    session: core.connectAgent({
+      deviceId: a.deviceId,
+      credential: a.credential,
+      runtimeId: 'runtime-a-new',
+      executorReady: true,
+      protocolVersion: '1',
+    }),
+  };
+  advance(60_001);
+  await core.pollAgent({
+    deviceId: b.deviceId,
+    credential: b.credential,
+    runtimeId: b.runtimeId,
+    connectionEpoch: b.session.connectionEpoch,
+    executorReady: true,
+    protocolVersion: '1',
+    holdMs: 0,
+  });
+  await assert.rejects(
+    () => facade.workspaceOpen(account.account_id, { path: '/offline-must-not-failover', deviceId: a.deviceId }),
+    (error) => error?.code === 'DEVICE_OFFLINE',
+  );
 
   await assert.rejects(
     () => facade.workspaceTool(account.account_id, 'read', { workspaceId: 'ws_forged', path: 'x' }),
