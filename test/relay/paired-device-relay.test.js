@@ -299,7 +299,7 @@ test('runtime changes fail in-flight work closed and relay restart never persist
     runtimeId: 'runtime-old',
     connectionEpoch: first.connectionEpoch,
     executorReady: true,
-    holdMs: 0,
+    holdMs: 1_000,
   });
   const next = core.connectAgent({
     deviceId: paired.deviceId,
@@ -335,7 +335,7 @@ test('runtime changes fail in-flight work closed and relay restart never persist
     runtimeId: 'runtime-new',
     connectionEpoch: next.connectionEpoch,
     executorReady: true,
-    holdMs: 0,
+    holdMs: 1_000,
   });
   assert.equal(delivered.payload.sentinel, 'memory-only-inflight');
   core.close();
