@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { RELAY_PROTOCOL_VERSION, RelayError } from './core.js';
 
-export async function readExecutorReadiness({ readyzUrl, fetchFn = fetch }) {
+export async function readExecutorReadiness({ readyzUrl, fetchFn = fetch, signal = undefined }) {
   let response;
   try {
-    response = await fetchFn(readyzUrl, { method: 'GET' });
+    response = await fetchFn(readyzUrl, { method: 'GET', signal });
   } catch {
     return false;
   }
@@ -120,12 +120,12 @@ export class DeviceRelayAgent {
     this.ledger = new Map();
   }
 
-  async executorReady() {
-    return readExecutorReadiness({ readyzUrl: this.readyzUrl, fetchFn: this.fetchFn });
+  async executorReady({ signal } = {}) {
+    return readExecutorReadiness({ readyzUrl: this.readyzUrl, fetchFn: this.fetchFn, signal });
   }
 
   async connect({ signal } = {}) {
-    const executorReady = await this.executorReady();
+    const executorReady = await this.executorReady({ signal });
     const session = await this.transport.connect({
       runtimeId: this.runtimeId,
       executorReady,
@@ -142,7 +142,7 @@ export class DeviceRelayAgent {
 
   async pollOnce({ holdMs = 25_000, signal } = {}) {
     if (this.connectionEpoch == null) throw new RelayError('AGENT_NOT_CONNECTED', 'agent is not connected', 409);
-    const executorReady = await this.executorReady();
+    const executorReady = await this.executorReady({ signal });
     const envelope = await this.transport.poll({
       runtimeId: this.runtimeId,
       connectionEpoch: this.connectionEpoch,
