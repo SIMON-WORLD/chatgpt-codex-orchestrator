@@ -38,7 +38,7 @@ export class HttpAgentTransport {
     this.fetchFn = fetchFn;
   }
 
-  async #post(path, body) {
+  async #post(path, body, { signal } = {}) {
     const response = await this.fetchFn(this.relayBaseUrl + path, {
       method: 'POST',
       headers: {
@@ -46,21 +46,22 @@ export class HttpAgentTransport {
         authorization: 'Device ' + this.credential,
       },
       body: JSON.stringify(body),
+      signal,
     });
     return readJson(response);
   }
 
-  connect({ runtimeId, executorReady, protocolVersion, agentVersion }) {
+  connect({ runtimeId, executorReady, protocolVersion, agentVersion }, { signal } = {}) {
     return this.#post('/agent/sessions', {
       deviceId: this.deviceId,
       runtimeId,
       executorReady,
       protocolVersion,
       agentVersion,
-    });
+    }, { signal });
   }
 
-  poll({ runtimeId, connectionEpoch, executorReady, protocolVersion, agentVersion, holdMs }) {
+  poll({ runtimeId, connectionEpoch, executorReady, protocolVersion, agentVersion, holdMs }, { signal } = {}) {
     return this.#post('/agent/poll', {
       deviceId: this.deviceId,
       runtimeId,
@@ -69,17 +70,17 @@ export class HttpAgentTransport {
       protocolVersion,
       agentVersion,
       holdMs,
-    });
+    }, { signal });
   }
 
-  respond({ runtimeId, connectionEpoch, requestId, response }) {
+  respond({ runtimeId, connectionEpoch, requestId, response }, { signal } = {}) {
     return this.#post('/agent/respond', {
       deviceId: this.deviceId,
       runtimeId,
       connectionEpoch,
       requestId,
       response,
-    });
+    }, { signal });
   }
 }
 
@@ -123,14 +124,14 @@ export class DeviceRelayAgent {
     return readExecutorReadiness({ readyzUrl: this.readyzUrl, fetchFn: this.fetchFn });
   }
 
-  async connect() {
+  async connect({ signal } = {}) {
     const executorReady = await this.executorReady();
     const session = await this.transport.connect({
       runtimeId: this.runtimeId,
       executorReady,
       protocolVersion: this.protocolVersion,
       agentVersion: this.agentVersion,
-    });
+    }, { signal });
     if (session.deviceId !== this.deviceId || session.runtimeId !== this.runtimeId) {
       throw new RelayError('SESSION_IDENTITY_MISMATCH', 'relay returned mismatched session identity', 409);
     }
@@ -139,7 +140,7 @@ export class DeviceRelayAgent {
     return session;
   }
 
-  async pollOnce({ holdMs = 25_000 } = {}) {
+  async pollOnce({ holdMs = 25_000, signal } = {}) {
     if (this.connectionEpoch == null) throw new RelayError('AGENT_NOT_CONNECTED', 'agent is not connected', 409);
     const executorReady = await this.executorReady();
     const envelope = await this.transport.poll({
@@ -149,7 +150,7 @@ export class DeviceRelayAgent {
       protocolVersion: this.protocolVersion,
       agentVersion: this.agentVersion,
       holdMs,
-    });
+    }, { signal });
     if (!envelope) return null;
     const terminal = await this.handleEnvelope(envelope);
     await this.transport.respond({
@@ -157,7 +158,7 @@ export class DeviceRelayAgent {
       connectionEpoch: this.connectionEpoch,
       requestId: envelope.requestId,
       response: terminal,
-    });
+    }, { signal });
     return { envelope, terminal };
   }
 
