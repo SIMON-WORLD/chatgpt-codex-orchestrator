@@ -426,7 +426,7 @@ test('HTTP long-poll control plane preserves account/device auth boundaries and 
   await agent.pollOnce({ holdMs: 1_000 });
   const dispatchResponse = await dispatchFetch;
   assert.equal(dispatchResponse.status, 200);
-  assert.deepEqual(await dispatchResponse.json(), { ok: true, value: { local: 'relay-secret-action' } });
+  assert.deepEqual(await dispatchResponse.json(), { local: 'relay-secret-action' });
 
   const wrongAccount = await fetch(relay.url + '/devices/' + encodeURIComponent(paired.deviceId), { headers: { authorization: 'Bearer acct-b' } });
   assert.equal(wrongAccount.status, 404);
