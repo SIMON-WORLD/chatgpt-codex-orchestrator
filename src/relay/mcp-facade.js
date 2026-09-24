@@ -5,8 +5,12 @@ import { PROCESS_LIMITS } from '../local/process.js';
 import { STRUCTURED_READ_LIMITS } from '../local/structured-read.js';
 
 const R = { readOnlyHint: true };
-const M = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
+const M = { readOnlyHint: false, destructiveHint: true };
+const DIRECT_LOCAL_DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
+const DIRECT_LOCAL_DESTRUCTIVE_IDEMPOTENT = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
+const DIRECT_LOCAL_ADDITIVE_IDEMPOTENT = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const PROCESS_START = { readOnlyHint: false, destructiveHint: true, openWorldHint: true };
+const PROCESS_TERMINATE = { readOnlyHint: false, destructiveHint: true, openWorldHint: false };
 
 const workspaceIdSchema = z.string().min(1);
 const mutationPathSchema = z.string().min(1).max(4096);
@@ -262,7 +266,7 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
 
   register(server, facade, accountId, 'process_terminate', {
     description: 'Terminate only a relay-owned processHandle bound to the same account, device, runtime and workspace.',
-    annotations: M,
+    annotations: PROCESS_TERMINATE,
     inputSchema: z.object({ workspaceId: workspaceIdSchema, processHandle: z.string().min(1).max(128) }).strict(),
   }, route('process_terminate'));
 
@@ -275,7 +279,7 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
     ['search', R, z.object({ workspaceId: workspaceIdSchema, query: z.string(), path: z.string().optional(), maxResults: z.number().int().positive().max(1000).optional() }).strict()],
     ['git_status', R, z.object({ workspaceId: workspaceIdSchema }).strict()],
     ['git_diff', R, z.object({ workspaceId: workspaceIdSchema, mode: z.enum(['worktree', 'staged']).optional() }).strict()],
-    ['edit', M, z.object({
+    ['edit', DIRECT_LOCAL_DESTRUCTIVE, z.object({
       workspaceId: workspaceIdSchema,
       mode: z.enum(['preview', 'apply']),
       changeSetId: z.string().optional(),
@@ -286,8 +290,8 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
         createContent: z.string().nullable().optional(),
       }).strict().optional(),
     }).strict()],
-    ['filesystem_create_directory', M, z.object({ workspaceId: workspaceIdSchema, path: mutationPathSchema }).strict()],
-    ['filesystem_move', M, z.object({ workspaceId: workspaceIdSchema, source: mutationPathSchema, destination: mutationPathSchema }).strict()],
+    ['filesystem_create_directory', DIRECT_LOCAL_ADDITIVE_IDEMPOTENT, z.object({ workspaceId: workspaceIdSchema, path: mutationPathSchema }).strict()],
+    ['filesystem_move', DIRECT_LOCAL_DESTRUCTIVE_IDEMPOTENT, z.object({ workspaceId: workspaceIdSchema, source: mutationPathSchema, destination: mutationPathSchema }).strict()],
     ['verify', M, z.object({ workspaceId: workspaceIdSchema, check: z.string() }).strict()],
   ];
   for (const [name, annotations, inputSchema] of simple) {
@@ -375,7 +379,7 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
 
   register(server, facade, accountId, 'excel_write_range', {
     description: 'Forward the existing bounded Excel mutation to the exact device; device-local stale-write and mutation ownership remain authoritative.',
-    annotations: M,
+    annotations: DIRECT_LOCAL_DESTRUCTIVE,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
       path: mutationPathSchema,
@@ -387,7 +391,7 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
 
   register(server, facade, accountId, 'docx_edit_text', {
     description: 'Forward the existing bounded DOCX edit to the exact device; device-local stale-write and mutation ownership remain authoritative.',
-    annotations: M,
+    annotations: DIRECT_LOCAL_DESTRUCTIVE_IDEMPOTENT,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
       path: mutationPathSchema,
@@ -400,13 +404,13 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
 
   register(server, facade, accountId, 'docx_create_text', {
     description: 'Forward the existing bounded DOCX creation to the exact device; device-local workspace policy remains authoritative.',
-    annotations: M,
+    annotations: DIRECT_LOCAL_ADDITIVE_IDEMPOTENT,
     inputSchema: z.object({ workspaceId: workspaceIdSchema, path: mutationPathSchema, text: z.string().max(1024 * 1024) }).strict(),
   }, route('docx_create_text'));
 
   register(server, facade, accountId, 'pdf_mutate_pages', {
     description: 'Forward the existing bounded PDF mutation to the exact device; device-local stale-write and mutation ownership remain authoritative.',
-    annotations: M,
+    annotations: DIRECT_LOCAL_DESTRUCTIVE,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema,
       path: mutationPathSchema,
