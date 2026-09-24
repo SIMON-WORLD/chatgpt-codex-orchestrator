@@ -80,6 +80,12 @@ export class RelayStore {
       'CREATE UNIQUE INDEX IF NOT EXISTS active_device_credential_idx ON device_credentials(device_id) WHERE revoked_at IS NULL;',
       'CREATE TABLE IF NOT EXISTS pairing_approvals (pairing_id TEXT PRIMARY KEY, device_code_sha256 TEXT NOT NULL UNIQUE, user_code_sha256 TEXT NOT NULL UNIQUE, proposed_display_name TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, approved_account_id TEXT REFERENCES accounts(account_id), approved_at INTEGER, consumed_at INTEGER, consumed_device_id TEXT);',
       'CREATE TABLE IF NOT EXISTS consumed_pair_tokens (issuer TEXT NOT NULL, token_key TEXT NOT NULL, consumed_at INTEGER NOT NULL, device_id TEXT NOT NULL, PRIMARY KEY (issuer, token_key));',
+      'CREATE TABLE IF NOT EXISTS workspace_affinity (relay_workspace_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE, device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE, runtime_id TEXT NOT NULL, local_workspace_id TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, invalidated_at INTEGER);',
+      'CREATE INDEX IF NOT EXISTS workspace_affinity_account_idx ON workspace_affinity(account_id);',
+      'CREATE INDEX IF NOT EXISTS workspace_affinity_device_idx ON workspace_affinity(device_id);',
+      'CREATE TABLE IF NOT EXISTS process_affinity (relay_process_handle TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE, device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE, runtime_id TEXT NOT NULL, relay_workspace_id TEXT NOT NULL REFERENCES workspace_affinity(relay_workspace_id) ON DELETE CASCADE, local_process_handle TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, invalidated_at INTEGER);',
+      'CREATE INDEX IF NOT EXISTS process_affinity_account_idx ON process_affinity(account_id);',
+      'CREATE INDEX IF NOT EXISTS process_affinity_device_idx ON process_affinity(device_id);',
     ].join('\n'));
   }
 
@@ -171,6 +177,43 @@ export class RelayStore {
     return this.db.prepare('SELECT * FROM devices WHERE account_id = ? ORDER BY created_at ASC, device_id ASC').all(accountId);
   }
 
+  createWorkspaceAffinity({ accountId, deviceId, runtimeId, localWorkspaceId, now }) {
+    const relayWorkspaceId = 'ws_' + randomBytes(24).toString('base64url');
+    this.db.prepare('INSERT INTO workspace_affinity (relay_workspace_id, account_id, device_id, runtime_id, local_workspace_id, created_at, last_used_at, invalidated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)').run(
+      relayWorkspaceId, accountId, deviceId, runtimeId, localWorkspaceId, now, now
+    );
+    return this.db.prepare('SELECT * FROM workspace_affinity WHERE relay_workspace_id = ?').get(relayWorkspaceId);
+  }
+
+  workspaceAffinity(accountId, relayWorkspaceId) {
+    return this.db.prepare('SELECT * FROM workspace_affinity WHERE relay_workspace_id = ? AND account_id = ?').get(relayWorkspaceId, accountId) || null;
+  }
+
+  touchWorkspaceAffinity(relayWorkspaceId, now) {
+    this.db.prepare('UPDATE workspace_affinity SET last_used_at = ? WHERE relay_workspace_id = ?').run(now, relayWorkspaceId);
+  }
+
+  createProcessAffinity({ accountId, deviceId, runtimeId, relayWorkspaceId, localProcessHandle, now }) {
+    const relayProcessHandle = 'proc_' + randomBytes(24).toString('base64url');
+    this.db.prepare('INSERT INTO process_affinity (relay_process_handle, account_id, device_id, runtime_id, relay_workspace_id, local_process_handle, created_at, last_used_at, invalidated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)').run(
+      relayProcessHandle, accountId, deviceId, runtimeId, relayWorkspaceId, localProcessHandle, now, now
+    );
+    return this.db.prepare('SELECT * FROM process_affinity WHERE relay_process_handle = ?').get(relayProcessHandle);
+  }
+
+  processAffinity(accountId, relayProcessHandle) {
+    return this.db.prepare('SELECT * FROM process_affinity WHERE relay_process_handle = ? AND account_id = ?').get(relayProcessHandle, accountId) || null;
+  }
+
+  touchProcessAffinity(relayProcessHandle, now) {
+    this.db.prepare('UPDATE process_affinity SET last_used_at = ? WHERE relay_process_handle = ?').run(now, relayProcessHandle);
+  }
+
+  invalidateDeviceAffinities(deviceId, now) {
+    this.db.prepare('UPDATE workspace_affinity SET invalidated_at = COALESCE(invalidated_at, ?) WHERE device_id = ?').run(now, deviceId);
+    this.db.prepare('UPDATE process_affinity SET invalidated_at = COALESCE(invalidated_at, ?) WHERE device_id = ?').run(now, deviceId);
+  }
+
   renameDevice(accountId, deviceId, displayName) {
     const result = this.db.prepare('UPDATE devices SET display_name = ? WHERE device_id = ? AND account_id = ? AND revoked_at IS NULL').run(
       cleanDisplayName(displayName), deviceId, accountId
@@ -216,6 +259,7 @@ export class RelayStore {
       if (!row.revoked_at) {
         this.db.prepare('UPDATE devices SET revoked_at = ?, executor_ready = 0, connection_epoch = connection_epoch + 1 WHERE device_id = ? AND account_id = ?').run(now, deviceId, accountId);
         this.db.prepare('UPDATE device_credentials SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL').run(now, deviceId);
+        this.invalidateDeviceAffinities(deviceId, now);
       }
       return this.deviceForAccount(accountId, deviceId);
     });
@@ -225,7 +269,10 @@ export class RelayStore {
     return this.transaction(() => {
       const ids = this.db.prepare('SELECT device_id FROM devices WHERE account_id = ? AND revoked_at IS NULL').all(accountId).map((row) => row.device_id);
       this.db.prepare('UPDATE devices SET revoked_at = ?, executor_ready = 0, connection_epoch = connection_epoch + 1 WHERE account_id = ? AND revoked_at IS NULL').run(now, accountId);
-      for (const deviceId of ids) this.db.prepare('UPDATE device_credentials SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL').run(now, deviceId);
+      for (const deviceId of ids) {
+        this.db.prepare('UPDATE device_credentials SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL').run(now, deviceId);
+        this.invalidateDeviceAffinities(deviceId, now);
+      }
       return ids;
     });
   }
@@ -329,17 +376,21 @@ export class RelayCore {
   }
 
   connectAgent({ deviceId, credential, runtimeId, executorReady, protocolVersion = RELAY_PROTOCOL_VERSION, agentVersion = null }) {
-    this.store.authenticateDevice(deviceId, credential);
+    const persistedBefore = this.store.authenticateDevice(deviceId, credential);
     if (!runtimeId) fail('INVALID_RUNTIME_ID');
     const previous = this.activeSessions.get(deviceId);
+    const now = this.now();
     const row = this.store.openSession({
       deviceId,
       runtimeId,
       executorReady: executorReady === true,
       protocolVersion,
       agentVersion,
-      now: this.now(),
+      now,
     });
+    if (persistedBefore.last_runtime_id && persistedBefore.last_runtime_id !== runtimeId) {
+      this.store.invalidateDeviceAffinities(deviceId, now);
+    }
     const session = { deviceId, runtimeId, connectionEpoch: Number(row.connection_epoch), protocolVersion: String(protocolVersion), agentVersion };
     this.activeSessions.set(deviceId, session);
     this.#cancelPoll(deviceId, new RelayError('STALE_CONNECTION_EPOCH', 'newer connection established', 409));
@@ -409,7 +460,11 @@ export class RelayCore {
 
   async dispatch({ bearerToken, deviceId, payload, deadlineMs = 30_000 }) {
     const account = await this.accountForBearer(bearerToken);
-    const row = this.store.deviceForAccount(account.account_id, deviceId);
+    return this.dispatchForAccount({ accountId: account.account_id, deviceId, payload, deadlineMs });
+  }
+
+  async dispatchForAccount({ accountId, deviceId, payload, deadlineMs = 30_000 }) {
+    const row = this.store.deviceForAccount(accountId, deviceId);
     if (!row) fail('DEVICE_NOT_FOUND', 'device not found', 404);
     const state = this.summary(row);
     if (state.revoked) fail('DEVICE_REVOKED', 'device revoked', 403);
@@ -420,7 +475,7 @@ export class RelayCore {
     const deadline = this.now() + Math.max(1, Math.min(Number(deadlineMs) || 30_000, 120_000));
     const item = {
       requestId,
-      accountId: account.account_id,
+      accountId,
       deviceId,
       connectionEpoch: session.connectionEpoch,
       runtimeId: session.runtimeId,
