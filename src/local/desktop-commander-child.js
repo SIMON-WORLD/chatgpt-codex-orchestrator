@@ -193,6 +193,7 @@ export class DesktopCommanderChild {
       state: this.#state,
       version: DESKTOP_COMMANDER_VERSION,
       generation: this.#generation,
+      failureCode: this.#lastFailureCode,
     };
   }
 
@@ -202,6 +203,22 @@ export class DesktopCommanderChild {
     if (!this.#startPromise) this.#startPromise = this.#start().finally(() => { this.#startPromise = null; });
     await this.#startPromise;
     return this;
+  }
+
+  async probeReady() {
+    await this.ensureReady();
+    const client = this.#client;
+    const transport = this.#transport;
+    if (!client || !transport) throw new DesktopCommanderChildError('CHILD_CLOSED');
+    try {
+      await this.#validateReadyClient(client);
+      if (this.#client !== client || this.#transport !== transport || this.#state !== 'ready') throw new DesktopCommanderChildError('CHILD_EXITED');
+      return this.health();
+    } catch (error) {
+      const safe = error instanceof DesktopCommanderChildError ? error : new DesktopCommanderChildError('CHILD_CALL_FAILED');
+      if (!this.#closed) this.#markDead(safe.code, client, transport);
+      throw safe;
+    }
   }
 
   async close() {
@@ -493,20 +510,7 @@ export class DesktopCommanderChild {
 
     try {
       await client.connect(transport);
-      const listed = await client.listTools();
-      const names = Array.isArray(listed?.tools)
-        ? listed.tools
-          .filter((tool) => tool && typeof tool.name === 'string' && tool.inputSchema && typeof tool.inputSchema === 'object')
-          .map((tool) => tool.name)
-        : [];
-      this.#availableTools = new Set(names);
-      this.#listedTools = Array.isArray(listed?.tools) ? listed.tools : [];
-      const missing = DESKTOP_COMMANDER_REQUIRED_TOOLS.filter((name) => !this.#availableTools.has(name));
-      if (missing.length > 0) throw new DesktopCommanderChildError('MISSING_REQUIRED_TOOL');
-      const serverVersion = client.getServerVersion?.();
-      if (!serverVersion || serverVersion.name !== 'desktop-commander' || serverVersion.version !== DESKTOP_COMMANDER_VERSION) {
-        throw new DesktopCommanderChildError('CHILD_START_FAILED', 'DesktopCommander server version mismatch');
-      }
+      await this.#validateReadyClient(client);
       if (this.#closed || this.#transport !== transport) throw new DesktopCommanderChildError('CHILD_CLOSED');
       this.#generation += 1;
       this.#state = 'ready';
@@ -524,6 +528,19 @@ export class DesktopCommanderChild {
       if (!this.#closed) this.#state = 'failed';
       throw safe;
     }
+  }
+
+  async #validateReadyClient(client) {
+    const listed = await client.listTools();
+    const names = Array.isArray(listed?.tools)
+      ? listed.tools.filter((tool) => tool && typeof tool.name === 'string' && tool.inputSchema && typeof tool.inputSchema === 'object').map((tool) => tool.name)
+      : [];
+    this.#availableTools = new Set(names);
+    this.#listedTools = Array.isArray(listed?.tools) ? listed.tools : [];
+    const missing = DESKTOP_COMMANDER_REQUIRED_TOOLS.filter((name) => !this.#availableTools.has(name));
+    if (missing.length > 0) throw new DesktopCommanderChildError('MISSING_REQUIRED_TOOL');
+    const serverVersion = client.getServerVersion?.();
+    if (!serverVersion || serverVersion.name !== 'desktop-commander' || serverVersion.version !== DESKTOP_COMMANDER_VERSION) throw new DesktopCommanderChildError('CHILD_START_FAILED', 'DesktopCommander server version mismatch');
   }
 
   #detachCurrent() {
