@@ -505,7 +505,19 @@ export class RelayCore {
     if (item.deviceId !== deviceId || item.runtimeId !== runtimeId || Number(item.connectionEpoch) !== Number(connectionEpoch)) fail('REQUEST_FENCE_MISMATCH', 'request response fence mismatch', 409);
     clearTimeout(item.timer);
     this.pending.delete(requestId);
-    item.resolve(response);
+    if (response && typeof response === 'object' && typeof response.ok === 'boolean') {
+      if (response.ok) {
+        item.resolve(response.value);
+      } else {
+        const code = typeof response.error?.code === 'string' ? response.error.code : 'LOCAL_EXECUTION_FAILED';
+        const message = typeof response.error?.message === 'string' ? response.error.message : 'local execution failed';
+        item.reject(new RelayError(code, message, 502));
+      }
+    } else {
+      // Backward-compatible seam for direct core tests/control callers that already
+      // provide the device-local result rather than the DeviceRelayAgent terminal envelope.
+      item.resolve(response);
+    }
     this.logger({ event: 'request_completed', deviceId, requestId });
     return { accepted: true };
   }
