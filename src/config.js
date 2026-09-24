@@ -89,6 +89,17 @@ export const DEFAULT_V02_CONFIG = {
     healthUrl: null,            // full tunnel health /readyz URL used to probe real readiness
     external: false,            // externally managed Secure Tunnel lifecycle: never spawn/kill tunnel-client here; readiness via healthUrl only
   },
+  // Paired-device relay is an explicit host-local opt-in. The raw device
+  // credential never belongs in config; credentialEnv names the local secret env var.
+  relayAgent: {
+    enabled: false,
+    relayUrl: null,
+    deviceId: null,
+    credentialEnv: null,
+    pollHoldMs: 25000,
+    reconnectInitialMs: 250,
+    reconnectMaxMs: 5000,
+  },
 };
 
 function isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
@@ -147,6 +158,29 @@ export function loadV02Config(overrides = {}, { configPath = null } = {}) {
     localReadOnlyFixture: localReadOnlyFixture ? path.resolve(String(localReadOnlyFixture)) : null,
   };
   cfg.tunnel.external = cfg.tunnel.external === true;
+  if (!cfg.relayAgent || typeof cfg.relayAgent !== 'object') cfg.relayAgent = { ...DEFAULT_V02_CONFIG.relayAgent };
+  if (Object.prototype.hasOwnProperty.call(cfg.relayAgent, 'credential')) {
+    throw new Error('raw relayAgent.credential is forbidden; use relayAgent.credentialEnv');
+  }
+  cfg.relayAgent = {
+    enabled: cfg.relayAgent.enabled === true,
+    relayUrl: cfg.relayAgent.relayUrl ? String(cfg.relayAgent.relayUrl).replace(/\/+$/u, '') : null,
+    deviceId: cfg.relayAgent.deviceId ? String(cfg.relayAgent.deviceId).trim() : null,
+    credentialEnv: cfg.relayAgent.credentialEnv ? String(cfg.relayAgent.credentialEnv).trim() : null,
+    pollHoldMs: Math.max(0, Math.min(Number(cfg.relayAgent.pollHoldMs) || 25000, 25000)),
+    reconnectInitialMs: Math.max(10, Math.min(Number(cfg.relayAgent.reconnectInitialMs) || 250, 60000)),
+    reconnectMaxMs: Math.max(10, Math.min(Number(cfg.relayAgent.reconnectMaxMs) || 5000, 60000)),
+  };
+  if (cfg.relayAgent.enabled) {
+    if (!cfg.relayAgent.relayUrl) throw new Error('relayAgent.relayUrl is required when relayAgent.enabled=true');
+    if (!cfg.relayAgent.deviceId) throw new Error('relayAgent.deviceId is required when relayAgent.enabled=true');
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(cfg.relayAgent.credentialEnv || '')) {
+      throw new Error('relayAgent.credentialEnv must name one environment variable when relayAgent.enabled=true');
+    }
+    if (cfg.relayAgent.reconnectMaxMs < cfg.relayAgent.reconnectInitialMs) {
+      cfg.relayAgent.reconnectMaxMs = cfg.relayAgent.reconnectInitialMs;
+    }
+  }
   cfg.paths = runtimePaths(cfg.dataRoot);
   return cfg;
 }

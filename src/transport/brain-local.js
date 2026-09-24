@@ -29,11 +29,19 @@ import { createDurableGovernanceService } from '../governance/durable.js';
 import { FILESYSTEM_SCOPE_POLICIES, loadV02Config } from '../config.js';
 import { resolveCodexAppServer } from './codex.js';
 import { WorktreeService } from '../local/worktree.js';
+import { LocalMcpToolExecutor, StableRuntimeRelayAgentMode } from '../relay/runtime-mode.js';
 
 const RUNTIME_MODES = new Set(['serving', 'activation-preflight']);
 
 export class BrainLocalRuntime {
-  constructor({ config = loadV02Config(), mode = 'serving' } = {}) {
+  constructor({
+    config = loadV02Config(),
+    mode = 'serving',
+    relayExecute = null,
+    relayAgentModeFactory = null,
+    relayEnv = process.env,
+    relayFetch = fetch,
+  } = {}) {
     if (!RUNTIME_MODES.has(mode)) throw new Error(`unsupported BrainLocalRuntime mode: ${mode}`);
     this.config = config;
     this.mode = mode;
@@ -62,6 +70,12 @@ export class BrainLocalRuntime {
     this.appServerExecutor = null;
     this.mcp = null;
     this.tunnelProcess = null;
+    this.relayExecute = relayExecute;
+    this.relayAgentModeFactory = relayAgentModeFactory;
+    this.relayEnv = relayEnv;
+    this.relayFetch = relayFetch;
+    this.relayLocalExecutor = null;
+    this.relayAgentMode = null;
     this.started = false;
   }
 
@@ -125,8 +139,34 @@ export class BrainLocalRuntime {
       activationPreflight: this.activationPreflight,
     });
     this.started = true;
+    if (!this.activationPreflight && c.relayAgent?.enabled === true) this._startRelayAgentMode();
     if (!this.activationPreflight && this._tunnelExecutablePresent() && this.config.tunnel.external !== true) await this._startTunnel();
     return this;
+  }
+
+  _readyzUrl() {
+    if (!this.mcp) return null;
+    const host = this.mcp.host === '0.0.0.0' ? '127.0.0.1' : this.mcp.host;
+    return `http://${host}:${this.mcp.port}/readyz`;
+  }
+
+  _startRelayAgentMode() {
+    const c = this.config.relayAgent;
+    const execute = this.relayExecute || ((payload) => {
+      if (!this.relayLocalExecutor) this.relayLocalExecutor = new LocalMcpToolExecutor({ mcpUrl: this._mcpUrl() });
+      return this.relayLocalExecutor.execute(payload);
+    });
+    const options = {
+      config: c,
+      readyzUrl: this._readyzUrl(),
+      execute,
+      env: this.relayEnv,
+      fetchFn: this.relayFetch,
+    };
+    this.relayAgentMode = this.relayAgentModeFactory
+      ? this.relayAgentModeFactory(options)
+      : new StableRuntimeRelayAgentMode(options);
+    this.relayAgentMode.start();
   }
 
   _tunnelExecutablePresent() {
@@ -160,8 +200,7 @@ export class BrainLocalRuntime {
     if (!this.mcp) return { listening: false, ready: false, body: null };
     const listening = !!(this.mcp.httpServer && this.mcp.httpServer.listening);
     try {
-      const host = this.mcp.host === '0.0.0.0' ? '127.0.0.1' : this.mcp.host;
-      const res = await fetch(`http://${host}:${this.mcp.port}/readyz`);
+      const res = await fetch(this._readyzUrl());
       const body = await res.json().catch(() => null);
       return { listening, ready: res.ok, body };
     } catch { return { listening, ready: false, body: null }; }
@@ -221,6 +260,7 @@ export class BrainLocalRuntime {
           : (tunnelPresent ? (tunnelReady ? null : 'tunnel not ready (probe failed or child not ready)') : 'tunnel-client executable not found'),
       },
       workspace: { roots: c.workspaceRoots, filesystemScope: c.filesystemScope },
+      ...(this.relayAgentMode ? { relayAgent: this.relayAgentMode.status() } : {}),
       readyForLocalMcp,
       readyForTunnel,
       readyForChatGPT,
@@ -228,6 +268,10 @@ export class BrainLocalRuntime {
   }
 
   async close() {
+    if (this.relayAgentMode) { try { await this.relayAgentMode.stop(); } catch {} }
+    this.relayAgentMode = null;
+    if (this.relayLocalExecutor) { try { await this.relayLocalExecutor.close(); } catch {} }
+    this.relayLocalExecutor = null;
     if (this.appServerExecutor) { try { await this.appServerExecutor.shutdown(); } catch {} }
     if (this.mcp) { try { await this.mcp.close(); } catch {} }
     if (!this.activationPreflight && this.config.tunnel.external !== true && this.tunnelProcess && this.tunnelProcess.exitCode === null) { try { this.tunnelProcess.kill('SIGTERM'); } catch {} }
