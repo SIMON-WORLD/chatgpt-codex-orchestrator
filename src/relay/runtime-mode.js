@@ -16,10 +16,14 @@ function waitForDelay(ms, state) {
   return new Promise((resolve) => {
     if (state.stopping || ms <= 0) return resolve();
     const timer = setTimeout(() => {
-      if (state.timer === timer) state.timer = null;
+      if (state.timer === timer) {
+        state.timer = null;
+        state.resolveDelay = null;
+      }
       resolve();
     }, ms);
     state.timer = timer;
+    state.resolveDelay = resolve;
   });
 }
 
@@ -118,7 +122,7 @@ export class StableRuntimeRelayAgentMode {
     this.agent = null;
     this.loopPromise = null;
     this.operationAbort = null;
-    this.delayState = { stopping: false, timer: null };
+    this.delayState = { stopping: false, timer: null, resolveDelay: null };
     this.connectionEpoch = null;
     this.state = 'idle';
     this.lastErrorCode = null;
@@ -150,6 +154,9 @@ export class StableRuntimeRelayAgentMode {
     if (this.delayState.timer) {
       clearTimeout(this.delayState.timer);
       this.delayState.timer = null;
+      const resolveDelay = this.delayState.resolveDelay;
+      this.delayState.resolveDelay = null;
+      resolveDelay?.();
     }
     this.operationAbort?.abort();
     try { await this.loopPromise; } catch {}
