@@ -382,13 +382,15 @@ export class RelayCore {
     if (wait === 0) return null;
     this.#cancelPoll(deviceId, new RelayError('POLL_REPLACED', 'poll replaced', 409));
     return await new Promise((resolve, reject) => {
+      const waiterToken = {};
       const timer = setTimeout(() => {
         const current = this.pollWaiters.get(deviceId);
-        if (current?.resolve === resolve) this.pollWaiters.delete(deviceId);
+        if (current?.token === waiterToken) this.pollWaiters.delete(deviceId);
         resolve(null);
       }, wait);
       timer.unref?.();
       this.pollWaiters.set(deviceId, {
+        token: waiterToken,
         epoch: Number(connectionEpoch),
         runtimeId,
         resolve: (value) => {
