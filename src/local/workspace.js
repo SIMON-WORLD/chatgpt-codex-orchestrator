@@ -8,6 +8,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {
+  FILESYSTEM_SCOPE_POLICIES,
+  normalizeFilesystemScopePolicy,
+} from '../config.js';
+
+export { FILESYSTEM_SCOPE_POLICIES, normalizeFilesystemScopePolicy } from '../config.js';
 
 export class WorkspaceError extends Error {
   constructor(msg) { super(msg); this.name = 'WorkspaceError'; }
@@ -56,8 +62,15 @@ function effectiveRealPath(root, target) {
 }
 
 export class WorkspaceRegistry {
-  constructor({ allowedRoots = null, fixtures = null } = {}) {
-    this.allowedRoots = (allowedRoots && allowedRoots.length ? allowedRoots : [process.cwd()])
+  constructor({ allowedRoots = null, fixtures = null, filesystemScope = null } = {}) {
+    this.filesystemScope = normalizeFilesystemScopePolicy(filesystemScope);
+    const configuredRoots = Array.isArray(allowedRoots)
+      ? allowedRoots
+      : (allowedRoots ? [allowedRoots] : []);
+    const defaultRoots = this.filesystemScope === FILESYSTEM_SCOPE_POLICIES.OS_USER_SCOPE
+      ? []
+      : (configuredRoots.length ? configuredRoots : [process.cwd()]);
+    this.allowedRoots = defaultRoots
       .map((r) => path.resolve(r)).filter(Boolean);
     this.fixtures = new Map();
     if (fixtures && typeof fixtures === 'object' && !Array.isArray(fixtures)) {
@@ -79,9 +92,14 @@ export class WorkspaceRegistry {
     this._workspaces = new Map();
   }
 
-  get hasAllowedRoots() { return this.allowedRoots.length > 0; }
+  get isOsUserScope() { return this.filesystemScope === FILESYSTEM_SCOPE_POLICIES.OS_USER_SCOPE; }
+
+  // Keep the established readiness field truthful for legacy callers while
+  // treating an explicit OS-user policy as the configured filesystem scope.
+  get hasAllowedRoots() { return this.allowedRoots.length > 0 || this.isOsUserScope; }
 
   _allowedRootFor(canonical) {
+    if (this.isOsUserScope) return canonical;
     for (const root of this.allowedRoots) {
       const rc = realpathOrNull(root) || root;
       if (isWithinCI(rc, canonical) || isWithin(rc, canonical)) return rc;
@@ -119,6 +137,7 @@ export class WorkspaceRegistry {
       root: canonical,
       isGitRepo,
       allowedRoot: allowed,
+      filesystemScope: this.filesystemScope,
       fixture: fixtureName,
       fixtureContract: fixtureContract ? JSON.parse(JSON.stringify(fixtureContract)) : null,
       secondaryReadGrants: normalizedSecondaryReadGrants,
@@ -128,6 +147,7 @@ export class WorkspaceRegistry {
       workspaceId,
       root: canonical,
       isGitRepo,
+      filesystemScope: this.filesystemScope,
       ...(fixtureName ? { fixture: fixtureName } : {}),
       ...(fixtureContract ? { fixtureContract: JSON.parse(JSON.stringify(fixtureContract)) } : {}),
       secondaryReadGrantCount: normalizedSecondaryReadGrants.length,
@@ -207,6 +227,16 @@ export class WorkspaceRegistry {
       if (!isWithinCI(ws.root, target)) throw new WorkspaceError(`path escapes workspace: ${relPath}`);
       throw new WorkspaceError(`symlink escapes workspace: ${relPath}`);
     }
+    if (this.isOsUserScope) {
+      return {
+        workspace: ws,
+        absolute: target,
+        canonical,
+        authorizationRoot: this._osUserAuthorizationRoot(canonical),
+        external: true,
+        grant: null,
+      };
+    }
     const grant = this._selectSecondaryGrant(canonical, secondaryReadGrants, { exactRoot: false });
     if (!grant) throw new WorkspaceError(`path not authorized by a secondary read grant: ${relPath}`);
     return { workspace: ws, absolute: target, canonical, authorizationRoot: grant.kind === 'file' ? path.dirname(grant.path) : grant.path, external: true, grant };
@@ -216,15 +246,26 @@ export class WorkspaceRegistry {
     const ws = this.get(workspaceId);
     if (!requestedPath) return { workspace: ws, root: ws.root, authorizationRoot: ws.root, external: false, grant: null };
     if (!path.isAbsolute(requestedPath)) {
-      const { canonical } = this.resolve(workspaceId, requestedPath);
+      const resolved = this.resolve(workspaceId, requestedPath);
+      const { canonical } = resolved;
       if (!fs.existsSync(canonical) || !fs.statSync(canonical).isDirectory()) throw new WorkspaceError(`scope is not a directory: ${requestedPath}`);
-      return { workspace: ws, root: canonical, authorizationRoot: ws.root, external: false, grant: null };
+      return {
+        workspace: ws,
+        root: canonical,
+        authorizationRoot: resolved.authorizationRoot,
+        external: resolved.external,
+        grant: resolved.grant || null,
+      };
     }
     const canonical = realpathOrNull(path.resolve(requestedPath));
     if (!canonical) throw new WorkspaceError(`search scope does not exist: ${requestedPath}`);
     if (isWithinCI(ws.root, canonical)) {
       if (!fs.statSync(canonical).isDirectory()) throw new WorkspaceError(`scope is not a directory: ${requestedPath}`);
       return { workspace: ws, root: canonical, authorizationRoot: ws.root, external: false, grant: null };
+    }
+    if (this.isOsUserScope) {
+      if (!fs.statSync(canonical).isDirectory()) throw new WorkspaceError(`scope is not a directory: ${requestedPath}`);
+      return { workspace: ws, root: canonical, authorizationRoot: canonical, external: true, grant: null };
     }
     const grant = this._selectSecondaryGrant(canonical, secondaryReadGrants, { exactRoot: true });
     if (!grant || grant.kind !== 'root') throw new WorkspaceError(`search scope not authorized by an exact secondary directory grant: ${requestedPath}`);
@@ -244,6 +285,14 @@ export class WorkspaceRegistry {
     const canonical = effectiveRealPath(ws.root, target);
     if (!isWithin(ws.root, canonical)) throw new WorkspaceError(`symlink/junction escapes workspace: ${relPath}`);
     return { workspace: ws, absolute: target, exists: fs.existsSync(target), canonical };
+  }
+
+  _osUserAuthorizationRoot(canonical) {
+    try {
+      return fs.statSync(canonical).isDirectory() ? canonical : path.dirname(canonical);
+    } catch {
+      return path.dirname(canonical);
+    }
   }
 
   getWorkspace(workspaceId) { return this.get(workspaceId); }

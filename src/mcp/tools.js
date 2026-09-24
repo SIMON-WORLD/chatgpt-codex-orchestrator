@@ -148,7 +148,7 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
       path: z.string().optional(),
       fixture: z.string().optional(),
       secondaryReadGrants: z.array(z.string()).max(16).optional(),
-    }),
+    }).strict(),
   },
   async ({ path, fixture, secondaryReadGrants }) => {
     try { return text(workspaceRegistry.open({ path, fixture, secondaryReadGrants })); }

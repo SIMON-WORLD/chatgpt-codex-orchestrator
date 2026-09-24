@@ -36,6 +36,20 @@ export function loadAlphaConfig(overrides = {}) {
 // --- v0.2 production runtime config (M5) -------------------------------------
 // No auth token / API key is stored here. The tunnel api_key is supplied via the
 // environment (referenced as "env:VAR" in the tunnel profile), never inlined.
+export const FILESYSTEM_SCOPE_POLICIES = Object.freeze({
+  SELECTED_ROOTS: 'selected_roots',
+  OS_USER_SCOPE: 'os_user_scope',
+});
+
+export function normalizeFilesystemScopePolicy(value, { fallback = FILESYSTEM_SCOPE_POLICIES.SELECTED_ROOTS } = {}) {
+  const raw = value === undefined || value === null ? fallback : value;
+  const policy = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (policy !== FILESYSTEM_SCOPE_POLICIES.SELECTED_ROOTS && policy !== FILESYSTEM_SCOPE_POLICIES.OS_USER_SCOPE) {
+    throw new Error(`filesystemScope must be ${FILESYSTEM_SCOPE_POLICIES.SELECTED_ROOTS} or ${FILESYSTEM_SCOPE_POLICIES.OS_USER_SCOPE}`);
+  }
+  return policy;
+}
+
 export const DEFAULT_V02_CONFIG = {
   host: '127.0.0.1',
   port: 8745,
@@ -43,6 +57,9 @@ export const DEFAULT_V02_CONFIG = {
   governanceNamespace: 'default', // Brain Continuity governance namespace under the dataRoot
   workspaceRoot: null,          // a single workspace root (allowedRoots derived)
   workspaceRoots: [],           // explicit allowlist
+  // Legacy profiles with no filesystemScope remain selected-roots profiles. The
+  // OS-user scope is deliberately opt-in and never materializes drive roots.
+  filesystemScope: FILESYSTEM_SCOPE_POLICIES.SELECTED_ROOTS,
   worktree: {
     poolRoot: null,             // dedicated worktree trust pool root (canonical layout: E:\\src\\chatgpt-codex-orchestrator-wt)
     trustedRepos: [],           // explicit canonical repos allowed as `repo` for worktree_create (e.g. the main clone)
@@ -86,9 +103,14 @@ function deepMerge(base, ...sources) {
 
 function normalizeRoots(roots, single) {
   const list = [];
+  const seen = new Set();
   for (const r of (Array.isArray(roots) ? roots : (roots ? [roots] : []))) if (r) list.push(path.resolve(String(r)));
-  if (single && !list.includes(path.resolve(single))) list.push(path.resolve(String(single)));
-  return [...new Set(list)];
+  if (single) list.push(path.resolve(String(single)));
+  for (const root of list) {
+    const key = process.platform === 'win32' ? root.toLowerCase() : root;
+    if (!seen.has(key)) seen.add(key);
+  }
+  return [...seen].map((key) => list.find((root) => (process.platform === 'win32' ? root.toLowerCase() : root) === key));
 }
 
 // Load the v0.2 runtime config. Order: defaults < config file < overrides < env.
@@ -97,7 +119,11 @@ export function loadV02Config(overrides = {}, { configPath = null } = {}) {
   if (configPath && fs.existsSync(configPath)) {
     try { Object.assign(file, JSON.parse(fs.readFileSync(configPath, 'utf8'))); } catch { throw new Error('invalid v0.2 config file: ' + configPath); }
   }
+  const filesystemScope = normalizeFilesystemScopePolicy(
+    overrides.filesystemScope !== undefined ? overrides.filesystemScope : file.filesystemScope,
+  );
   const cfg = deepMerge(DEFAULT_V02_CONFIG, file, overrides);
+  cfg.filesystemScope = filesystemScope;
   // env overrides (non-sensitive transport/config)
   if (process.env.V02_PORT) cfg.port = Number(process.env.V02_PORT);
   if (process.env.V02_HOST) cfg.host = process.env.V02_HOST;

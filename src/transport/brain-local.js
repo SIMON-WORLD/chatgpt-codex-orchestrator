@@ -25,7 +25,7 @@ import { AppServerClient } from '../executor/app-server-client.js';
 import { startMcpServer } from '../mcp/server.js';
 import { createCapabilityRouter } from '../router/capability-router.js';
 import { createDurableGovernanceService } from '../governance/durable.js';
-import { loadV02Config } from '../config.js';
+import { FILESYSTEM_SCOPE_POLICIES, loadV02Config } from '../config.js';
 import { resolveCodexAppServer } from './codex.js';
 import { WorktreeService } from '../local/worktree.js';
 
@@ -78,7 +78,9 @@ export class BrainLocalRuntime {
   async start() {
     const c = this.config;
     const allowedRoots = c.workspaceRoots.length ? c.workspaceRoots : (c.workspaceRoot ? [c.workspaceRoot] : []);
-    if (!allowedRoots.length) throw new Error('v0.2 runtime requires a workspaceRoot / workspaceRoots');
+    if (!allowedRoots.length && c.filesystemScope !== FILESYSTEM_SCOPE_POLICIES.OS_USER_SCOPE) {
+      throw new Error('v0.2 runtime requires a workspaceRoot / workspaceRoots for selected_roots scope');
+    }
     const fixtures = c.diagnostics?.localReadOnlyFixture
       ? {
           [READ_ONLY_SMOKE_FIXTURE_NAME]: {
@@ -87,7 +89,7 @@ export class BrainLocalRuntime {
           },
         }
       : null;
-    this.registry = new WorkspaceRegistry({ allowedRoots, fixtures });
+    this.registry = new WorkspaceRegistry({ allowedRoots, fixtures, filesystemScope: c.filesystemScope });
 
     if (!this.activationPreflight) {
       const codex = resolveCodexAppServer({ codexBin: c.codex.bin, listen: c.codex.listen, spawnArgs: c.codex.spawnArgs });
@@ -204,7 +206,7 @@ export class BrainLocalRuntime {
           ? 'activation preflight preserves but does not probe or manage the external tunnel'
           : (tunnelPresent ? (tunnelReady ? null : 'tunnel not ready (probe failed or child not ready)') : 'tunnel-client executable not found'),
       },
-      workspace: { roots: c.workspaceRoots },
+      workspace: { roots: c.workspaceRoots, filesystemScope: c.filesystemScope },
       readyForLocalMcp,
       readyForTunnel,
       readyForChatGPT,

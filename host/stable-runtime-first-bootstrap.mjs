@@ -262,13 +262,18 @@ export async function firstBootstrap(
     repoPath = null,
     readOnlySmokeFixture = null,
     authorizedWorkspaceRoot = null,
+    filesystemScope = null,
+    selectedRoots = undefined,
     servingPort = DEFAULT_STABLE_PORT,
   },
   { fsImpl = fs, run = runCommand, platform = process.platform } = {},
 ) {
   const sha = exactSha(targetSha);
-  if (readOnlySmokeFixture && authorizedWorkspaceRoot) {
+  if (Number(Boolean(readOnlySmokeFixture)) + Number(Boolean(authorizedWorkspaceRoot)) + Number(filesystemScope !== null && filesystemScope !== undefined) > 1) {
     throw new StableRuntimeFirstBootstrapError('select only one host mutation mode', { phase: 'target_binding' });
+  }
+  if (selectedRoots !== undefined && (filesystemScope === null || filesystemScope === undefined)) {
+    throw new StableRuntimeFirstBootstrapError('--selected-root requires --filesystem-scope', { phase: 'target_binding' });
   }
   let resolvedConfigPath = configPath;
   if (!resolvedConfigPath) {
@@ -313,7 +318,7 @@ export async function firstBootstrap(
     });
   }
 
-  const hostMutationMode = Boolean(readOnlySmokeFixture || authorizedWorkspaceRoot);
+  const hostMutationMode = Boolean(readOnlySmokeFixture || authorizedWorkspaceRoot || (filesystemScope !== null && filesystemScope !== undefined));
   const requiredTargetFiles = hostMutationMode
     ? [
         ...REQUIRED_TARGET_FILES,
@@ -323,6 +328,9 @@ export async function firstBootstrap(
           : []),
         ...(authorizedWorkspaceRoot
           ? ['src/activation/authorized-workspace-root-installer.js']
+          : []),
+        ...(filesystemScope !== null && filesystemScope !== undefined
+          ? ['src/activation/filesystem-scope-installer.js']
           : []),
       ]
     : REQUIRED_TARGET_FILES;
@@ -349,6 +357,15 @@ export async function firstBootstrap(
           '--repo', repo,
           '--authorized-workspace-root', authorizedWorkspaceRoot,
         ]
+      : filesystemScope !== null && filesystemScope !== undefined
+        ? [
+            'host/stable-runtime-recover.mjs',
+            '--sha', sha,
+            '--config', absoluteConfigPath,
+            '--repo', repo,
+            '--filesystem-scope', filesystemScope,
+            ...((selectedRoots || []).flatMap((root) => ['--selected-root', root])),
+          ]
       : ['scripts/stable-runtime-activate.mjs', '--sha', sha, '--config', absoluteConfigPath, '--repo', repo];
   const evidencePrefix = hostMutationMode ? RECOVERY_EVIDENCE_PREFIX : ACTIVATION_EVIDENCE_PREFIX;
 
@@ -413,6 +430,16 @@ export async function firstBootstrap(
     };
   }
 
+  if (filesystemScope !== null && filesystemScope !== undefined) {
+    return {
+      status: 'PASS',
+      sha,
+      bootstrapArtifactIndependentOfCanonicalCheckout: true,
+      filesystemScopeUpdate: true,
+      targetRecovery: targetResult,
+    };
+  }
+
   return {
     status: 'PASS', sha, repo, configPath: absoluteConfigPath, checkout,
     bootstrapArtifactIndependentOfCanonicalCheckout: true,
@@ -431,6 +458,8 @@ function parseArgs(argv) {
     else if (arg === '--repo') out.repoPath = argv[++i];
     else if (arg === '--read-only-smoke-fixture') out.readOnlySmokeFixture = argv[++i];
     else if (arg === '--authorized-workspace-root') out.authorizedWorkspaceRoot = argv[++i];
+    else if (arg === '--filesystem-scope') out.filesystemScope = argv[++i];
+    else if (arg === '--selected-root') (out.selectedRoots ||= []).push(argv[++i]);
     else if (arg === '--serving-port') out.servingPort = Number(argv[++i]);
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`unknown argument: ${arg}`);
@@ -448,6 +477,7 @@ function usage() {
     'Normal activation: --sha <exact-40-hex-commit> [--config <stable-config>] [--repo <trusted-canonical-repo>]',
     'Fixture install: --sha <exact-40-hex-commit> --read-only-smoke-fixture <exact-human-approved-directory> [--repo <trusted-canonical-repo>] [--serving-port 8745]',
     'Workspace-root authorization: --sha <exact-40-hex-commit> --authorized-workspace-root <exact-human-approved-directory> [--repo <trusted-canonical-repo>] [--serving-port 8745]',
+    'Filesystem scope update: --sha <exact-40-hex-commit> --filesystem-scope <selected_roots|os_user_scope> [--selected-root <exact-directory> ...] [--repo <trusted-canonical-repo>] [--serving-port 8745]',
     'When --config is omitted on Windows, the bootstrap binds only to the single exact serving Stable Runtime listener and reads its explicit process --config argument. It does not scan the filesystem.',
     'Equivalent host-launcher environment: STABLE_RUNTIME_TARGET_SHA, optional STABLE_RUNTIME_CONFIG / STABLE_RUNTIME_REPO.',
   ].join('\n');

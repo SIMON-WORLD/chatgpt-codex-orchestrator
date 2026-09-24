@@ -128,7 +128,7 @@ export function validateStructuredTarget({
   if (stat.size > maxInputBytes) throw structuredError('input byte budget exceeded');
 
   const canonicalRel = safeRelative(resolved.authorizationRoot || resolved.workspace.root, resolved.canonical);
-  if (isSensitivePath(requestedPath) || (canonicalRel && isSensitivePath(canonicalRel))) {
+  if (isSensitivePath(requestedPath) || isSensitivePath(resolved.canonical) || (canonicalRel && isSensitivePath(canonicalRel))) {
     throw structuredError('sensitive path blocked');
   }
   const extension = assertExtension({

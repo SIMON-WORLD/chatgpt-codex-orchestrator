@@ -68,7 +68,7 @@ export function validateRead({ workspaceId, path: relPath, offset = 0, maxBytes 
   // Evaluate read policy on BOTH the caller-visible path and the canonical
   // target (an internal symlink/junction alias must not hide a sensitive file).
   const canonicalRel = path.relative(authorizationRoot || workspace.root, canonical);
-  if (isSensitivePath(relPath) || (canonicalRel && isSensitivePath(canonicalRel))) {
+  if (isSensitivePath(relPath) || isSensitivePath(canonical) || (canonicalRel && isSensitivePath(canonicalRel))) {
     throw new WorkspaceError(`sensitive path blocked: ${relPath}`);
   }
 
