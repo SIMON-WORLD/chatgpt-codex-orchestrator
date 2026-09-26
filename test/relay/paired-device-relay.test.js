@@ -18,12 +18,12 @@ async function verifyBearer(token) {
   return identity;
 }
 
-function harness(t, { logger = () => {} } = {}) {
+function harness(t, { logger = () => {}, coreOptions = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-181-relay-'));
   const dbPath = path.join(dir, 'relay.sqlite');
   const clock = { now: 1_800_000_000_000 };
   const store = new RelayStore(dbPath);
-  const core = new RelayCore({ store, verifyBearer, now: () => clock.now, logger });
+  const core = new RelayCore({ store, verifyBearer, now: () => clock.now, logger, ...coreOptions });
   t.after(() => {
     core.close();
     store.close();
@@ -373,6 +373,188 @@ test('runtime changes fail in-flight work closed and relay restart never persist
   });
   assert.equal(afterRestart, null);
   assert.equal(JSON.stringify(store.db.prepare('SELECT * FROM devices WHERE device_id = ?').get(paired.deviceId)).includes('memory-only-inflight'), false);
+});
+
+
+test('dispatch admission enforces per-device and per-account limits with account/device isolation', async (t) => {
+  const logs = [];
+  const { core } = harness(t, {
+    logger: (entry) => logs.push(entry),
+    coreOptions: { maxPendingPerDevice: 2, maxPendingPerAccount: 3 },
+  });
+  const a1 = await pair(core, 'acct-a', 'A1');
+  const a2 = await pair(core, 'acct-a', 'A2');
+  const b1 = await pair(core, 'acct-b', 'B1');
+
+  for (const [paired, runtimeId] of [[a1, 'runtime-a1'], [a2, 'runtime-a2'], [b1, 'runtime-b1']]) {
+    core.connectAgent({
+      deviceId: paired.deviceId,
+      credential: paired.credential,
+      runtimeId,
+      executorReady: true,
+      protocolVersion: '1',
+    });
+  }
+
+  const a1p1 = core.dispatch({ bearerToken: 'acct-a', deviceId: a1.deviceId, payload: { sentinel: 'a1-1' }, deadlineMs: 5_000 });
+  const a1p2 = core.dispatch({ bearerToken: 'acct-a', deviceId: a1.deviceId, payload: { sentinel: 'a1-2' }, deadlineMs: 5_000 });
+  await rejectsCode(
+    core.dispatch({ bearerToken: 'acct-a', deviceId: a1.deviceId, payload: { sentinel: 'device-overload' }, deadlineMs: 5_000 }),
+    'DEVICE_DISPATCH_LIMIT_EXCEEDED',
+  );
+
+  const a2p1 = core.dispatch({ bearerToken: 'acct-a', deviceId: a2.deviceId, payload: { sentinel: 'a2-1' }, deadlineMs: 5_000 });
+  await rejectsCode(
+    core.dispatch({ bearerToken: 'acct-a', deviceId: a2.deviceId, payload: { sentinel: 'account-overload' }, deadlineMs: 5_000 }),
+    'ACCOUNT_DISPATCH_LIMIT_EXCEEDED',
+  );
+
+  const b1p1 = core.dispatch({ bearerToken: 'acct-b', deviceId: b1.deviceId, payload: { sentinel: 'b1-1' }, deadlineMs: 5_000 });
+  assert.equal(core.pending.size, 4);
+
+  const overloads = logs.filter((entry) => entry.event === 'dispatch_overload');
+  assert.deepEqual(
+    overloads.map(({ scope, pendingCount, limit }) => ({ scope, pendingCount, limit })),
+    [
+      { scope: 'device', pendingCount: 2, limit: 2 },
+      { scope: 'account', pendingCount: 3, limit: 3 },
+    ],
+  );
+  const overloadText = JSON.stringify(overloads);
+  assert.equal(overloadText.includes(a1.deviceId), false);
+  assert.equal(overloadText.includes(a2.deviceId), false);
+  assert.equal(overloadText.includes('acct-a'), false);
+  assert.equal(overloadText.includes('device-overload'), false);
+  assert.equal(overloadText.includes('account-overload'), false);
+
+  const closed = [a1p1, a1p2, a2p1, b1p1].map((pending) => rejectsCode(pending, 'RELAY_RESTARTED'));
+  core.close();
+  await Promise.all(closed);
+});
+
+test('dispatch capacity releases after completion and timeout without leaving queued tombstones', async (t) => {
+  const { core } = harness(t, { coreOptions: { maxPendingPerDevice: 1, maxPendingPerAccount: 1 } });
+  const paired = await pair(core, 'acct-a', 'Release');
+  const session = core.connectAgent({
+    deviceId: paired.deviceId,
+    credential: paired.credential,
+    runtimeId: 'runtime-release',
+    executorReady: true,
+    protocolVersion: '1',
+  });
+
+  const completed = core.dispatch({
+    bearerToken: 'acct-a',
+    deviceId: paired.deviceId,
+    payload: { sentinel: 'complete' },
+    deadlineMs: 5_000,
+  });
+  const envelope = await core.pollAgent({
+    deviceId: paired.deviceId,
+    credential: paired.credential,
+    runtimeId: 'runtime-release',
+    connectionEpoch: session.connectionEpoch,
+    executorReady: true,
+    holdMs: 0,
+  });
+  core.respondAgent({
+    deviceId: paired.deviceId,
+    credential: paired.credential,
+    runtimeId: 'runtime-release',
+    connectionEpoch: session.connectionEpoch,
+    requestId: envelope.requestId,
+    response: { ok: true, value: { done: true } },
+  });
+  assert.deepEqual(await completed, { done: true });
+  assert.equal(core.pending.size, 0);
+
+  const timedOut = core.dispatch({
+    bearerToken: 'acct-a',
+    deviceId: paired.deviceId,
+    payload: { sentinel: 'timeout' },
+    deadlineMs: 10,
+  });
+  await rejectsCode(timedOut, 'REQUEST_DEADLINE_EXCEEDED');
+  assert.equal(core.pending.size, 0);
+  assert.equal(core.queues.has(paired.deviceId), false);
+
+  const afterTimeout = core.dispatch({
+    bearerToken: 'acct-a',
+    deviceId: paired.deviceId,
+    payload: { sentinel: 'after-timeout' },
+    deadlineMs: 5_000,
+  });
+  const nextEnvelope = await core.pollAgent({
+    deviceId: paired.deviceId,
+    credential: paired.credential,
+    runtimeId: 'runtime-release',
+    connectionEpoch: session.connectionEpoch,
+    executorReady: true,
+    holdMs: 0,
+  });
+  assert.equal(nextEnvelope.payload.sentinel, 'after-timeout');
+  core.respondAgent({
+    deviceId: paired.deviceId,
+    credential: paired.credential,
+    runtimeId: 'runtime-release',
+    connectionEpoch: session.connectionEpoch,
+    requestId: nextEnvelope.requestId,
+    response: { ok: true, value: 'released' },
+  });
+  assert.equal(await afterTimeout, 'released');
+});
+
+test('same-runtime reconnect preserves one admission slot and revoke releases pending state', async (t) => {
+  const { core } = harness(t, { coreOptions: { maxPendingPerDevice: 1, maxPendingPerAccount: 1 } });
+  const paired = await pair(core, 'acct-a', 'Reconnect');
+  const first = core.connectAgent({
+    deviceId: paired.deviceId,
+    credential: paired.credential,
+    runtimeId: 'runtime-stable',
+    executorReady: true,
+    protocolVersion: '1',
+  });
+
+  const pending = core.dispatch({
+    bearerToken: 'acct-a',
+    deviceId: paired.deviceId,
+    payload: { sentinel: 'survive-reconnect' },
+    deadlineMs: 5_000,
+  });
+  const rejectedOnRevoke = rejectsCode(pending, 'DEVICE_REVOKED');
+
+  const second = core.connectAgent({
+    deviceId: paired.deviceId,
+    credential: paired.credential,
+    runtimeId: 'runtime-stable',
+    executorReady: true,
+    protocolVersion: '1',
+  });
+  assert.ok(second.connectionEpoch > first.connectionEpoch);
+  assert.equal(core.pending.size, 1);
+  await rejectsCode(
+    core.dispatch({ bearerToken: 'acct-a', deviceId: paired.deviceId, payload: { sentinel: 'must-overload' }, deadlineMs: 5_000 }),
+    'DEVICE_DISPATCH_LIMIT_EXCEEDED',
+  );
+
+  const redelivered = await core.pollAgent({
+    deviceId: paired.deviceId,
+    credential: paired.credential,
+    runtimeId: 'runtime-stable',
+    connectionEpoch: second.connectionEpoch,
+    executorReady: true,
+    holdMs: 0,
+  });
+  assert.equal(redelivered.payload.sentinel, 'survive-reconnect');
+
+  await core.revokeDevice({ bearerToken: 'acct-a', deviceId: paired.deviceId });
+  await rejectedOnRevoke;
+  assert.equal(core.pending.size, 0);
+  assert.equal(core.queues.has(paired.deviceId), false);
+  await rejectsCode(
+    core.dispatch({ bearerToken: 'acct-a', deviceId: paired.deviceId, payload: { sentinel: 'revoked' }, deadlineMs: 5_000 }),
+    'DEVICE_REVOKED',
+  );
 });
 
 test('HTTP agent transport rejects remote plaintext relay URLs but permits narrow loopback development HTTP', () => {
