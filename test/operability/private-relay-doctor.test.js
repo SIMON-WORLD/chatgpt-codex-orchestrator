@@ -53,11 +53,44 @@ test('composed doctor reports exact runtime, tunnel and Ready device without exp
   assert.equal(out.stableRuntime.revision, sha);
   assert.equal(out.configuration.profileMatches, true);
   assert.equal(out.configuration.relayDeviceMatches, true);
+  assert.equal(out.configuration.configuredRelayDeviceReady, true);
   assert.equal(out.secureTunnel.ready, true);
   assert.equal(out.devices[0].ready, true);
   assert.equal(out.devices[0].runtimeId, 'runtime-a');
   assert.equal(JSON.stringify(out).includes('super-secret-bearer'), false);
   assert.equal(seen.find((x) => x.url.endsWith('/devices')).authorization, 'Bearer super-secret-bearer');
+});
+
+test('configured device readiness cannot be satisfied by another Ready account device', async () => {
+  const sha = 'c'.repeat(40);
+  const configPath = fixtureConfig();
+  const exactNotReady = async (url) => {
+    if (url.endsWith('/devices')) return response(200, { devices: [
+      { deviceId: 'device-a', online: true, executorReady: false, ready: false, runtimeId: 'runtime-a' },
+      { deviceId: 'device-b', online: true, executorReady: true, ready: true, runtimeId: 'runtime-b' },
+    ] });
+    return response(200, { revision: sha });
+  };
+  const missingExact = async (url) => {
+    if (url.endsWith('/devices')) return response(200, { devices: [
+      { deviceId: 'device-b', online: true, executorReady: true, ready: true, runtimeId: 'runtime-b' },
+    ] });
+    return response(200, { revision: sha });
+  };
+
+  const notReady = await composePrivateRelayDoctor({ configPath, expectedSha: sha, accountBearer: 'token', fetchImpl: exactNotReady });
+  assert.equal(notReady.status, 'NOT_READY');
+  assert.equal(notReady.stopBoundary, 'device_readiness');
+  assert.equal(notReady.configuration.relayDeviceMatches, true);
+  assert.equal(notReady.configuration.configuredRelayDeviceReady, false);
+  assert.equal(notReady.devices.find((device) => device.deviceId === 'device-b').ready, true);
+
+  const missing = await composePrivateRelayDoctor({ configPath, expectedSha: sha, accountBearer: 'token', fetchImpl: missingExact });
+  assert.equal(missing.status, 'NOT_READY');
+  assert.equal(missing.stopBoundary, 'device_readiness');
+  assert.equal(missing.configuration.relayDeviceMatches, false);
+  assert.equal(missing.configuration.configuredRelayDeviceReady, false);
+  assert.equal(missing.devices[0].ready, true);
 });
 
 test('composed doctor distinguishes runtime, tunnel, relay and device-readiness boundaries', async () => {

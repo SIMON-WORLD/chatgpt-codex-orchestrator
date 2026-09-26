@@ -63,10 +63,17 @@ export async function composePrivateRelayDoctor({
   const relayAlive = relayDevices.ok === true;
   const devices = safeDevices(relayDevices.body);
   const readyDevices = devices.filter((device) => device.ready);
-  const configuredRelayDeviceId = config.relayAgent?.enabled ? config.relayAgent.deviceId : null;
+  const relayAgentEnabled = config.relayAgent?.enabled === true;
+  const configuredRelayDeviceId = relayAgentEnabled ? config.relayAgent.deviceId : null;
+  const configuredRelayDevice = configuredRelayDeviceId
+    ? devices.find((device) => device.deviceId === configuredRelayDeviceId) || null
+    : null;
   const relayDeviceMatches = configuredRelayDeviceId
-    ? devices.some((device) => device.deviceId === configuredRelayDeviceId)
-    : config.relayAgent?.enabled !== true;
+    ? configuredRelayDevice !== null
+    : !relayAgentEnabled;
+  const configuredRelayDeviceReady = relayAgentEnabled
+    ? configuredRelayDevice?.ready === true
+    : readyDevices.length > 0;
   const profileMatches = localHealth.ok === true
     && localReady.ok === true
     && (!config.tunnel?.healthUrl || tunnelReady.ok === true)
@@ -76,15 +83,16 @@ export async function composePrivateRelayDoctor({
   if (!localHealth.ok || !localReady.ok) stopBoundary = 'stable_runtime';
   else if (tunnelReady.ok === false && config.tunnel?.healthUrl) stopBoundary = 'secure_tunnel';
   else if (!relayAlive) stopBoundary = 'relay';
-  else if (devices.length > 0 && readyDevices.length === 0) stopBoundary = 'device_readiness';
+  else if (!configuredRelayDeviceReady) stopBoundary = 'device_readiness';
 
   return {
-    status: localHealth.ok && localReady.ok && revisionMatches && profileMatches && relayAlive && readyDevices.length > 0
+    status: localHealth.ok && localReady.ok && revisionMatches && profileMatches && relayAlive && configuredRelayDeviceReady
       ? 'READY' : 'NOT_READY',
     configuration: {
       profileMatches,
       relayDeviceMatches,
       configuredRelayDeviceId,
+      configuredRelayDeviceReady,
     },
     localRelay: { configured: Boolean(effectiveRelayUrl), alive: relayAlive, status: relayDevices.status || 0 },
     secureTunnel: { configured: Boolean(config.tunnel?.healthUrl), ready: tunnelReady.ok, status: tunnelReady.status || 0 },
