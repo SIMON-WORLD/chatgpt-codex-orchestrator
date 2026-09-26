@@ -2,6 +2,8 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { DatabaseSync } from 'node:sqlite';
 
 export const RELAY_PROTOCOL_VERSION = '1';
+export const DEFAULT_RELAY_DEVICE_PENDING_LIMIT = 4;
+export const DEFAULT_RELAY_ACCOUNT_PENDING_LIMIT = 8;
 
 export class RelayError extends Error {
   constructor(code, message = code, status = 400) {
@@ -61,6 +63,12 @@ function parseCredential(value) {
 
 function rowBoolean(value) {
   return Number(value) === 1;
+}
+
+function normalizePendingLimit(value, name) {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 1024) throw new TypeError(`${name} must be an integer between 1 and 1024`);
+  return parsed;
 }
 
 export class RelayStore {
@@ -279,7 +287,7 @@ export class RelayStore {
 }
 
 export class RelayCore {
-  constructor({ store, verifyBearer, now = () => Date.now(), presenceWindowMs = 60_000, supportedProtocolVersions = [RELAY_PROTOCOL_VERSION], logger = () => {} }) {
+  constructor({ store, verifyBearer, now = () => Date.now(), presenceWindowMs = 60_000, supportedProtocolVersions = [RELAY_PROTOCOL_VERSION], logger = () => {}, maxPendingPerDevice = DEFAULT_RELAY_DEVICE_PENDING_LIMIT, maxPendingPerAccount = DEFAULT_RELAY_ACCOUNT_PENDING_LIMIT }) {
     if (!(store instanceof RelayStore)) throw new TypeError('RelayCore requires a RelayStore');
     if (typeof verifyBearer !== 'function') throw new TypeError('RelayCore requires verifyBearer');
     this.store = store;
@@ -288,6 +296,8 @@ export class RelayCore {
     this.presenceWindowMs = presenceWindowMs;
     this.supportedProtocolVersions = new Set(supportedProtocolVersions);
     this.logger = logger;
+    this.maxPendingPerDevice = normalizePendingLimit(maxPendingPerDevice, 'maxPendingPerDevice');
+    this.maxPendingPerAccount = normalizePendingLimit(maxPendingPerAccount, 'maxPendingPerAccount');
     this.activeSessions = new Map();
     this.pending = new Map();
     this.queues = new Map();
@@ -471,6 +481,7 @@ export class RelayCore {
     if (!state.online) fail('DEVICE_OFFLINE', 'device offline', 409);
     if (!state.ready) fail('DEVICE_NOT_READY', 'device not ready', 409);
     const session = this.activeSessions.get(deviceId);
+    this.#admitDispatch(accountId, deviceId);
     const requestId = randomUUID();
     const deadline = this.now() + Math.max(1, Math.min(Number(deadlineMs) || 30_000, 120_000));
     const item = {
@@ -522,6 +533,25 @@ export class RelayCore {
     return { accepted: true };
   }
 
+  #pendingCount(predicate) {
+    let count = 0;
+    for (const item of this.pending.values()) if (predicate(item)) count += 1;
+    return count;
+  }
+
+  #admitDispatch(accountId, deviceId) {
+    const devicePending = this.#pendingCount((item) => item.deviceId === deviceId);
+    if (devicePending >= this.maxPendingPerDevice) {
+      this.logger({ event: 'dispatch_overload', scope: 'device', pendingCount: devicePending, limit: this.maxPendingPerDevice });
+      fail('DEVICE_DISPATCH_LIMIT_EXCEEDED', 'device dispatch capacity exceeded', 429);
+    }
+    const accountPending = this.#pendingCount((item) => item.accountId === accountId);
+    if (accountPending >= this.maxPendingPerAccount) {
+      this.logger({ event: 'dispatch_overload', scope: 'account', pendingCount: accountPending, limit: this.maxPendingPerAccount });
+      fail('ACCOUNT_DISPATCH_LIMIT_EXCEEDED', 'account dispatch capacity exceeded', 429);
+    }
+  }
+
   #queueRequest(requestId) {
     const item = this.pending.get(requestId);
     if (!item || item.queued) return;
@@ -558,6 +588,15 @@ export class RelayCore {
     const item = this.pending.get(requestId);
     if (!item) return;
     clearTimeout(item.timer);
+    if (item.queued) {
+      const queue = this.queues.get(item.deviceId);
+      if (queue) {
+        const index = queue.indexOf(requestId);
+        if (index >= 0) queue.splice(index, 1);
+        if (queue.length === 0) this.queues.delete(item.deviceId);
+      }
+      item.queued = false;
+    }
     this.pending.delete(requestId);
     item.reject(error);
   }
