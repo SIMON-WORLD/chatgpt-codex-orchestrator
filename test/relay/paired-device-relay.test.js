@@ -375,6 +375,17 @@ test('runtime changes fail in-flight work closed and relay restart never persist
   assert.equal(JSON.stringify(store.db.prepare('SELECT * FROM devices WHERE device_id = ?').get(paired.deviceId)).includes('memory-only-inflight'), false);
 });
 
+test('HTTP agent transport rejects remote plaintext relay URLs but permits narrow loopback development HTTP', () => {
+  assert.throws(
+    () => new HttpAgentTransport({ relayBaseUrl: 'http://relay.example', deviceId: 'device', credential: 'credential' }),
+    /requires https for non-loopback hosts/u,
+  );
+  for (const relayBaseUrl of ['http://127.0.0.1:8787', 'http://localhost:8787', 'http://[::1]:8787']) {
+    assert.doesNotThrow(() => new HttpAgentTransport({ relayBaseUrl, deviceId: 'device', credential: 'credential' }));
+  }
+  assert.doesNotThrow(() => new HttpAgentTransport({ relayBaseUrl: 'https://relay.example', deviceId: 'device', credential: 'credential' }));
+});
+
 test('HTTP long-poll control plane preserves account/device auth boundaries and exposes no filesystem-scope mutation', async (t) => {
   const logs = [];
   const { core } = harness(t, { logger: (entry) => logs.push(entry) });
