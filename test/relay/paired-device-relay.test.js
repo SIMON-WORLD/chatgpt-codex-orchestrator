@@ -398,18 +398,21 @@ test('dispatch admission enforces per-device and per-account limits with account
 
   const a1p1 = core.dispatch({ bearerToken: 'acct-a', deviceId: a1.deviceId, payload: { sentinel: 'a1-1' }, deadlineMs: 5_000 });
   const a1p2 = core.dispatch({ bearerToken: 'acct-a', deviceId: a1.deviceId, payload: { sentinel: 'a1-2' }, deadlineMs: 5_000 });
+  await new Promise((resolve) => setImmediate(resolve));
   await rejectsCode(
     core.dispatch({ bearerToken: 'acct-a', deviceId: a1.deviceId, payload: { sentinel: 'device-overload' }, deadlineMs: 5_000 }),
     'DEVICE_DISPATCH_LIMIT_EXCEEDED',
   );
 
   const a2p1 = core.dispatch({ bearerToken: 'acct-a', deviceId: a2.deviceId, payload: { sentinel: 'a2-1' }, deadlineMs: 5_000 });
+  await new Promise((resolve) => setImmediate(resolve));
   await rejectsCode(
     core.dispatch({ bearerToken: 'acct-a', deviceId: a2.deviceId, payload: { sentinel: 'account-overload' }, deadlineMs: 5_000 }),
     'ACCOUNT_DISPATCH_LIMIT_EXCEEDED',
   );
 
   const b1p1 = core.dispatch({ bearerToken: 'acct-b', deviceId: b1.deviceId, payload: { sentinel: 'b1-1' }, deadlineMs: 5_000 });
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(core.pending.size, 4);
 
   const overloads = logs.filter((entry) => entry.event === 'dispatch_overload');
@@ -449,6 +452,7 @@ test('dispatch capacity releases after completion and timeout without leaving qu
     payload: { sentinel: 'complete' },
     deadlineMs: 5_000,
   });
+  await new Promise((resolve) => setImmediate(resolve));
   const envelope = await core.pollAgent({
     deviceId: paired.deviceId,
     credential: paired.credential,
@@ -484,6 +488,7 @@ test('dispatch capacity releases after completion and timeout without leaving qu
     payload: { sentinel: 'after-timeout' },
     deadlineMs: 5_000,
   });
+  await new Promise((resolve) => setImmediate(resolve));
   const nextEnvelope = await core.pollAgent({
     deviceId: paired.deviceId,
     credential: paired.credential,
@@ -521,6 +526,7 @@ test('same-runtime reconnect preserves one admission slot and revoke releases pe
     payload: { sentinel: 'survive-reconnect' },
     deadlineMs: 5_000,
   });
+  await new Promise((resolve) => setImmediate(resolve));
   const rejectedOnRevoke = rejectsCode(pending, 'DEVICE_REVOKED');
 
   const second = core.connectAgent({
