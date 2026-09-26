@@ -478,7 +478,9 @@ test('dispatch capacity releases after completion and timeout without leaving qu
     payload: { sentinel: 'timeout' },
     deadlineMs: 10,
   });
-  await rejectsCode(timedOut, 'REQUEST_DEADLINE_EXCEEDED');
+  const timedOutRejection = rejectsCode(timedOut, 'REQUEST_DEADLINE_EXCEEDED');
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  await timedOutRejection;
   assert.equal(core.pending.size, 0);
   assert.equal(core.queues.has(paired.deviceId), false);
 
