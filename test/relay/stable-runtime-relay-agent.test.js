@@ -360,12 +360,16 @@ test('BrainLocalRuntime starts relay mode only when explicitly enabled and stops
 });
 
 
-test('Stable Runtime isolates the relay credential from unrelated child-process inheritance', () => {
+test('Stable Runtime isolates the relay credential from unrelated child-process inheritance', async (t) => {
   const name = 'ISSUE_195_RELAY_DEVICE_SECRET';
   const previous = process.env[name];
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-195-relay-env-'));
+  t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }));
   process.env[name] = 'credential-id.secret';
+  let runtime = null;
   try {
     const config = loadV02Config({
+      dataRoot,
       workspaceRoot: process.cwd(),
       relayAgent: {
         enabled: true,
@@ -374,12 +378,13 @@ test('Stable Runtime isolates the relay credential from unrelated child-process 
         credentialEnv: name,
       },
     });
-    const runtime = new BrainLocalRuntime({ config });
+    runtime = new BrainLocalRuntime({ config });
     assert.equal(runtime.relayEnv[name], 'credential-id.secret');
     assert.equal(process.env[name], undefined);
     assert.equal(runtime._childEnv()[name], undefined);
     assert.equal(runtime._codexEnv()[name], undefined);
   } finally {
+    if (runtime) await runtime.close();
     if (previous === undefined) delete process.env[name];
     else process.env[name] = previous;
   }
