@@ -30,9 +30,21 @@ async function readJson(response) {
   return body;
 }
 
+function normalizeAgentRelayBaseUrl(value) {
+  const relayBaseUrl = String(value || '').replace(/\/+$/u, '');
+  let parsed;
+  try { parsed = new URL(relayBaseUrl); } catch { throw new TypeError('relayBaseUrl must be a valid http(s) URL'); }
+  const hostname = parsed.hostname.toLowerCase();
+  const loopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    throw new TypeError('relayBaseUrl requires https for non-loopback hosts');
+  }
+  return relayBaseUrl;
+}
+
 export class HttpAgentTransport {
   constructor({ relayBaseUrl, deviceId, credential, fetchFn = fetch }) {
-    this.relayBaseUrl = String(relayBaseUrl || '').replace(/\/+$/u, '');
+    this.relayBaseUrl = normalizeAgentRelayBaseUrl(relayBaseUrl);
     this.deviceId = deviceId;
     this.credential = credential;
     this.fetchFn = fetchFn;

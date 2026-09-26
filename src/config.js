@@ -112,6 +112,19 @@ function deepMerge(base, ...sources) {
   return out;
 }
 
+function normalizeRelayAgentUrl(value) {
+  const relayUrl = value ? String(value).replace(/\/+$/u, '') : null;
+  if (!relayUrl) return null;
+  let parsed;
+  try { parsed = new URL(relayUrl); } catch { throw new Error('relayAgent.relayUrl must be a valid http(s) URL'); }
+  const hostname = parsed.hostname.toLowerCase();
+  const loopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    throw new Error('relayAgent.relayUrl requires https for non-loopback hosts');
+  }
+  return relayUrl;
+}
+
 function normalizeRoots(roots, single) {
   const list = [];
   const seen = new Set();
@@ -164,7 +177,7 @@ export function loadV02Config(overrides = {}, { configPath = null } = {}) {
   }
   cfg.relayAgent = {
     enabled: cfg.relayAgent.enabled === true,
-    relayUrl: cfg.relayAgent.relayUrl ? String(cfg.relayAgent.relayUrl).replace(/\/+$/u, '') : null,
+    relayUrl: normalizeRelayAgentUrl(cfg.relayAgent.relayUrl),
     deviceId: cfg.relayAgent.deviceId ? String(cfg.relayAgent.deviceId).trim() : null,
     credentialEnv: cfg.relayAgent.credentialEnv ? String(cfg.relayAgent.credentialEnv).trim() : null,
     pollHoldMs: Math.max(0, Math.min(Number(cfg.relayAgent.pollHoldMs) || 25000, 25000)),

@@ -72,7 +72,9 @@ export class BrainLocalRuntime {
     this.tunnelProcess = null;
     this.relayExecute = relayExecute;
     this.relayAgentModeFactory = relayAgentModeFactory;
-    this.relayEnv = relayEnv;
+    const relayCredentialEnv = config.relayAgent?.enabled === true ? String(config.relayAgent.credentialEnv || '').trim() : '';
+    this.relayEnv = { ...(relayEnv || {}) };
+    if (relayCredentialEnv && relayEnv === process.env) delete process.env[relayCredentialEnv];
     this.relayFetch = relayFetch;
     this.relayLocalExecutor = null;
     this.relayAgentMode = null;
@@ -81,8 +83,15 @@ export class BrainLocalRuntime {
 
   get workspaceRoots() { return this.config.workspaceRoots; }
 
-  _codexEnv() {
+  _childEnv() {
     const env = { ...process.env };
+    const relayCredentialEnv = String(this.config.relayAgent?.credentialEnv || '').trim();
+    if (relayCredentialEnv) delete env[relayCredentialEnv];
+    return env;
+  }
+
+  _codexEnv() {
+    const env = this._childEnv();
     if (this.config.codex.runtimeProfile) env.CODEX_HOME = this.config.codex.runtimeProfile;
     // Inject a trusted CA bundle / proxy into the Codex App Server env (presence-only).
     if (this.config.codex.caBundle) env.CODEX_CA_CERTIFICATE = this.config.codex.caBundle;
@@ -185,7 +194,7 @@ export class BrainLocalRuntime {
     else if (t.profile && t.profileDir) args.push('--profile', t.profile, '--profile-dir', t.profileDir);
     else if (t.profile) args.push('--profile', t.profile);
     try {
-      const child = spawn(t.clientExecutable, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(t.clientExecutable, args, { stdio: ['ignore', 'pipe', 'pipe'], env: this._childEnv() });
       this.tunnelProcess = child;
       child.stdout && child.stdout.on('data', () => {});
       child.stderr && child.stderr.on('data', () => {});

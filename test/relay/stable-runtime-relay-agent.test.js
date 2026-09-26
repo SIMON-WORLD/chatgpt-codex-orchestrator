@@ -59,6 +59,13 @@ test('relay-agent config is default-off, secret-reference-only, and has no files
     () => loadV02Config({ relayAgent: { credential: 'must-never-be-configured' } }),
     /raw relayAgent\.credential is forbidden/u,
   );
+  assert.throws(
+    () => loadV02Config({ relayAgent: { enabled: true, relayUrl: 'http://relay.example', deviceId: 'device-remote', credentialEnv: 'LOCAL_RELAY_DEVICE_SECRET' } }),
+    /requires https for non-loopback hosts/u,
+  );
+  for (const relayUrl of ['http://127.0.0.1:8787', 'http://localhost:8787', 'http://[::1]:8787']) {
+    assert.equal(loadV02Config({ relayAgent: { enabled: true, relayUrl, deviceId: 'device-local', credentialEnv: 'LOCAL_RELAY_DEVICE_SECRET' } }).relayAgent.relayUrl, relayUrl);
+  }
 
   const enabled = loadV02Config({
     relayAgent: {
@@ -350,4 +357,35 @@ test('BrainLocalRuntime starts relay mode only when explicitly enabled and stops
   assert.equal('credential' in captured.config, false);
   await enabledRuntime.close();
   assert.equal(stopped, 1);
+});
+
+
+test('Stable Runtime isolates the relay credential from unrelated child-process inheritance', async (t) => {
+  const name = 'ISSUE_195_RELAY_DEVICE_SECRET';
+  const previous = process.env[name];
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-195-relay-env-'));
+  t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }));
+  process.env[name] = 'credential-id.secret';
+  let runtime = null;
+  try {
+    const config = loadV02Config({
+      dataRoot,
+      workspaceRoot: process.cwd(),
+      relayAgent: {
+        enabled: true,
+        relayUrl: 'https://relay.example',
+        deviceId: 'device-195',
+        credentialEnv: name,
+      },
+    });
+    runtime = new BrainLocalRuntime({ config });
+    assert.equal(runtime.relayEnv[name], 'credential-id.secret');
+    assert.equal(process.env[name], undefined);
+    assert.equal(runtime._childEnv()[name], undefined);
+    assert.equal(runtime._codexEnv()[name], undefined);
+  } finally {
+    if (runtime) await runtime.close();
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
 });
