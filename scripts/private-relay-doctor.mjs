@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { composePrivateRelayDoctor } from '../src/operability/private-relay-doctor.js';
+import { composePrivateRelayDoctor, privateRelayDoctorExitCode } from '../src/operability/private-relay-doctor.js';
 
 function parseArgs(argv) {
   const out = {};
@@ -24,7 +24,7 @@ try {
     accountBearer,
   });
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-  process.exitCode = result.status === 'READY' ? 0 : 2;
+  process.exitCode = privateRelayDoctorExitCode(result);
 } catch (error) {
   process.stderr.write(JSON.stringify({
     status: 'FAIL',

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { composePrivateRelayDoctor } from '../../src/operability/private-relay-doctor.js';
+import { composePrivateRelayDoctor, privateRelayDoctorExitCode } from '../../src/operability/private-relay-doctor.js';
 
 function fixtureConfig() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue-200-doctor-'));
@@ -30,6 +31,16 @@ function response(status, body) {
   return { ok: status >= 200 && status < 300, status, async json() { return body; } };
 }
 
+test('doctor CLI reserves exit 1 for invocation/runtime errors', () => {
+  const run = spawnSync(process.execPath, ['scripts/private-relay-doctor.mjs'], {
+    cwd: path.resolve('.'), encoding: 'utf8', env: { ...process.env, PRIVATE_RELAY_ACCOUNT_BEARER: '' },
+  });
+  assert.equal(run.status, 1);
+  const error = JSON.parse(run.stderr.trim());
+  assert.equal(error.status, 'FAIL');
+  assert.match(error.error, /configPath is required/u);
+});
+
 test('composed doctor reports exact runtime, tunnel and Ready device without exposing bearer', async () => {
   const sha = 'a'.repeat(40);
   const seen = [];
@@ -54,7 +65,16 @@ test('composed doctor reports exact runtime, tunnel and Ready device without exp
   assert.equal(out.configuration.profileMatches, true);
   assert.equal(out.configuration.relayDeviceMatches, true);
   assert.equal(out.configuration.configuredRelayDeviceReady, true);
-  assert.equal(out.secureTunnel.ready, true);
+  assert.equal(out.statusScope, 'local_profile_prerequisites');
+  assert.equal(out.secureTunnel.startupLocalReady, true);
+  assert.equal(out.secureTunnel.readinessScope, 'startup_local');
+  assert.deepEqual(out.controlPlanePolling, {
+    state: 'unknown', observed: false, source: 'unobserved',
+    reason: 'no_supported_polling_health_signal_configured',
+  });
+  assert.equal(out.chatgptDispatch.state, 'unproven');
+  assert.equal(out.chatgptDispatch.proven, false);
+  assert.equal(privateRelayDoctorExitCode(out), 0);
   assert.equal(out.devices[0].ready, true);
   assert.equal(out.devices[0].runtimeId, 'runtime-a');
   assert.equal(JSON.stringify(out).includes('super-secret-bearer'), false);
@@ -98,7 +118,7 @@ test('composed doctor distinguishes runtime, tunnel, relay and device-readiness 
   const configPath = fixtureConfig();
   const scenarios = [
     ['stable_runtime', async (url) => url.endsWith('/healthz') ? response(503, {}) : response(200, { revision: sha, devices: [] })],
-    ['secure_tunnel', async (url) => url.includes(':8081/readyz') ? response(503, {}) : url.endsWith('/devices') ? response(200, { devices: [] }) : response(200, { revision: sha })],
+    ['secure_tunnel_startup_readiness', async (url) => url.includes(':8081/readyz') ? response(503, {}) : url.endsWith('/devices') ? response(200, { devices: [] }) : response(200, { revision: sha })],
     ['relay', async (url) => url.endsWith('/devices') ? response(503, {}) : response(200, { revision: sha })],
     ['device_readiness', async (url) => url.endsWith('/devices') ? response(200, { devices: [{ deviceId: 'd', online: true, executorReady: false, ready: false }] }) : response(200, { revision: sha })],
   ];
@@ -106,5 +126,7 @@ test('composed doctor distinguishes runtime, tunnel, relay and device-readiness 
     const out = await composePrivateRelayDoctor({ configPath, expectedSha: sha, accountBearer: 'token', fetchImpl });
     assert.equal(out.stopBoundary, expectedBoundary);
     assert.equal(out.status, 'NOT_READY');
+    assert.equal(privateRelayDoctorExitCode(out), 2);
+    assert.equal(out.chatgptDispatch.state, 'unproven');
   }
 });

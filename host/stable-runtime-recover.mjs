@@ -306,7 +306,7 @@ export class StableRuntimeRecoveryCoordinator {
       };
       const tunnelBefore = await this.probeJson(config.tunnel.healthUrl);
       if (!tunnelBefore.ok) {
-        throw new StableRuntimeRecoveryError('existing external Secure Tunnel is not ready', {
+        throw new StableRuntimeRecoveryError('existing external Secure Tunnel startup/local readiness is not satisfied', {
           phase: 'tunnel_readiness',
           status: tunnelBefore.status || 0,
         });
@@ -320,7 +320,7 @@ export class StableRuntimeRecoveryCoordinator {
       }
       const finalTunnel = await this.probeJson(config.tunnel.healthUrl);
       if (!finalTunnel.ok) {
-        throw new StableRuntimeRecoveryError('final external Secure Tunnel readiness proof failed', { phase: 'joint_readiness', status: finalTunnel.status || 0 });
+        throw new StableRuntimeRecoveryError('final external Secure Tunnel startup/local readiness proof failed', { phase: 'joint_readiness', status: finalTunnel.status || 0 });
       }
 
       if (prepared && startedRuntimePid) {
