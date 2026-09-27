@@ -12,7 +12,7 @@ npm run recover:private-relay -- --config <stable-runtime-config> --sha <exact-4
 
 `recover:private-relay` is intentionally an alias of `host/stable-runtime-recover.mjs`. Exact revision/profile/repo binding, single-listener checks, idempotent reuse, fail-closed drift handling, and externally managed Secure Tunnel ownership therefore remain unchanged. When `relayAgent.enabled=true`, the recovered Stable Runtime starts the existing relay-agent mode as part of the normal runtime. Do not add an independent Relay-agent supervisor.
 
-Repeated recovery must reuse the one proven exact Stable Runtime listener. Unknown listeners, wrong revisions, binding drift, or missing tunnel readiness fail closed. Do not broad-kill processes.
+Repeated recovery must reuse the one proven exact Stable Runtime listener. Unknown listeners, wrong revisions, binding drift, or missing Secure Tunnel startup/local readiness fail closed. This recovery proof does not establish current control-plane polling freshness or guarantee the next ChatGPT-facing dispatch. Do not broad-kill processes.
 
 ## Composed doctor / status
 
@@ -25,10 +25,13 @@ npm run doctor:private-relay -- --config <stable-runtime-config> --sha <exact-40
 
 The doctor is read-only and composes existing surfaces only:
 - local Stable Runtime `/healthz` + `/readyz`;
-- configured external Secure Tunnel readiness URL;
-- Relay account `/devices` state for Online / executorReady / Ready and runtimeId.
+- configured external Secure Tunnel `/readyz` as startup/local readiness only;
+- Relay account `/devices` state for Online / executorReady / Ready and runtimeId;
+- control-plane polling as a separate observation. On the current profile, no explicitly supported bounded polling-health signal is configured, so it is reported as `unknown` / `unobserved` rather than inferred from `/readyz`.
 
-Output is metadata-only. It does not print bearer/device credentials, command bodies, file contents, tool results, or raw child output. `stopBoundary` identifies the first currently observable boundary among `stable_runtime`, `secure_tunnel`, `relay`, and `device_readiness`.
+For compatibility, top-level `status: "READY"` and CLI exit `0` mean only that `statusScope: "local_profile_prerequisites"` passed. They do not mean end-to-end ChatGPT dispatch is proven. `chatgptDispatch.state` remains `unproven` for this passive doctor even when all local/profile/device prerequisites are green. Exit `2` means those local/profile prerequisites are not ready; exit `1` is a doctor invocation/runtime error.
+
+Output is metadata-only. It does not print bearer/device credentials, command bodies, file contents, tool results, or raw child output. `stopBoundary` identifies the first currently observable prerequisite boundary among `stable_runtime`, `secure_tunnel_startup_readiness`, `relay`, and `device_readiness`.
 
 ## Durable batch workload pattern
 

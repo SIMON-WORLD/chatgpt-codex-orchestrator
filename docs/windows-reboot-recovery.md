@@ -93,10 +93,10 @@ The entrypoint preserves the existing Stable Runtime and Secure Tunnel ownership
    - One healthy runtime proving the exact target revision: reuse it.
    - Wrong/unknown revision, an unproven listener, or listener ambiguity: fail closed. Recovery does not kill an unknown process.
 4. Preserve the externally managed Secure Tunnel lifecycle. Recovery does **not** require a tunnel-client executable/profile, does not run `tunnel-client doctor`, and never launches/stops/reconfigures tunnel-client when `tunnel.external=true`.
-5. Inspect the already-configured `tunnel.healthUrl`.
-   - Ready: record the external tunnel as reused.
-   - Unreachable or not ready: fail closed with `tunnel_readiness`; tunnel lifecycle recovery belongs to its external owner.
-6. PASS only after Local `/healthz` and `/readyz` both prove the exact target revision and the configured external tunnel readiness endpoint is ready.
+5. Inspect the already-configured `tunnel.healthUrl` as a Secure Tunnel startup/local readiness probe.
+   - Startup/local ready: record the external tunnel as reused.
+   - Unreachable or not startup/local ready: fail closed with `tunnel_readiness`; tunnel lifecycle recovery belongs to its external owner.
+6. PASS only after Local `/healthz` and `/readyz` both prove the exact target revision and the configured external tunnel startup/local readiness endpoint is ready. This PASS does not prove current control-plane polling freshness or guarantee the next ChatGPT-facing dispatch.
 
 The Stable Runtime uses `tunnel.external=true`; both runtime activation and deterministic recovery therefore own only the orchestrator process. Secure Tunnel lifecycle remains external.
 
@@ -111,7 +111,7 @@ The recovery CLI has **no raw credential argument** and no tunnel credential/pro
 - `profile_binding` / `target_binding` — config, trusted repo, exact target, or durable target state is invalid;
 - `runtime_conflict` — the configured endpoint has a wrong/unproven/ambiguous listener;
 - `runtime_start` / `runtime_readiness` — the exact runtime could not start or prove readiness;
-- `tunnel_readiness` — the externally managed Secure Tunnel readiness endpoint is not ready; recovery does not take over its lifecycle;
+- `tunnel_readiness` — the externally managed Secure Tunnel startup/local readiness endpoint is not ready; recovery does not take over its lifecycle;
 - `joint_readiness` — one side lost exact readiness before the final proof.
 
 If recovery itself cold-started a runtime and later fails, cleanup is limited to that exact runtime PID. Recovery never owns, launches, or stops the external Secure Tunnel and never uses name-based/global process termination.

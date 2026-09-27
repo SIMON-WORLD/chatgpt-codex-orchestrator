@@ -86,8 +86,8 @@ export const DEFAULT_V02_CONFIG = {
     profileDir: null,           // tunnel profile directory
     localMcpUrl: null,          // local MCP URL the tunnel forwards (e.g. http://127.0.0.1:8745/mcp)
     spawnArgs: null,            // override tunnel-client argv after the executable (for tests)
-    healthUrl: null,            // full tunnel health /readyz URL used to probe real readiness
-    external: false,            // externally managed Secure Tunnel lifecycle: never spawn/kill tunnel-client here; readiness via healthUrl only
+    healthUrl: null,            // external tunnel /readyz URL used only for startup/local readiness
+    external: false,            // externally managed Secure Tunnel lifecycle: never spawn/kill tunnel-client here; healthUrl is startup/local readiness only
   },
   // Paired-device relay is an explicit host-local opt-in. The raw device
   // credential never belongs in config; credentialEnv names the local secret env var.

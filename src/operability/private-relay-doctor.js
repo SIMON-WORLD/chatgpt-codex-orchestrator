@@ -44,9 +44,15 @@ export async function composePrivateRelayDoctor({
   const localBase = 'http://' + config.host + ':' + config.port;
   const localHealth = await jsonProbe(fetchImpl, localBase + '/healthz');
   const localReady = await jsonProbe(fetchImpl, localBase + '/readyz');
-  const tunnelReady = config.tunnel?.healthUrl
+  const tunnelStartupReady = config.tunnel?.healthUrl
     ? await jsonProbe(fetchImpl, config.tunnel.healthUrl)
     : { ok: null, status: 0, body: null, error: 'not_configured' };
+  const controlPlanePolling = {
+    state: 'unknown',
+    observed: false,
+    source: 'unobserved',
+    reason: 'no_supported_polling_health_signal_configured',
+  };
 
   const effectiveRelayUrl = normalizeUrl(relayUrl || config.relayAgent?.relayUrl);
   const relayDevices = effectiveRelayUrl && accountBearer
@@ -76,12 +82,12 @@ export async function composePrivateRelayDoctor({
     : readyDevices.length > 0;
   const profileMatches = localHealth.ok === true
     && localReady.ok === true
-    && (!config.tunnel?.healthUrl || tunnelReady.ok === true)
+    && (!config.tunnel?.healthUrl || tunnelStartupReady.ok === true)
     && relayDeviceMatches;
 
   let stopBoundary = null;
   if (!localHealth.ok || !localReady.ok) stopBoundary = 'stable_runtime';
-  else if (tunnelReady.ok === false && config.tunnel?.healthUrl) stopBoundary = 'secure_tunnel';
+  else if (tunnelStartupReady.ok === false && config.tunnel?.healthUrl) stopBoundary = 'secure_tunnel_startup_readiness';
   else if (!relayAlive) stopBoundary = 'relay';
   else if (!configuredRelayDeviceReady) stopBoundary = 'device_readiness';
 
@@ -94,8 +100,20 @@ export async function composePrivateRelayDoctor({
       configuredRelayDeviceId,
       configuredRelayDeviceReady,
     },
+    statusScope: 'local_profile_prerequisites',
     localRelay: { configured: Boolean(effectiveRelayUrl), alive: relayAlive, status: relayDevices.status || 0 },
-    secureTunnel: { configured: Boolean(config.tunnel?.healthUrl), ready: tunnelReady.ok, status: tunnelReady.status || 0 },
+    secureTunnel: {
+      configured: Boolean(config.tunnel?.healthUrl),
+      startupLocalReady: tunnelStartupReady.ok,
+      status: tunnelStartupReady.status || 0,
+      readinessScope: 'startup_local',
+    },
+    controlPlanePolling,
+    chatgptDispatch: {
+      state: 'unproven',
+      proven: false,
+      reason: 'passive_doctor_cannot_prove_next_chatgpt_dispatch',
+    },
     stableRuntime: {
       health: localHealth.ok,
       ready: localReady.ok,
@@ -106,4 +124,8 @@ export async function composePrivateRelayDoctor({
     devices,
     stopBoundary,
   };
+}
+
+export function privateRelayDoctorExitCode(result) {
+  return result?.status === 'READY' && result?.statusScope === 'local_profile_prerequisites' ? 0 : 2;
 }
