@@ -354,7 +354,7 @@ export class DocxMutationService {
     const tempFile = path.join(path.dirname(target.absolute), tempName);
     const tempRel = path.relative(target.workspace.root, tempFile);
     let acquired = false;
-    let renamed = false;
+    let expectedResultSha256 = null;
     try {
       this.owner.acquire('chatgpt', unitId);
       acquired = true;
@@ -379,9 +379,9 @@ export class DocxMutationService {
       if (JSON.stringify(visibleParagraphSequence(afterXml)) !== JSON.stringify(expectedParagraphs)) {
         throw new WorkspaceError('DOCX visible-text readback did not match requested replacement');
       }
+      expectedResultSha256 = sha256(fs.readFileSync(tempFile));
 
       fs.renameSync(tempFile, target.absolute);
-      renamed = true;
       const finalXml = await this._xml(workspaceId, target.requested);
       if (JSON.stringify(visibleParagraphSequence(finalXml)) !== JSON.stringify(expectedParagraphs)) {
         throw new WorkspaceError('DOCX post-replace readback did not match requested replacement');
@@ -404,11 +404,19 @@ export class DocxMutationService {
         try { fs.rmSync(tempFile, { force: true }); } catch {}
       }
       if (acquired) {
-        if (renamed) {
-          try { this.owner.markUnitState('unknown'); } catch {}
+        let currentHash = null;
+        try { currentHash = sha256(fs.readFileSync(target.absolute)); } catch {}
+        if (expectedResultSha256 && currentHash === expectedResultSha256) {
+          try { this.owner.markUnitState('reconciled'); this.owner.release(); } catch {}
+          return {
+            operation: 'docx_edit_text', provider: 'desktop-commander-0.2.51', path: target.requested,
+            expectedOccurrences, baseSha256, resultSha256: expectedResultSha256, status: 'applied', reconciledAfterError: true,
+          };
+        }
+        if (currentHash === baseSha256) {
+          try { this.owner.markUnitState('reconciled'); this.owner.release(); } catch {}
         } else {
-          try { this.owner.markUnitState('reconciled'); } catch {}
-          try { this.owner.release(); } catch {}
+          try { this.owner.markUnitState('unknown'); } catch {}
         }
       }
       throw error;
@@ -433,7 +441,7 @@ export class DocxMutationService {
     const tempFile = path.join(parent, tempName);
     const tempRel = path.relative(target.workspace.root, tempFile);
     let acquired = false;
-    let renamed = false;
+    let expectedResultSha256 = null;
     try {
       this.owner.acquire('chatgpt', unitId);
       acquired = true;
@@ -445,9 +453,9 @@ export class DocxMutationService {
       if (JSON.stringify(visibleSequence(xml)) !== JSON.stringify(expectedTexts)) {
         throw new WorkspaceError('DOCX create visible-text readback did not match input');
       }
+      expectedResultSha256 = sha256(fs.readFileSync(tempFile));
       if (fs.existsSync(target.absolute)) throw new WorkspaceError('DOCX create target appeared concurrently');
       fs.renameSync(tempFile, target.absolute);
-      renamed = true;
       const finalXml = await this._xml(workspaceId, target.requested);
       if (JSON.stringify(visibleSequence(finalXml)) !== JSON.stringify(expectedTexts)) {
         throw new WorkspaceError('DOCX create post-write readback did not match input');
@@ -468,11 +476,23 @@ export class DocxMutationService {
         try { fs.rmSync(tempFile, { force: true }); } catch {}
       }
       if (acquired) {
-        if (renamed) {
-          try { this.owner.markUnitState('unknown'); } catch {}
+        let exists = false;
+        let currentHash = null;
+        try {
+          exists = fs.existsSync(target.absolute);
+          if (exists) currentHash = sha256(fs.readFileSync(target.absolute));
+        } catch {}
+        if (expectedResultSha256 && currentHash === expectedResultSha256) {
+          try { this.owner.markUnitState('reconciled'); this.owner.release(); } catch {}
+          return {
+            operation: 'docx_create_text', provider: 'desktop-commander-0.2.51', path: target.requested,
+            resultSha256: expectedResultSha256, status: 'applied', reconciledAfterError: true,
+          };
+        }
+        if (!exists) {
+          try { this.owner.markUnitState('reconciled'); this.owner.release(); } catch {}
         } else {
-          try { this.owner.markUnitState('reconciled'); } catch {}
-          try { this.owner.release(); } catch {}
+          try { this.owner.markUnitState('unknown'); } catch {}
         }
       }
       throw error;

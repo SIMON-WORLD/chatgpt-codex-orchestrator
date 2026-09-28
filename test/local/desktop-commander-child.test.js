@@ -85,6 +85,33 @@ test('real DesktopCommander child handshakes, validates required tools, and expo
   }
 });
 
+
+test('Issue #209 child mutation errors distinguish pre-dispatch from dispatch-possible phases', async () => {
+  const missingEntry = path.join(os.tmpdir(), 'issue209-missing-desktop-commander-entry.mjs');
+  const unavailable = new DesktopCommanderChild({ entryPoint: missingEntry });
+  try {
+    await assert.rejects(
+      () => unavailable.createDirectory({ path: path.join(os.tmpdir(), 'issue209-never-dispatched') }),
+      (error) => error?.mutationPhase === 'pre_dispatch',
+    );
+  } finally {
+    await unavailable.close();
+  }
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'issue209-child-phase-'));
+  const file = path.join(root, 'already-a-file');
+  fs.writeFileSync(file, 'x', 'utf8');
+  const child = new DesktopCommanderChild();
+  try {
+    await assert.rejects(
+      () => child.createDirectory({ path: file }),
+      (error) => error?.mutationPhase === 'dispatch_possible',
+    );
+  } finally {
+    await child.close();
+  }
+});
+
 test('real child recovers lazily after an actual child kill', async () => {
   const child = new DesktopCommanderChild();
   try {

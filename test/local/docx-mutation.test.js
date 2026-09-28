@@ -25,8 +25,9 @@ function fixture() {
   return { host, primary, outside, registry, workspace };
 }
 
-function exactChild({ failEdit = false, failWrite = false } = {}) {
+function exactChild({ failEdit = false, failWrite = false, failReadAfter = null, onReadFailure = null } = {}) {
   const handler = new DocxFileHandler();
+  let readCount = 0;
   return {
     async writeFile({ path: filePath, content, mode }) {
       if (failWrite) throw new Error('provider write failed');
@@ -44,6 +45,11 @@ function exactChild({ failEdit = false, failWrite = false } = {}) {
       return 'ok';
     },
     async readFileStructured({ path: filePath, offset = 0, maxLines = 10000 }) {
+      readCount += 1;
+      if (failReadAfter !== null && readCount > failReadAfter) {
+        if (onReadFailure) await onReadFailure(filePath);
+        throw new Error('provider DOCX readback failed');
+      }
       const out = await handler.read(filePath, { offset, length: maxLines });
       return { content: [{ type: 'text', text: out.content }] };
     },
@@ -110,6 +116,46 @@ test('Issue #137 DOCX provider failure on temp leaves original unchanged and rel
   }), /provider edit failed/u);
   assert.equal(hashFile(file), base);
   assert.equal(owner.owner, 'none');
+});
+
+
+test('Issue #209 DOCX post-replace readback failure reconciles exact expected hash', async () => {
+  const f = fixture();
+  const file = path.join(f.primary, 'post-replace.docx');
+  await makeDocx(file, 'Before');
+  const owner = new MutationOwner();
+  const service = new DocxMutationService({
+    workspaceRegistry: f.registry, mutationOwner: owner,
+    desktopCommanderChild: exactChild({ failReadAfter: 2 }),
+  });
+  const result = await service.editText({
+    workspaceId: f.workspace.workspaceId, path: 'post-replace.docx',
+    find: 'Before', replace: 'After', expectedBaseSha256: hashFile(file),
+  });
+  assert.equal(result.status, 'applied');
+  assert.equal(result.reconciledAfterError, true);
+  assert.equal(result.resultSha256, hashFile(file));
+  assert.equal(owner.owner, 'none');
+});
+
+test('Issue #209 DOCX third hash after replace remains unknown', async () => {
+  const f = fixture();
+  const file = path.join(f.primary, 'third.docx');
+  await makeDocx(file, 'Before');
+  const owner = new MutationOwner();
+  const service = new DocxMutationService({
+    workspaceRegistry: f.registry, mutationOwner: owner,
+    desktopCommanderChild: exactChild({
+      failReadAfter: 2,
+      onReadFailure: async () => fs.writeFileSync(file, Buffer.from('third-state')),
+    }),
+  });
+  await assert.rejects(() => service.editText({
+    workspaceId: f.workspace.workspaceId, path: 'third.docx',
+    find: 'Before', replace: 'After', expectedBaseSha256: hashFile(file),
+  }), /structured read: child read failed; recovery is required/u);
+  assert.equal(owner.owner, 'chatgpt');
+  assert.equal(owner.unitState, 'unknown');
 });
 
 test('Issue #137 DOCX create uses exact child, headings, escaping, and atomic target creation', async () => {

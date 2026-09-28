@@ -27,9 +27,10 @@ function fixture(prefix = 'issue137-excel-') {
   return { host, primary, outside, registry, workspace };
 }
 
-function exactProviderChild({ failEdit = false } = {}) {
+function exactProviderChild({ failEdit = false, failReadAfter = null, onReadFailure = null } = {}) {
   const handler = new ExcelFileHandler();
   const calls = [];
+  let readCount = 0;
   return {
     calls,
     async editBlock({ filePath, range, content }) {
@@ -38,6 +39,11 @@ function exactProviderChild({ failEdit = false } = {}) {
       return handler.editRange(filePath, range, content);
     },
     async readFileStructured({ path: filePath, offset = 0, maxLines = 2000, sheet, range }) {
+      readCount += 1;
+      if (failReadAfter !== null && readCount > failReadAfter) {
+        if (onReadFailure) await onReadFailure(filePath);
+        throw new Error('provider readback failed');
+      }
       const out = await handler.read(filePath, { offset, length: maxLines, sheet, range });
       return { content: [{ type: 'text', text: out.content }] };
     },
@@ -199,22 +205,53 @@ test('Issue #137 .xlsm fidelity failure leaves original unchanged and releases o
   assert.equal(fs.readdirSync(f.primary).some((name) => name.startsWith('.excel-')), false);
 });
 
-test('Issue #137 provider failure after .xlsx dispatch retains unknown MutationOwner', async () => {
+test('Issue #209 .xlsx temp provider failure proves base unchanged and releases owner', async () => {
   const f = fixture();
   const file = path.join(f.primary, 'book.xlsx');
   writeXlsx(file);
+  const base = hashFile(file);
   const owner = new MutationOwner();
   const child = exactProviderChild({ failEdit: true });
   const { service } = serviceFor(f, { owner, child });
   await assert.rejects(() => service.mutateRange({
-    workspaceId: f.workspace.workspaceId,
-    path: 'book.xlsx',
-    range: 'Sheet1!A1:A1',
-    values: [['after']],
-    expectedBaseSha256: hashFile(file),
+    workspaceId: f.workspace.workspaceId, path: 'book.xlsx', range: 'Sheet1!A1:A1',
+    values: [['after']], expectedBaseSha256: base,
   }), /provider edit failed/u);
+  assert.equal(hashFile(file), base);
+  assert.equal(owner.owner, 'none');
+});
+
+test('Issue #209 .xlsx post-replace readback failure reconciles exact expected hash', async () => {
+  const f = fixture();
+  const file = path.join(f.primary, 'book.xlsx');
+  writeXlsx(file);
+  const owner = new MutationOwner();
+  const child = exactProviderChild({ failReadAfter: 1 });
+  const { service } = serviceFor(f, { owner, child });
+  const result = await service.mutateRange({
+    workspaceId: f.workspace.workspaceId, path: 'book.xlsx', range: 'Sheet1!A1:A1',
+    values: [['after']], expectedBaseSha256: hashFile(file),
+  });
+  assert.equal(result.status, 'applied');
+  assert.equal(result.reconciledAfterError, true);
+  assert.equal(result.resultSha256, hashFile(file));
+  assert.equal(owner.owner, 'none');
+});
+
+test('Issue #209 .xlsx unexpected third hash after replace remains unknown', async () => {
+  const f = fixture();
+  const file = path.join(f.primary, 'book.xlsx');
+  writeXlsx(file);
+  const owner = new MutationOwner();
+  const child = exactProviderChild({
+    failReadAfter: 1,
+    onReadFailure: async () => fs.writeFileSync(file, Buffer.from('third-state')),
+  });
+  const { service } = serviceFor(f, { owner, child });
+  await assert.rejects(() => service.mutateRange({
+    workspaceId: f.workspace.workspaceId, path: 'book.xlsx', range: 'Sheet1!A1:A1',
+    values: [['after']], expectedBaseSha256: hashFile(file),
+  }), /structured read: child read failed; recovery is required/u);
   assert.equal(owner.owner, 'chatgpt');
   assert.equal(owner.unitState, 'unknown');
-  owner.markUnitState('reconciled');
-  owner.release();
 });

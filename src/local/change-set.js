@@ -137,24 +137,26 @@ export class ChangeSetService {
     // preview-to-apply symlink/junction retarget fails closed (TOCTOU).
     this._assertWritableTarget(workspace, absolute, canonical, op.path);
 
-    let mutationStarted = false;
+    let acquired = false;
+    let mutationPrepared = false;
     let tempFile = null;
     try {
       // Acquire chatgpt ownership (unit = changeSetId) BEFORE any mutation.
       this.owner.acquire('chatgpt', changeSetId);
+      acquired = true;
       this.ops.update(changeSetId, { status: 'applying', updatedAt: Date.now() });
       // Stale / new-target checks BEFORE any write.
       if (op.createContent !== null) {
-        if (exists) { this.ops.update(changeSetId, { status: 'previewed', updatedAt: Date.now() }); this.owner.markUnitState('reconciled'); this.owner.release(); throw new WorkspaceError('new target appeared after preview (refusing to overwrite)'); }
+        if (exists) { this.ops.update(changeSetId, { status: 'previewed', updatedAt: Date.now() }); this.owner.markUnitState('reconciled'); this.owner.release(); acquired = false; throw new WorkspaceError('new target appeared after preview (refusing to overwrite)'); }
       } else {
         const cur = fs.readFileSync(absolute);
-        if (sha256(cur) !== op.baseHash) { this.ops.update(changeSetId, { status: 'previewed', updatedAt: Date.now() }); this.owner.markUnitState('reconciled'); this.owner.release(); throw new WorkspaceError('stale file between preview and apply'); }
+        if (sha256(cur) !== op.baseHash) { this.ops.update(changeSetId, { status: 'previewed', updatedAt: Date.now() }); this.owner.markUnitState('reconciled'); this.owner.release(); acquired = false; throw new WorkspaceError('stale file between preview and apply'); }
       }
       // Mutation begins: keep ordinary text/file edits on the established
       // parent-owned atomic temp-file + rename path. The pinned child write_file
       // is intentionally not used here because its TextFileHandler.write is a
       // direct fs.writeFile and would weaken this guarantee.
-      mutationStarted = true;
+      mutationPrepared = true;
       const proposed = op.createContent !== null ? Buffer.from(op.createContent, 'utf8') : Buffer.from(applyReplacements(fs.readFileSync(absolute, 'utf8'), op.replacements), 'utf8');
       const dir = path.dirname(absolute);
       tempFile = path.join(dir, '.edit-' + changeSetId + '-' + process.pid + '.tmp');
@@ -174,15 +176,44 @@ export class ChangeSetService {
       this.owner.release();
       return { changeSetId, status: 'applied', path: op.path, resultHash, idempotentReplay: false, diff: op.diff || null };
     } catch (e) {
-      if (mutationStarted) {
-        this.ops.update(changeSetId, { status: 'recovery_required', updatedAt: Date.now() });
-        this.owner.markUnitState('unknown');
-      } else if (this.owner.owner === 'chatgpt') {
+      if (tempFile && fs.existsSync(tempFile)) { try { fs.rmSync(tempFile, { force: true }); } catch {} }
+      if (acquired && !mutationPrepared) {
         this.ops.update(changeSetId, { status: 'previewed', updatedAt: Date.now() });
         this.owner.markUnitState('reconciled');
         try { this.owner.release(); } catch {}
+      } else if (acquired) {
+        let classification = 'unknown';
+        try {
+          const post = this.registry.resolveWritable(workspaceId, op.path, { forCreate: op.createContent !== null });
+          if (op.workspaceRoot && post.workspace.root !== op.workspaceRoot) throw new WorkspaceError('workspace changed since preview');
+          this._assertWritableTarget(post.workspace, post.absolute, post.canonical, op.path);
+          if (op.createContent !== null) {
+            if (!post.exists) classification = 'unchanged';
+            else {
+              const current = fs.readFileSync(post.absolute);
+              if (sha256(current) === op.proposedHash) classification = 'completed';
+            }
+          } else if (post.exists) {
+            const currentHash = sha256(fs.readFileSync(post.absolute));
+            if (currentHash === op.proposedHash) classification = 'completed';
+            else if (currentHash === op.baseHash) classification = 'unchanged';
+          }
+        } catch {}
+        if (classification === 'completed') {
+          this.ops.update(changeSetId, { status: 'applied', updatedAt: Date.now() });
+          this.owner.markUnitState('reconciled');
+          try { this.owner.release(); } catch {}
+          return { changeSetId, status: 'applied', path: op.path, resultHash: op.proposedHash, idempotentReplay: false, reconciledAfterError: true, diff: op.diff || null };
+        }
+        if (classification === 'unchanged') {
+          this.ops.update(changeSetId, { status: 'previewed', updatedAt: Date.now() });
+          this.owner.markUnitState('reconciled');
+          try { this.owner.release(); } catch {}
+        } else {
+          this.ops.update(changeSetId, { status: 'recovery_required', updatedAt: Date.now() });
+          try { this.owner.markUnitState('unknown'); } catch {}
+        }
       }
-      if (tempFile && fs.existsSync(tempFile)) { try { fs.rmSync(tempFile, { force: true }); } catch {} }
       throw e;
     }
   }

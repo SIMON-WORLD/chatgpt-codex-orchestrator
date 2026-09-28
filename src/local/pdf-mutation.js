@@ -163,7 +163,7 @@ export class PdfMutationService {
     const tempFile = path.join(path.dirname(target.absolute), tempName);
     const tempRel = path.relative(target.workspace.root, tempFile);
     let acquired = false;
-    let renamed = false;
+    let expectedResultSha256 = null;
     try {
       this.owner.acquire('chatgpt', unitId);
       acquired = true;
@@ -178,9 +178,9 @@ export class PdfMutationService {
       preserveMode(target.absolute, tempFile);
       const tempPages = await this._pageCount(workspaceId, tempRel);
       if (tempPages !== expectedPages) throw new WorkspaceError('PDF temp readback page count mismatch');
+      expectedResultSha256 = sha256(fs.readFileSync(tempFile));
 
       fs.renameSync(tempFile, target.absolute);
-      renamed = true;
       const finalPages = await this._pageCount(workspaceId, target.requested);
       if (finalPages !== expectedPages) throw new WorkspaceError('PDF post-replace page count mismatch');
       const resultSha256 = sha256(fs.readFileSync(target.absolute));
@@ -201,11 +201,20 @@ export class PdfMutationService {
         try { fs.rmSync(tempFile, { force: true }); } catch {}
       }
       if (acquired) {
-        if (renamed) {
-          try { this.owner.markUnitState('unknown'); } catch {}
+        let currentHash = null;
+        try { currentHash = sha256(fs.readFileSync(target.absolute)); } catch {}
+        if (expectedResultSha256 && currentHash === expectedResultSha256) {
+          try { this.owner.markUnitState('reconciled'); this.owner.release(); } catch {}
+          return {
+            operation: 'pdf_mutate_pages', provider: 'desktop-commander-0.2.51', path: target.requested,
+            baseSha256, resultSha256: expectedResultSha256, pageCount: expectedPages,
+            status: 'applied', reconciledAfterError: true,
+          };
+        }
+        if (currentHash === baseSha256) {
+          try { this.owner.markUnitState('reconciled'); this.owner.release(); } catch {}
         } else {
-          try { this.owner.markUnitState('reconciled'); } catch {}
-          try { this.owner.release(); } catch {}
+          try { this.owner.markUnitState('unknown'); } catch {}
         }
       }
       throw error;

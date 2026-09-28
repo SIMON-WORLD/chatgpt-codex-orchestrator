@@ -132,6 +132,26 @@ function broadType(stat) {
   return null;
 }
 
+function statFingerprint(stat) {
+  return {
+    type: broadType(stat),
+    dev: Number(stat.dev),
+    ino: Number(stat.ino),
+    size: Number(stat.size),
+    mtimeMs: Number(stat.mtimeMs),
+  };
+}
+
+function sameFingerprint(stat, expected) {
+  if (!expected) return false;
+  const actual = statFingerprint(stat);
+  return actual.type === expected.type
+    && actual.dev === expected.dev
+    && actual.ino === expected.ino
+    && actual.size === expected.size
+    && actual.mtimeMs === expected.mtimeMs;
+}
+
 export class FilesystemMutationService {
   constructor({ workspaceRegistry, mutationOwner, desktopCommanderChild } = {}) {
     this.registry = workspaceRegistry;
@@ -169,14 +189,76 @@ export class FilesystemMutationService {
     return inspectPathChain(root, absolute, label);
   }
 
-  _finishFailure({ acquired, dispatchAttempted }) {
-    if (!acquired) return;
-    if (dispatchAttempted) {
-      try { this.owner.markUnitState('unknown'); } catch {}
-      return;
+  _releaseReconciled() {
+    this.owner.markUnitState('reconciled');
+    this.owner.release();
+  }
+
+  _markUnknown() {
+    try { this.owner.markUnitState('unknown'); } catch {}
+  }
+
+  _reconcileCreateFailure({ acquired, error, root, absolute, requested }) {
+    if (!acquired) return 'not_acquired';
+    if (error?.mutationPhase === 'pre_dispatch') {
+      try { this._releaseReconciled(); } catch {}
+      return 'unchanged';
     }
-    try { this.owner.markUnitState('reconciled'); } catch {}
-    try { this.owner.release(); } catch {}
+    try {
+      const target = this._inspectPrimary(root, absolute, 'create target reconciliation');
+      if (!target.exists) {
+        this._releaseReconciled();
+        return 'unchanged';
+      }
+      if (!target.stat.isDirectory()) {
+        this._markUnknown();
+        return 'unknown';
+      }
+      const canonical = realpathOrThrow(absolute, 'create target reconciliation');
+      assertInside(root, canonical, 'create target reconciliation');
+      if (!samePath(canonical, absolute)) throw new WorkspaceError('create target reconciliation resolved through a symlink/junction');
+      assertMutationPolicy(root, requested, canonical, 'path');
+      this._releaseReconciled();
+      return 'completed';
+    } catch {
+      this._markUnknown();
+      return 'unknown';
+    }
+  }
+
+  _reconcileMoveFailure({ acquired, error, root, source, destination, absoluteSource, absoluteDestination, sourceFingerprint }) {
+    if (!acquired) return 'not_acquired';
+    if (error?.mutationPhase === 'pre_dispatch') {
+      try { this._releaseReconciled(); } catch {}
+      return 'unchanged';
+    }
+    try {
+      const sourceState = this._inspectPrimary(root, absoluteSource, 'move source reconciliation');
+      const destinationState = this._inspectPrimary(root, absoluteDestination, 'move destination reconciliation');
+      if (sourceState.exists && !destinationState.exists) {
+        const canonical = realpathOrThrow(absoluteSource, 'move source reconciliation');
+        assertInside(root, canonical, 'move source reconciliation');
+        if (!samePath(canonical, absoluteSource)) throw new WorkspaceError('move source reconciliation resolved through a symlink/junction');
+        assertMutationPolicy(root, source, canonical, 'source');
+        if (!sameFingerprint(sourceState.stat, sourceFingerprint)) throw new WorkspaceError('move source reconciliation fingerprint changed');
+        this._releaseReconciled();
+        return 'unchanged';
+      }
+      if (!sourceState.exists && destinationState.exists) {
+        const canonical = realpathOrThrow(absoluteDestination, 'move destination reconciliation');
+        assertInside(root, canonical, 'move destination reconciliation');
+        if (!samePath(canonical, absoluteDestination)) throw new WorkspaceError('move destination reconciliation resolved through a symlink/junction');
+        assertMutationPolicy(root, destination, canonical, 'destination');
+        if (!sameFingerprint(destinationState.stat, sourceFingerprint)) throw new WorkspaceError('move destination reconciliation fingerprint mismatch');
+        this._releaseReconciled();
+        return 'completed';
+      }
+      this._markUnknown();
+      return 'unknown';
+    } catch {
+      this._markUnknown();
+      return 'unknown';
+    }
   }
 
   async createDirectory({ workspaceId, path: requestedPath } = {}) {
@@ -207,11 +289,9 @@ export class FilesystemMutationService {
     assertMutationPolicy(root, requested, effective, 'path');
 
     let acquired = false;
-    let dispatchAttempted = false;
     try {
       this.owner.acquire('chatgpt', crypto.randomUUID());
       acquired = true;
-      dispatchAttempted = true;
       await this.child.createDirectory({ path: absolute });
 
       const created = this._inspectPrimary(root, absolute, 'created directory');
@@ -225,7 +305,10 @@ export class FilesystemMutationService {
       this.owner.release();
       return { operation: 'create_directory', path: requested, status: 'applied' };
     } catch (error) {
-      this._finishFailure({ acquired, dispatchAttempted });
+      const classification = this._reconcileCreateFailure({ acquired, error, root, absolute, requested });
+      if (classification === 'completed') {
+        return { operation: 'create_directory', path: requested, status: 'applied', reconciledAfterError: true };
+      }
       throw error;
     }
   }
@@ -272,12 +355,11 @@ export class FilesystemMutationService {
       throw new WorkspaceError('moving a directory into itself or a descendant is not allowed');
     }
 
+    const sourceFingerprint = statFingerprint(sourceStat);
     let acquired = false;
-    let dispatchAttempted = false;
     try {
       this.owner.acquire('chatgpt', crypto.randomUUID());
       acquired = true;
-      dispatchAttempted = true;
       await this.child.moveFile({ source: absoluteSource, destination: absoluteDestination });
 
       if (this._inspectPrimary(root, absoluteSource, 'moved source').exists) {
@@ -303,7 +385,12 @@ export class FilesystemMutationService {
         status: 'applied',
       };
     } catch (error) {
-      this._finishFailure({ acquired, dispatchAttempted });
+      const classification = this._reconcileMoveFailure({
+        acquired, error, root, source, destination, absoluteSource, absoluteDestination, sourceFingerprint,
+      });
+      if (classification === 'completed') {
+        return { operation: 'move_path', source, destination, status: 'applied', reconciledAfterError: true };
+      }
       throw error;
     }
   }

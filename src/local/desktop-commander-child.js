@@ -148,10 +148,11 @@ function processOutput(text) {
 }
 
 export class DesktopCommanderChildError extends Error {
-  constructor(code, message = code) {
+  constructor(code, message = code, { mutationPhase = null } = {}) {
     super(message);
     this.name = 'DesktopCommanderChildError';
     this.code = safeFailureCode(code);
+    this.mutationPhase = mutationPhase;
   }
 }
 
@@ -457,21 +458,24 @@ export class DesktopCommanderChild {
     }
     let client = null;
     let transport = null;
+    let mutationPhase = 'pre_dispatch';
     try {
       await this.ensureReady();
       client = this.#client;
       transport = this.#transport;
-      if (!client) throw new DesktopCommanderChildError('CHILD_CLOSED');
+      if (!client) throw new DesktopCommanderChildError('CHILD_CLOSED', 'CHILD_CLOSED', { mutationPhase });
+      mutationPhase = 'dispatch_possible';
       const result = await client.callTool({ name, arguments: args });
-      if (result?.isError) throw new DesktopCommanderChildError('UPSTREAM_TOOL_ERROR');
+      if (result?.isError) throw new DesktopCommanderChildError('UPSTREAM_TOOL_ERROR', 'UPSTREAM_TOOL_ERROR', { mutationPhase });
       return result;
     } catch (error) {
       if (error instanceof DesktopCommanderChildError) {
+        if (!error.mutationPhase) error.mutationPhase = mutationPhase;
         if (!this.#closed && error.code !== 'UPSTREAM_TOOL_ERROR') this.#markDead(error.code, client, transport);
         throw error;
       }
       if (!this.#closed) this.#markDead('CHILD_CALL_FAILED', client, transport);
-      throw new DesktopCommanderChildError('CHILD_CALL_FAILED');
+      throw new DesktopCommanderChildError('CHILD_CALL_FAILED', 'CHILD_CALL_FAILED', { mutationPhase });
     }
   }
 
