@@ -34,7 +34,7 @@ async function makePdf(file, pages) {
   fs.writeFileSync(file, Buffer.from(await doc.save()));
 }
 
-function exactChild({ failWrite = false, failReadAfter = null } = {}) {
+function exactChild({ failWrite = false, failReadAfter = null, onReadFailure = null } = {}) {
   const handler = new PdfFileHandler();
   let readCount = 0;
   return {
@@ -46,7 +46,10 @@ function exactChild({ failWrite = false, failReadAfter = null } = {}) {
     },
     async readFileStructured({ path: filePath, offset = 0, maxLines = 32 }) {
       readCount += 1;
-      if (failReadAfter !== null && readCount > failReadAfter) throw new Error('provider PDF read failed');
+      if (failReadAfter !== null && readCount > failReadAfter) {
+        if (onReadFailure) await onReadFailure(filePath);
+        throw new Error('provider PDF read failed');
+      }
       const out = await handler.read(filePath, { offset, length: maxLines });
       const content = [];
       for (const page of out.metadata?.pages || []) {
@@ -140,4 +143,43 @@ test('Issue #137 PDF stale hash and provider failure leave original intact and r
   assert.equal(hashFile(dest), base);
   assert.equal(owner.owner, 'none');
   assert.equal(fs.readdirSync(f.primary).some((name) => name.startsWith('.pdf-')), false);
+});
+
+test('Issue #209 PDF post-replace readback failure reconciles exact expected hash', async () => {
+  const f = fixture();
+  const dest = path.join(f.primary, 'post-replace.pdf');
+  await makePdf(dest, 2);
+  const owner = new MutationOwner();
+  const service = new PdfMutationService({
+    workspaceRegistry: f.registry, mutationOwner: owner,
+    desktopCommanderChild: exactChild({ failReadAfter: 2 }),
+  });
+  const result = await service.mutatePages({
+    workspaceId: f.workspace.workspaceId, path: 'post-replace.pdf',
+    expectedBaseSha256: hashFile(dest), operations: [{ type: 'delete_pages', pages: [1] }],
+  });
+  assert.equal(result.status, 'applied');
+  assert.equal(result.reconciledAfterError, true);
+  assert.equal(result.resultSha256, hashFile(dest));
+  assert.equal(owner.owner, 'none');
+});
+
+test('Issue #209 PDF third hash after replace remains unknown', async () => {
+  const f = fixture();
+  const dest = path.join(f.primary, 'third.pdf');
+  await makePdf(dest, 2);
+  const owner = new MutationOwner();
+  const service = new PdfMutationService({
+    workspaceRegistry: f.registry, mutationOwner: owner,
+    desktopCommanderChild: exactChild({
+      failReadAfter: 2,
+      onReadFailure: async () => fs.writeFileSync(dest, Buffer.from('third-state')),
+    }),
+  });
+  await assert.rejects(() => service.mutatePages({
+    workspaceId: f.workspace.workspaceId, path: 'third.pdf',
+    expectedBaseSha256: hashFile(dest), operations: [{ type: 'delete_pages', pages: [1] }],
+  }), /structured read: child read failed; recovery is required/u);
+  assert.equal(owner.owner, 'chatgpt');
+  assert.equal(owner.unitState, 'unknown');
 });

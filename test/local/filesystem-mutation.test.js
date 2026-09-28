@@ -102,23 +102,143 @@ test('Issue #137 filesystem mutation fails closed for traversal, secondary/cross
   assert.equal(child.calls.length, 0, 'all rejected requests must fail before child dispatch');
 });
 
-test('Issue #137 filesystem mutation preserves MutationOwner fail-closed lifecycle', async () => {
-  const f = fixture();
-  const owner = new MutationOwner();
-  const child = fakeChild({ failCreate: true });
-  const service = new FilesystemMutationService({ workspaceRegistry: f.registry, mutationOwner: owner, desktopCommanderChild: child });
+test('Issue #209 filesystem create reconciles pre-dispatch, unchanged, completed, and conflicting outcomes', async () => {
+  const f = fixture('issue209-fs-create-');
 
-  await assert.rejects(() => service.createDirectory({ workspaceId: f.workspace.workspaceId, path: 'failed' }), /child create failed/u);
-  assert.equal(owner.owner, 'chatgpt');
-  assert.equal(owner.unitState, 'unknown');
-  owner.markUnitState('reconciled');
-  owner.release();
+  {
+    const owner = new MutationOwner();
+    const error = Object.assign(new Error('child start failed'), { mutationPhase: 'pre_dispatch' });
+    const service = new FilesystemMutationService({
+      workspaceRegistry: f.registry, mutationOwner: owner,
+      desktopCommanderChild: { ...fakeChild(), async createDirectory() { throw error; } },
+    });
+    await assert.rejects(() => service.createDirectory({ workspaceId: f.workspace.workspaceId, path: 'predispatch' }), /child start failed/u);
+    assert.equal(fs.existsSync(path.join(f.primary, 'predispatch')), false);
+    assert.equal(owner.owner, 'none');
+  }
 
-  owner.acquire('codex', 'codex-unit');
-  await assert.rejects(() => service.createDirectory({ workspaceId: f.workspace.workspaceId, path: 'blocked' }), /already owned by codex/u);
-  assert.equal(child.calls.length, 1);
-  owner.markUnitState('reconciled');
-  owner.release();
+  {
+    const owner = new MutationOwner();
+    const service = new FilesystemMutationService({
+      workspaceRegistry: f.registry, mutationOwner: owner,
+      desktopCommanderChild: { ...fakeChild(), async createDirectory() { throw new Error('provider failed before effect'); } },
+    });
+    await assert.rejects(() => service.createDirectory({ workspaceId: f.workspace.workspaceId, path: 'unchanged' }), /provider failed/u);
+    assert.equal(fs.existsSync(path.join(f.primary, 'unchanged')), false);
+    assert.equal(owner.owner, 'none');
+  }
+
+  {
+    const owner = new MutationOwner();
+    const service = new FilesystemMutationService({
+      workspaceRegistry: f.registry, mutationOwner: owner,
+      desktopCommanderChild: {
+        ...fakeChild(),
+        async createDirectory({ path: target }) {
+          fs.mkdirSync(target);
+          throw new Error('lost response after create');
+        },
+      },
+    });
+    const result = await service.createDirectory({ workspaceId: f.workspace.workspaceId, path: 'completed' });
+    assert.equal(result.status, 'applied');
+    assert.equal(result.reconciledAfterError, true);
+    assert.equal(fs.statSync(path.join(f.primary, 'completed')).isDirectory(), true);
+    assert.equal(owner.owner, 'none');
+  }
+
+  {
+    const owner = new MutationOwner();
+    const service = new FilesystemMutationService({
+      workspaceRegistry: f.registry, mutationOwner: owner,
+      desktopCommanderChild: {
+        ...fakeChild(),
+        async createDirectory({ path: target }) {
+          fs.writeFileSync(target, 'conflict', 'utf8');
+          throw new Error('lost response with conflicting state');
+        },
+      },
+    });
+    await assert.rejects(() => service.createDirectory({ workspaceId: f.workspace.workspaceId, path: 'conflict' }), /lost response/u);
+    assert.equal(owner.owner, 'chatgpt');
+    assert.equal(owner.unitState, 'unknown');
+    await assert.rejects(() => service.createDirectory({ workspaceId: f.workspace.workspaceId, path: 'blocked' }), /not reconciled/u);
+  }
+});
+
+test('Issue #209 filesystem move reconciles exact unchanged/completed and keeps mixed state unknown across workspaces', async () => {
+  const f = fixture('issue209-fs-move-');
+
+  {
+    const owner = new MutationOwner();
+    const source = path.join(f.primary, 'unchanged.txt');
+    fs.writeFileSync(source, 'same', 'utf8');
+    const service = new FilesystemMutationService({
+      workspaceRegistry: f.registry, mutationOwner: owner,
+      desktopCommanderChild: { ...fakeChild(), async moveFile() { throw new Error('move failed before effect'); } },
+    });
+    await assert.rejects(() => service.movePath({
+      workspaceId: f.workspace.workspaceId, source: 'unchanged.txt', destination: 'unchanged-dest.txt',
+    }), /move failed/u);
+    assert.equal(fs.existsSync(source), true);
+    assert.equal(fs.existsSync(path.join(f.primary, 'unchanged-dest.txt')), false);
+    assert.equal(owner.owner, 'none');
+  }
+
+  {
+    const owner = new MutationOwner();
+    const source = path.join(f.primary, 'completed.txt');
+    fs.writeFileSync(source, 'move-me', 'utf8');
+    const service = new FilesystemMutationService({
+      workspaceRegistry: f.registry, mutationOwner: owner,
+      desktopCommanderChild: {
+        ...fakeChild(),
+        async moveFile({ source: from, destination: to }) {
+          fs.renameSync(from, to);
+          throw new Error('lost response after move');
+        },
+      },
+    });
+    const result = await service.movePath({
+      workspaceId: f.workspace.workspaceId, source: 'completed.txt', destination: 'completed-dest.txt',
+    });
+    assert.equal(result.status, 'applied');
+    assert.equal(result.reconciledAfterError, true);
+    assert.equal(fs.existsSync(source), false);
+    assert.equal(fs.readFileSync(path.join(f.primary, 'completed-dest.txt'), 'utf8'), 'move-me');
+    assert.equal(owner.owner, 'none');
+  }
+
+  {
+    const owner = new MutationOwner();
+    const source = path.join(f.primary, 'mixed.txt');
+    fs.writeFileSync(source, 'mixed', 'utf8');
+    const service = new FilesystemMutationService({
+      workspaceRegistry: f.registry, mutationOwner: owner,
+      desktopCommanderChild: {
+        ...fakeChild(),
+        async moveFile({ source: from, destination: to }) {
+          fs.copyFileSync(from, to);
+          throw new Error('mixed move state');
+        },
+      },
+    });
+    await assert.rejects(() => service.movePath({
+      workspaceId: f.workspace.workspaceId, source: 'mixed.txt', destination: 'mixed-dest.txt',
+    }), /mixed move state/u);
+    assert.equal(owner.owner, 'chatgpt');
+    assert.equal(owner.unitState, 'unknown');
+
+    const other = path.join(f.host, 'other-primary');
+    fs.mkdirSync(other);
+    const otherWorkspace = f.registry.open({ path: other });
+    const otherService = new FilesystemMutationService({
+      workspaceRegistry: f.registry, mutationOwner: owner, desktopCommanderChild: fakeChild(),
+    });
+    await assert.rejects(() => otherService.createDirectory({
+      workspaceId: otherWorkspace.workspaceId, path: 'cannot-bypass',
+    }), /not reconciled/u);
+  }
 });
 
 test('Issue #137 existing bounded edit keeps atomic parent apply, base-hash, mode, and readback protections', async () => {

@@ -175,6 +175,77 @@ test('no durable temp file is left behind by a stale-file failure', async () => 
   assert.deepEqual(leftovers, []);
 });
 
+
+test('Issue #209 ChangeSet failure with exact base hash restores previewed and releases owner', async () => {
+  const { root, ws, cs, owner, ops } = setup();
+  const file = path.join(root, 'base-reconcile.txt');
+  fs.writeFileSync(file, 'before', 'utf8');
+  const p = await cs.preview({
+    workspaceId: ws.workspaceId,
+    change: { path: 'base-reconcile.txt', baseHash: computeSha256(Buffer.from('before')), replacements: [{ oldText: 'before', newText: 'after' }] },
+  });
+  const originalWrite = fs.writeFileSync;
+  fs.writeFileSync = function(target, ...args) {
+    if (path.basename(String(target)).startsWith('.edit-')) throw new Error('temp write failed');
+    return originalWrite.call(fs, target, ...args);
+  };
+  try {
+    await assert.rejects(() => cs.apply({ workspaceId: ws.workspaceId, changeSetId: p.changeSetId }), /temp write failed/u);
+  } finally {
+    fs.writeFileSync = originalWrite;
+  }
+  assert.equal(fs.readFileSync(file, 'utf8'), 'before');
+  assert.equal(ops.load(p.changeSetId).status, 'previewed');
+  assert.equal(owner.owner, 'none');
+});
+
+test('Issue #209 ChangeSet post-rename readback loss with proposed hash reconciles applied', async () => {
+  const { root, ws, cs, owner, ops, registry } = setup();
+  const file = path.join(root, 'proposed-reconcile.txt');
+  fs.writeFileSync(file, 'before', 'utf8');
+  const p = await cs.preview({
+    workspaceId: ws.workspaceId,
+    change: { path: 'proposed-reconcile.txt', baseHash: computeSha256(Buffer.from('before')), replacements: [{ oldText: 'before', newText: 'after' }] },
+  });
+  const originalResolve = registry.resolveWritable.bind(registry);
+  let calls = 0;
+  registry.resolveWritable = (...args) => {
+    calls += 1;
+    if (calls === 2) throw new Error('post-rename readback unavailable');
+    return originalResolve(...args);
+  };
+  const result = await cs.apply({ workspaceId: ws.workspaceId, changeSetId: p.changeSetId });
+  assert.equal(result.status, 'applied');
+  assert.equal(result.reconciledAfterError, true);
+  assert.equal(computeSha256(fs.readFileSync(file)), p.proposedHash);
+  assert.equal(ops.load(p.changeSetId).status, 'applied');
+  assert.equal(owner.owner, 'none');
+});
+
+test('Issue #209 ChangeSet post-rename third hash remains recovery_required and unknown', async () => {
+  const { root, ws, cs, owner, ops, registry } = setup();
+  const file = path.join(root, 'third-reconcile.txt');
+  fs.writeFileSync(file, 'before', 'utf8');
+  const p = await cs.preview({
+    workspaceId: ws.workspaceId,
+    change: { path: 'third-reconcile.txt', baseHash: computeSha256(Buffer.from('before')), replacements: [{ oldText: 'before', newText: 'after' }] },
+  });
+  const originalResolve = registry.resolveWritable.bind(registry);
+  let calls = 0;
+  registry.resolveWritable = (...args) => {
+    calls += 1;
+    if (calls === 2) {
+      fs.writeFileSync(file, 'third-state', 'utf8');
+      throw new Error('post-rename readback lost after external change');
+    }
+    return originalResolve(...args);
+  };
+  await assert.rejects(() => cs.apply({ workspaceId: ws.workspaceId, changeSetId: p.changeSetId }), /post-rename readback lost/u);
+  assert.equal(ops.load(p.changeSetId).status, 'recovery_required');
+  assert.equal(owner.owner, 'chatgpt');
+  assert.equal(owner.unitState, 'unknown');
+});
+
 test('applied op whose target changed externally transitions to recovery_required and cannot reapply', async () => {
   const { root, ws, cs, ops } = setup();
   const file = path.join(root, 'a.txt'); fs.writeFileSync(file, 'hello', 'utf8');

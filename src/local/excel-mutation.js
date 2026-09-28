@@ -252,8 +252,10 @@ export class ExcelMutationService {
 
     const unitId = crypto.randomUUID();
     let acquired = false;
-    let dispatchAttempted = false;
     let tempFile = null;
+    let provider = null;
+    let expectedResultSha256 = null;
+    let readback = null;
     try {
       this.owner.acquire('chatgpt', unitId);
       acquired = true;
@@ -261,7 +263,6 @@ export class ExcelMutationService {
       assertReadableWorkbook(current);
       if (sha256(current) !== baseSha256) throw new WorkspaceError('stale Excel workbook immediately before mutation');
 
-      let provider;
       if (target.ext === XLSX_EXT) {
         provider = 'desktop-commander-0.2.51';
         tempFile = path.join(path.dirname(target.absolute), '.excel-' + unitId + '-' + process.pid + '.xlsx');
@@ -272,7 +273,6 @@ export class ExcelMutationService {
             ? { richText: [{ text: value }] }
             : value
         )));
-        dispatchAttempted = true;
         await this.child.editBlock({ filePath: tempFile, range: requestedRange, content: encoded });
       } else {
         provider = 'sheetjs-ce-0.20.3';
@@ -313,7 +313,7 @@ export class ExcelMutationService {
           throw new WorkspaceError('VBA code-name fidelity guard failed');
         }
         verifySheetJsRange(this.sheetJs, verified, range, values);
-        dispatchAttempted = true;
+        expectedResultSha256 = sha256(fs.readFileSync(tempFile));
         fs.renameSync(tempFile, target.absolute);
         tempFile = null;
       }
@@ -332,10 +332,10 @@ export class ExcelMutationService {
         maxRows: range.rows,
         maxCells: range.cellsCount,
       }, this.registry, this.child);
-      const readback = readbackResult?.structuredContent?.values;
+      readback = readbackResult?.structuredContent?.values;
       if (!valuesEqual(readback, values)) throw new WorkspaceError('Excel mutation readback did not match requested values');
       if (target.ext === XLSX_EXT) {
-        dispatchAttempted = true;
+        expectedResultSha256 = sha256(resultBytes);
         fs.renameSync(tempFile, target.absolute);
         tempFile = null;
         const finalReadbackResult = await readExcelWithDesktopCommander({
@@ -369,11 +369,19 @@ export class ExcelMutationService {
         try { fs.rmSync(tempFile, { force: true }); } catch {}
       }
       if (acquired) {
-        if (dispatchAttempted) {
-          try { this.owner.markUnitState('unknown'); } catch {}
+        let currentHash = null;
+        try { currentHash = sha256(fs.readFileSync(target.absolute)); } catch {}
+        if (expectedResultSha256 && currentHash === expectedResultSha256) {
+          try { this.owner.markUnitState('reconciled'); this.owner.release(); } catch {}
+          return {
+            operation: 'excel_mutate_range', provider, path: target.requested, range: requestedRange,
+            baseSha256, resultSha256: expectedResultSha256, readback, status: 'applied', reconciledAfterError: true,
+          };
+        }
+        if (currentHash === baseSha256) {
+          try { this.owner.markUnitState('reconciled'); this.owner.release(); } catch {}
         } else {
-          try { this.owner.markUnitState('reconciled'); } catch {}
-          try { this.owner.release(); } catch {}
+          try { this.owner.markUnitState('unknown'); } catch {}
         }
       }
       throw error;
