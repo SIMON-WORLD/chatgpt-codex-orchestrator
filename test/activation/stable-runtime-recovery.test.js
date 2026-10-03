@@ -23,6 +23,7 @@ function fixture() {
   const configPath = path.join(root, 'stable.json');
   fs.mkdirSync(repo, { recursive: true });
   fs.mkdirSync(checkout, { recursive: true });
+  fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ repository: { url: 'git+https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator.git' } }));
   fs.writeFileSync(configPath, '{}\n');
   const config = {
     host: '127.0.0.1',
@@ -47,6 +48,23 @@ function fixture() {
     },
   };
   return { root, repo, activationRoot, checkout, configPath, config };
+}
+
+function relayFixture() {
+  const out = fixture();
+  out.config = {
+    ...out.config,
+    filesystemScope: 'os_user_scope',
+    worktree: { poolRoot: null, trustedRepos: [] },
+    tunnel: { external: false },
+    relayAgent: {
+      enabled: true,
+      relayUrl: 'http://127.0.0.1:18746',
+      deviceId: '039923d2-be2d-4345-bfd8-fdf385abf715',
+      credentialEnv: 'ISSUE185_DEVICE_B_SECRET',
+    },
+  };
+  return out;
 }
 
 function makeActivator({ config, repo, checkout, runtime = 'down', pids = null, onValidateTarget = null } = {}) {
@@ -179,6 +197,64 @@ test('retry reuses one exact runtime and one ready external tunnel without spawn
   assert.equal(calls.prepare, 0);
   assert.equal(calls.spawnRuntime, 0);
   assert.equal(tunnelStarts, 0);
+});
+
+test('relay-agent profile cold-starts exact runtime without requiring external tunnel fields', async () => {
+  const { repo, checkout, configPath, config } = relayFixture();
+  const { activator, calls } = makeActivator({
+    config, repo, checkout, runtime: 'down', pids: (state) => state === 'down' ? [] : [222],
+  });
+  let tunnelProbes = 0;
+  const coordinator = new StableRuntimeRecoveryCoordinator({
+    activator,
+    probeJson: async () => { tunnelProbes += 1; throw new Error('relay-agent recovery must not probe external tunnel'); },
+    sleep: async () => {},
+  });
+
+  const result = await coordinator.recover({ targetSha: SHA, configPath, repoPath: repo });
+  assert.equal(result.status, 'PASS');
+  assert.equal(result.profileKind, 'relay-agent');
+  assert.equal(result.runtime.action, 'started');
+  assert.deepEqual(result.tunnel, { action: 'not-applicable', status: null });
+  assert.deepEqual(result.tunnelPreflight, { mode: 'not-applicable-relay-agent' });
+  assert.equal(result.tunnelLifecycle, 'not-applicable-relay-agent');
+  assert.equal(result.evidence.healthz.revision, SHA);
+  assert.equal(result.evidence.readyz.revision, SHA);
+  assert.equal(Object.prototype.hasOwnProperty.call(result.evidence, 'tunnel'), false);
+  assert.equal(tunnelProbes, 0);
+  assert.equal(calls.prepare, 1);
+  assert.equal(calls.spawnRuntime, 1);
+});
+
+test('relay-agent recovery retry reuses exact runtime without duplicate start', async () => {
+  const { repo, checkout, configPath, config } = relayFixture();
+  const { activator, calls } = makeActivator({ config, repo, checkout, runtime: 'exact', pids: [111] });
+  const coordinator = new StableRuntimeRecoveryCoordinator({
+    activator,
+    probeJson: async () => { throw new Error('relay-agent recovery must not probe external tunnel'); },
+    sleep: async () => {},
+  });
+
+  const result = await coordinator.recover({ targetSha: SHA, configPath, repoPath: repo });
+  assert.equal(result.status, 'PASS');
+  assert.equal(result.profileKind, 'relay-agent');
+  assert.equal(result.runtime.action, 'reused');
+  assert.equal(calls.prepare, 0);
+  assert.equal(calls.spawnRuntime, 0);
+});
+
+test('relay-agent recovery fails closed on wrong repository identity', async () => {
+  const { repo, checkout, configPath, config } = relayFixture();
+  fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ repository: { url: 'https://github.com/example/other.git' } }));
+  const { activator, calls } = makeActivator({ config, repo, checkout, runtime: 'down' });
+  const coordinator = new StableRuntimeRecoveryCoordinator({ activator, sleep: async () => {} });
+
+  await assert.rejects(
+    () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
+    (error) => error instanceof StableRuntimeRecoveryError && error.details.phase === 'profile_binding',
+  );
+  assert.equal(calls.prepare, 0);
+  assert.equal(calls.spawnRuntime, 0);
 });
 
 test('wrong healthy runtime revision fails closed without stopping or starting any process', async () => {

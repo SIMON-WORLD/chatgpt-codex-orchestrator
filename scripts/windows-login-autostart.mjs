@@ -19,13 +19,14 @@ import {
 } from '../src/operability/windows-login-autostart.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const EXACT_SHA_RE = /^[0-9a-f]{40}$/u;
 
 function usage() {
   return [
     'Windows per-user login autostart for the existing Local Connector stack',
     '',
     'Usage:',
-    '  node scripts/windows-login-autostart.mjs plan|install --kind stable-runtime --config <absolute-config.json> [--repo <absolute-trusted-repo>]',
+    '  node scripts/windows-login-autostart.mjs plan|install --kind stable-runtime --config <absolute-config.json> [--repo <absolute-trusted-repo>] [--sha <exact-40-hex>]',
     '  node scripts/windows-login-autostart.mjs plan|install --kind relay-host --bootstrap <absolute-reviewed-bootstrap.ps1> --bootstrap-sha256 <64-hex>',
     '  node scripts/windows-login-autostart.mjs status',
     '  node scripts/windows-login-autostart.mjs uninstall',
@@ -43,6 +44,8 @@ function parse(argv) {
     if (arg === '--kind') args.kind = argv[++i];
     else if (arg === '--config') args.configPath = argv[++i];
     else if (arg === '--repo') args.repoPath = argv[++i];
+    else if (arg === '--sha') args.targetSha = argv[++i];
+    else if (arg === '--binding-sha256') args.bindingSha256 = argv[++i];
     else if (arg === '--bootstrap') args.bootstrapPath = argv[++i];
     else if (arg === '--bootstrap-sha256') args.bootstrapSha256 = argv[++i];
     else if (arg === '--help' || arg === '-h') args.help = true;
@@ -63,10 +66,22 @@ function desiredSpec(args, userSid) {
       repoPath: args.repoPath || null,
       launcherRepoRoot: ROOT,
     });
+    const targetSha = args.targetSha ? String(args.targetSha).trim().toLowerCase() : null;
+    if (targetSha && !EXACT_SHA_RE.test(targetSha)) throw new Error('--sha must be an exact 40-hex commit SHA');
+    if (binding.profileKind === 'relay-agent' && !targetSha) {
+      throw new Error('--sha is required for relay-agent Stable Runtime autostart');
+    }
+    const launchArgs = [
+      'launch-stable-runtime',
+      '--config', binding.configPath,
+      '--repo', binding.repoPath,
+      '--binding-sha256', binding.bindingSha256,
+    ];
+    if (targetSha) launchArgs.push('--sha', targetSha);
     const action = buildLauncherAction({
       nodePath: process.execPath,
       repoRoot: ROOT,
-      launchArgs: ['launch-stable-runtime', '--config', binding.configPath, '--repo', binding.repoPath],
+      launchArgs,
     });
     return buildWindowsLoginTaskSpec({ kind: args.kind, userSid, action });
   }
@@ -129,11 +144,15 @@ async function main() {
     requireWindows(args.command);
 
     if (args.command === 'launch-stable-runtime') {
-      if (!args.configPath || !args.repoPath) throw new Error('--config and --repo are required');
+      if (!args.configPath || !args.repoPath || !args.bindingSha256) {
+        throw new Error('--config, --repo, and --binding-sha256 are required');
+      }
       const result = launchStableRuntime({
         configPath: args.configPath,
         repoPath: args.repoPath,
         launcherRepoRoot: ROOT,
+        targetSha: args.targetSha || null,
+        expectedBindingSha256: args.bindingSha256,
       });
       writeResult(result);
       if (result.code !== 0) process.exitCode = result.code || 1;
