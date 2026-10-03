@@ -1,0 +1,163 @@
+param([switch]$Plan)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$NodeExe = 'D:\Software\nvm\nodejs\node.exe'
+$RepoRoot = 'E:\Project\chatgpt-codex-orchestrator\issue-212-revise'
+$RelayRepo = 'E:\Project\chatgpt-codex-orchestrator\chatgpt-codex-orchestrator-issue-185'
+$RuntimeRoot = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime'
+$RelayRunner = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime\relay-runner.mjs'
+$RelayRunnerSha256 = 'ff64a79bc20bb7104a2536e5c205451f96b219d0b08e197211a720dfcb9e84e1'
+$TunnelExe = 'D:\Software\tunnel-client\tunnel-client-v0.0.14-windows-amd64\tunnel-client.exe'
+$TunnelProfile = 'issue-185-relay'
+$TunnelProfileDir = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime\tunnel-profiles'
+$TunnelProfilePath = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime\tunnel-profiles\issue-185-relay.yaml'
+$TunnelProfileSha256 = '303370e08438977baa25f0cd9e16c8cc4c75fddd5297de40f56c94d3b80cfaa3'
+$StableConfig = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime\device-a-config.json'
+$StableConfigSha256 = '8092b6443dcd6c3b4409ae078cf3c483dc99ac1232d7aae25f1e53634deea148'
+$StableSha = '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9'
+$Recovery = Join-Path $RepoRoot 'host\stable-runtime-recover.mjs'
+$Doctor = Join-Path $RepoRoot 'scripts\private-relay-doctor.mjs'
+$RelayPorts = @(18745, 18746, 18747)
+$TunnelPort = 18748
+$HeaderReference = 'Authorization: env:ISSUE185_RELAY_AUTHORIZATION'
+
+function Assert-ExactFileHash([string]$Path, [string]$Expected) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "required file missing: $Path" }
+  $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actual -ne $Expected) { throw "file hash drift: $Path" }
+}
+
+function Get-UserSecret([string]$Name) {
+  $value = [Environment]::GetEnvironmentVariable($Name, 'User')
+  if ([string]::IsNullOrWhiteSpace($value)) { throw "missing User-scope secret reference: $Name" }
+  return $value
+}
+
+function Get-ExactListenerPids([int]$Port) {
+  return @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+}
+
+function Get-ProcessRecord([int]$ProcessId) {
+  return Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId"
+}
+
+function Normalize-CommandLine([string]$Value) {
+  return (($Value -replace '"', '') -replace '\s+', ' ').Trim().ToLowerInvariant()
+}
+
+function Assert-ExactProcess([int]$ProcessId, [string]$Exe, [string[]]$Args, [string]$Label) {
+  $proc = Get-ProcessRecord $ProcessId
+  if ($null -eq $proc) { throw "$Label process disappeared" }
+  if ($proc.ExecutablePath.ToLowerInvariant() -ne $Exe.ToLowerInvariant()) { throw "$Label executable path drift" }
+  $expected = Normalize-CommandLine ($Exe + ' ' + ($Args -join ' '))
+  $actual = Normalize-CommandLine $proc.CommandLine
+  if ($actual -ne $expected) { throw "$Label command/profile/path drift" }
+}
+
+function Assert-RelayTopology {
+  $sets = @()
+  foreach ($port in $RelayPorts) { $sets += ,@(Get-ExactListenerPids $port) }
+  $allAbsent = ($sets | Where-Object { $_.Count -ne 0 }).Count -eq 0
+  if ($allAbsent) { return $null }
+  foreach ($set in $sets) { if ($set.Count -ne 1) { throw 'relay listener topology drift' } }
+  $ownerPid = $sets[0][0]
+  foreach ($set in $sets) { if ($set[0] -ne $ownerPid) { throw 'relay ports are not owned by one exact process' } }
+  Assert-ExactProcess $ownerPid $NodeExe @($RelayRunner) 'relay'
+  return $ownerPid
+}
+
+function Assert-TunnelTopology {
+  $pids = @(Get-ExactListenerPids $TunnelPort)
+  if ($pids.Count -eq 0) { return $null }
+  if ($pids.Count -ne 1) { throw 'tunnel listener topology drift' }
+  $ownerPid = $pids[0]
+  Assert-ExactProcess $ownerPid $TunnelExe @('run', '--profile', $TunnelProfile, '--profile-dir', $TunnelProfileDir) 'tunnel'
+  return $ownerPid
+}
+
+function Assert-RelayAuthorizationReady([string]$Authorization) {
+  $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:18746/devices' -Headers @{ Authorization = $Authorization } -TimeoutSec 3
+  if ($response.StatusCode -ne 200) { throw 'relay authorization readiness probe failed' }
+}
+
+function Assert-TunnelReady {
+  $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:18748/readyz' -TimeoutSec 3
+  if ($response.StatusCode -ne 200) { throw 'tunnel readiness failed' }
+}
+
+function Assert-RelayRepoRevision {
+  $head = (& git -C $RelayRepo rev-parse HEAD 2>$null).Trim().ToLowerInvariant()
+  if ($LASTEXITCODE -ne 0 -or $head -ne $StableSha) { throw 'Relay repo revision drift' }
+}
+
+Assert-ExactFileHash $RelayRunner $RelayRunnerSha256
+Assert-ExactFileHash $TunnelProfilePath $TunnelProfileSha256
+Assert-ExactFileHash $StableConfig $StableConfigSha256
+if (-not (Test-Path -LiteralPath $NodeExe -PathType Leaf)) { throw 'exact Node executable missing' }
+if (-not (Test-Path -LiteralPath $TunnelExe -PathType Leaf)) { throw 'exact tunnel-client executable missing' }
+if (-not (Test-Path -LiteralPath $Recovery -PathType Leaf)) { throw 'canonical stable-runtime-recover.mjs missing' }
+if (-not (Test-Path -LiteralPath $Doctor -PathType Leaf)) { throw 'canonical private-relay-doctor.mjs missing' }
+Assert-RelayRepoRevision
+
+$relayAuthorization = Get-UserSecret 'ISSUE185_RELAY_AUTHORIZATION'
+if (-not $relayAuthorization.StartsWith('Bearer ')) { throw 'ISSUE185_RELAY_AUTHORIZATION malformed' }
+$deviceSecret = Get-UserSecret 'LOCAL_RELAY_DEVICE_SECRET'
+$controlPlaneApiKey = Get-UserSecret 'CONTROL_PLANE_API_KEY'
+
+$env:ISSUE185_RELAY_AUTHORIZATION = $relayAuthorization
+$env:ISSUE185_REPO = $RelayRepo
+$env:ISSUE185_RUNTIME_ROOT = $RuntimeRoot
+$env:LOCAL_RELAY_DEVICE_SECRET = $deviceSecret
+$env:CONTROL_PLANE_API_KEY = $controlPlaneApiKey
+$env:MCP_EXTRA_HEADERS = $HeaderReference
+$env:MCP_DISCOVERY_EXTRA_HEADERS = $HeaderReference
+$env:PRIVATE_RELAY_ACCOUNT_BEARER = $relayAuthorization.Substring('Bearer '.Length)
+
+$relayPidValue = Assert-RelayTopology
+$tunnelPidValue = Assert-TunnelTopology
+
+$planActions = @()
+if ($null -eq $relayPidValue) { $planActions += 'start-relay-runner' } else { Assert-RelayAuthorizationReady $relayAuthorization; $planActions += "reuse-relay-runner:$relayPidValue" }
+if ($null -eq $tunnelPidValue) { $planActions += 'start-secure-tunnel' } else { Assert-TunnelReady; $planActions += "reuse-secure-tunnel:$tunnelPidValue" }
+$planActions += 'recover-stable-runtime'
+$planActions += 'private-relay-doctor'
+
+if ($Plan) {
+  [pscustomobject]@{
+    status = 'PLAN'
+    relayPorts = $RelayPorts
+    tunnelPort = $TunnelPort
+    stablePort = 18749
+    stableSha = $StableSha
+    actions = $planActions
+    secretSources = @('User:ISSUE185_RELAY_AUTHORIZATION', 'User:LOCAL_RELAY_DEVICE_SECRET', 'User:CONTROL_PLANE_API_KEY')
+    mcpHeaderContract = $HeaderReference
+  } | ConvertTo-Json -Depth 4
+  exit 0
+}
+
+if ($null -eq $relayPidValue) {
+  $relayProcess = Start-Process -FilePath $NodeExe -ArgumentList @($RelayRunner) -WorkingDirectory $RelayRepo -WindowStyle Hidden -PassThru
+  Start-Sleep -Milliseconds 750
+  $relayPidValue = Assert-RelayTopology
+  if ($null -eq $relayPidValue -or $relayPidValue -ne $relayProcess.Id) { throw 'relay startup did not own exact listeners' }
+  Assert-RelayAuthorizationReady $relayAuthorization
+}
+
+if ($null -eq $tunnelPidValue) {
+  $tunnelProcess = Start-Process -FilePath $TunnelExe -ArgumentList @('run', '--profile', $TunnelProfile, '--profile-dir', $TunnelProfileDir) -WorkingDirectory (Split-Path -Parent $TunnelExe) -WindowStyle Hidden -PassThru
+  Start-Sleep -Milliseconds 1000
+  $tunnelPidValue = Assert-TunnelTopology
+  if ($null -eq $tunnelPidValue -or $tunnelPidValue -ne $tunnelProcess.Id) { throw 'tunnel startup did not own exact readiness listener' }
+  Assert-TunnelReady
+}
+
+& $NodeExe $Recovery '--config' $StableConfig '--repo' $RepoRoot '--sha' $StableSha
+if ($LASTEXITCODE -ne 0) { throw 'canonical Stable Runtime recovery failed' }
+
+& $NodeExe $Doctor '--config' $StableConfig '--sha' $StableSha '--account-bearer-env' 'PRIVATE_RELAY_ACCOUNT_BEARER'
+if ($LASTEXITCODE -ne 0) { throw 'private-relay doctor failed' }
+
+Write-Output 'WINDOWS_RELAY_HOST_BOOTSTRAP PASS'
