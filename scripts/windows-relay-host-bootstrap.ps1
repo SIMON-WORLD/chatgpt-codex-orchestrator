@@ -47,11 +47,11 @@ function Normalize-CommandLine([string]$Value) {
   return (($Value -replace '"', '') -replace '\s+', ' ').Trim().ToLowerInvariant()
 }
 
-function Assert-ExactProcess([int]$ProcessId, [string]$Exe, [string[]]$Args, [string]$Label) {
+function Assert-ExactProcess([int]$ProcessId, [string]$Exe, [string[]]$ExpectedArgs, [string]$Label) {
   $proc = Get-ProcessRecord $ProcessId
   if ($null -eq $proc) { throw "$Label process disappeared" }
   if ($proc.ExecutablePath.ToLowerInvariant() -ne $Exe.ToLowerInvariant()) { throw "$Label executable path drift" }
-  $expected = Normalize-CommandLine ($Exe + ' ' + ($Args -join ' '))
+  $expected = Normalize-CommandLine ($Exe + ' ' + ($ExpectedArgs -join ' '))
   $actual = Normalize-CommandLine $proc.CommandLine
   if ($actual -ne $expected) { throw "$Label command/profile/path drift" }
 }
