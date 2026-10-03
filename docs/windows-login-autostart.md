@@ -25,16 +25,16 @@ Task creation/update is ownership-fenced. A same-name task without the Issue #21
 
 Issue #212 does not absorb any accepted lifecycle owner:
 
-- **Stable Runtime** — `host/stable-runtime-recover.mjs` remains the repository recovery authority. It keeps exact repo/config/profile binding, exact target semantics, single-listener safety, and fail-closed drift handling.
+- **Stable Runtime** — `host/stable-runtime-recover.mjs` remains the repository recovery authority. It keeps exact repo/config/profile binding, exact target semantics, single-listener safety, and fail-closed drift handling for both accepted profile families: the #75 external-tunnel profile and the #185 device-local Relay-agent profile.
 - **Relay Agent** — remains a child of the normal Stable Runtime when `relayAgent.enabled=true`; no separate Relay-agent task/supervisor is added.
-- **Secure MCP Tunnel** — remains externally managed. Stable Runtime recovery only consumes its configured readiness URL; it does not launch/stop/reconfigure the tunnel client.
+- **Secure MCP Tunnel** — remains externally managed where the Stable Runtime config actually declares the #75 external-tunnel profile. The #185 device-local Relay-agent config has no external-tunnel lifecycle to validate or manage.
 - **Relay runner / agent ingress** — remain under the already accepted host-side bootstrap/lifecycle owner. The Task Scheduler installer does not recreate their startup logic.
 
 The new repository launcher performs only fail-closed binding/hash validation immediately before delegation. It does not select a new revision, pair a device, change ports/profile/topology, restart by process name, or supervise child processes.
 
 ## Device-local Stable Runtime task
 
-For a paired device whose existing Stable Runtime config has exactly one trusted repo:
+For the #75 external-tunnel shape, a paired device whose existing Stable Runtime config has exactly one trusted repo continues to use the original contract:
 
 ```powershell
 npm run autostart:windows -- plan --kind stable-runtime --config C:\absolute\stable-runtime.json
@@ -47,21 +47,32 @@ If `worktree.trustedRepos` has more than one entry, provide the exact trusted ca
 npm run autostart:windows -- install --kind stable-runtime --config C:\absolute\stable-runtime.json --repo E:\absolute\chatgpt-codex-orchestrator
 ```
 
-Before task creation and again at each login launch, this mode verifies the accepted shape: loopback Stable Runtime, explicit port, exact `tunnel.localMcpUrl`, externally managed tunnel with readiness URL, enabled Relay Agent with stable `deviceId`, environment-variable credential reference, no raw relay credential, and the same canonical trusted repo from which the launcher is running.
+For the #75 shape, validation still requires the exact external-tunnel binding and trusted repo. For the accepted #185 device-local Relay-agent shape, `tunnel.external` and `worktree.trustedRepos` are intentionally absent; plan/install instead requires an explicit canonical `--repo` plus an exact `--sha <40-hex>` target. The no-`trustedRepos` path fails closed unless that repo is the same canonical repo from which the launcher runs and its package identity is exactly `SIMON-WORLD/chatgpt-codex-orchestrator`.
+
+At plan/install time the launcher hashes the critical non-secret binding: profile family, loopback host/port, data root, Governance namespace, filesystem scope, workspace roots, Relay URL, exact `deviceId`, credential-environment variable name, applicable tunnel fields, and canonical repo path. The task stores that SHA-256; each login recomputes it before recovery, so deviceId, credential-env, filesystem/workspace/data-root, port, tunnel, or repo drift fails closed.
+
+A #185-style plan is therefore explicit and revision-pinned:
+
+```powershell
+npm run autostart:windows -- plan --kind stable-runtime `
+  --config E:\absolute\device-b-config.json `
+  --repo E:\absolute\chatgpt-codex-orchestrator `
+  --sha <exact-40-hex-accepted-revision>
+```
 
 The task invokes only this bounded wrapper:
 
 ```text
-node <trusted-repo>\scripts\windows-login-autostart.mjs launch-stable-runtime --config <existing-config> --repo <trusted-repo>
+node <trusted-repo>\scripts\windows-login-autostart.mjs launch-stable-runtime --config <existing-config> --repo <trusted-repo> --binding-sha256 <critical-binding-sha256> [--sha <exact-40-hex>]
 ```
 
 The wrapper then delegates directly to:
 
 ```text
-node <trusted-repo>\host\stable-runtime-recover.mjs --config <existing-config> --repo <trusted-repo>
+node <trusted-repo>\host\stable-runtime-recover.mjs --config <existing-config> --repo <trusted-repo> [--sha <exact-40-hex>]
 ```
 
-Recovery starts/reuses the Stable Runtime; the existing Stable Runtime starts the Relay Agent. No pairing, deviceId, filesystem scope, port, profile, topology, or repository binding is rewritten.
+Recovery starts/reuses the Stable Runtime; the existing Stable Runtime starts the Relay Agent. The #75 branch retains external-tunnel readiness checks. The #185 branch uses the same exact-revision prepare/start/reuse and single-listener fencing but does not require or probe an irrelevant external tunnel. No pairing, deviceId, filesystem scope, port, profile, topology, or repository binding is rewritten.
 ## Relay-host task
 
 The accepted Relay host has additional lifecycle owners that are intentionally outside `stable-runtime-recover.mjs`: the Relay runner, externally managed Secure MCP Tunnel, and existing agent ingress. Issue #212 therefore does **not** synthesize a repository supervisor for them.
@@ -104,6 +115,8 @@ agent ingress         existing tailnet-only Tailscale Serve binding
 ```
 
 The second paired Windows device owns its device-local Stable Runtime on `127.0.0.1:18749`; it does not own the Relay-host 18745-18748 listeners.
+
+The 2026-10-03 #212 read-only host reacquisition found the Relay/Tunnel/Stable Runtime listeners live but found **no `.ps1` file anywhere under the project-owned `E:\\Project` tree**. Therefore no existing reviewed Relay-host bootstrap path/hash is currently established. The smallest compatible follow-up is one fixed host-local PowerShell bootstrap, reviewed by exact SHA-256, that only composes the already accepted Relay runner / Secure Tunnel startup with `recover:private-relay` and `doctor:private-relay`; it must not become a generic supervisor or scheduler. No such host bootstrap is fabricated by this repository correction.
 
 These values are **not** configured by the installer. Before any persistent Relay-host installation, G05 Parent must reacquire the actual host bootstrap path/hash and review that exact bootstrap against the still-current topology. A stale or mismatched bootstrap hash fails closed.
 ## Status and bounded removal

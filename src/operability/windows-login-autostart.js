@@ -10,6 +10,9 @@ export const WINDOWS_LOGIN_TASK_MARKER = 'chatgpt-codex-orchestrator#212/windows
 const KINDS = new Set(['stable-runtime', 'relay-host']);
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const SHA256_RE = /^[0-9a-f]{64}$/u;
+const EXACT_SHA_RE = /^[0-9a-f]{40}$/u;
+const FILESYSTEM_SCOPE_VALUES = new Set(['selected_roots', 'os_user_scope']);
+const EXPECTED_REPO_IDENTITY = 'github.com/simon-world/chatgpt-codex-orchestrator';
 const SENSITIVE_KEY_RE = /(?:api[_-]?key|authorization|headers?|cookie|credential|password|secret|token|bearer)/iu;
 const BEARER_LITERAL_RE = /\bBearer\s+[A-Za-z0-9._~+\/-]{8,}/iu;
 
@@ -98,6 +101,28 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function normalizeRepoIdentity(value) {
+  let text = String(value || '').trim().toLowerCase().replace(/^git\+/u, '');
+  if (text.startsWith('git@github.com:')) text = 'https://github.com/' + text.slice('git@github.com:'.length);
+  try {
+    const parsed = new URL(text);
+    return (parsed.hostname + parsed.pathname).replace(/\.git\/?$/u, '').replace(/\/$/u, '');
+  } catch {
+    return text.replace(/\.git$/u, '').replace(/\/$/u, '');
+  }
+}
+
+function assertProjectRepoIdentity(fsImpl, repoPath) {
+  const packagePath = path.win32.join(repoPath, 'package.json');
+  let parsed;
+  try { parsed = JSON.parse(fsImpl.readFileSync(packagePath, 'utf8')); }
+  catch { throw new Error('repoPath must contain the expected project package.json'); }
+  const repository = typeof parsed.repository === 'string' ? parsed.repository : parsed.repository?.url;
+  if (normalizeRepoIdentity(repository) !== EXPECTED_REPO_IDENTITY) {
+    throw new Error('repoPath package identity does not match SIMON-WORLD/chatgpt-codex-orchestrator');
+  }
+}
+
 export function quoteWindowsArg(value) {
   const input = String(value);
   if (input && !/[\s"]/u.test(input)) return input;
@@ -135,19 +160,46 @@ export function validateStableRuntimeAutostartBinding({
   const port = Number(raw.port);
   if (!['127.0.0.1', 'localhost', '::1'].includes(host)) throw new Error('stable runtime host must remain loopback-bound');
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('stable runtime port must remain explicit');
-  if (raw.tunnel?.external !== true) throw new Error('autostart requires the accepted externally managed Secure Tunnel lifecycle');
-  const mcpHost = host === '::1' ? '[::1]' : host;
-  const expectedMcp = 'http://' + mcpHost + ':' + port + '/mcp';
-  if (String(raw.tunnel?.localMcpUrl || '').replace(/\/+$/u, '') !== expectedMcp) {
-    throw new Error('tunnel.localMcpUrl does not match the configured loopback Stable Runtime');
-  }
-  if (!String(raw.tunnel?.healthUrl || '').trim()) throw new Error('external tunnel healthUrl is required');
 
   if (raw.relayAgent?.enabled !== true) throw new Error('paired-device runtime must keep relayAgent enabled');
   if (!String(raw.relayAgent?.deviceId || '').trim()) throw new Error('relayAgent.deviceId is required');
+  if (!String(raw.relayAgent?.relayUrl || '').trim()) throw new Error('relayAgent.relayUrl is required');
   const credentialEnv = String(raw.relayAgent?.credentialEnv || '').trim();
   if (!ENV_NAME_RE.test(credentialEnv)) throw new Error('relayAgent.credentialEnv must remain an environment-variable reference');
   if (Object.prototype.hasOwnProperty.call(raw.relayAgent || {}, 'credential')) throw new Error('raw relayAgent credential is forbidden');
+
+  const filesystemScope = String(raw.filesystemScope || 'selected_roots').trim().toLowerCase();
+  if (!FILESYSTEM_SCOPE_VALUES.has(filesystemScope)) throw new Error('filesystemScope must remain selected_roots or os_user_scope');
+  const dataRoot = raw.dataRoot ? absoluteWindowsPath(raw.dataRoot, 'dataRoot') : null;
+  const workspaceRoot = raw.workspaceRoot ? absoluteWindowsPath(raw.workspaceRoot, 'workspaceRoot') : null;
+  if (raw.workspaceRoots !== undefined && !Array.isArray(raw.workspaceRoots)) throw new Error('workspaceRoots must remain an array');
+  const workspaceRoots = (raw.workspaceRoots || []).map((entry) => absoluteWindowsPath(entry, 'workspaceRoots entry'));
+
+  let profileKind;
+  let tunnelHealthUrl = null;
+  let tunnelBinding = null;
+  if (raw.tunnel?.external === true) {
+    profileKind = 'external-tunnel';
+    const mcpHost = host === '::1' ? '[::1]' : host;
+    const expectedMcp = 'http://' + mcpHost + ':' + port + '/mcp';
+    if (String(raw.tunnel?.localMcpUrl || '').replace(/\/+$/u, '') !== expectedMcp) {
+      throw new Error('tunnel.localMcpUrl does not match the configured loopback Stable Runtime');
+    }
+    tunnelHealthUrl = String(raw.tunnel?.healthUrl || '').trim();
+    if (!tunnelHealthUrl) throw new Error('external tunnel healthUrl is required');
+    tunnelBinding = {
+      external: true,
+      localMcpUrl: expectedMcp,
+      healthUrl: tunnelHealthUrl,
+    };
+  } else {
+    const ambiguousTunnel = raw.tunnel && (
+      raw.tunnel.localMcpUrl || raw.tunnel.healthUrl || raw.tunnel.clientExecutable
+      || raw.tunnel.profile || raw.tunnel.profileDir
+    );
+    if (ambiguousTunnel) throw new Error('relay-agent autostart config must not carry a partial external-tunnel binding');
+    profileKind = 'relay-agent';
+  }
 
   const trusted = Array.isArray(raw.worktree?.trustedRepos) ? raw.worktree.trustedRepos.filter(Boolean) : [];
   let selected = repoPath ? absoluteWindowsPath(repoPath, 'repoPath') : null;
@@ -157,18 +209,49 @@ export function validateStableRuntimeAutostartBinding({
   }
   const selectedCanonical = canonicalRealpath(fsImpl, selected, 'repoPath');
   const trustedCanonical = trusted.map((entry) => canonicalRealpath(fsImpl, entry, 'trusted repo'));
-  if (!trustedCanonical.includes(selectedCanonical)) throw new Error('repoPath must resolve to an existing worktree.trustedRepos entry');
-  if (launcherRepoRoot && canonicalRealpath(fsImpl, launcherRepoRoot, 'launcher repo') !== selectedCanonical) {
-    throw new Error('autostart launcher repository must be the same exact trusted canonical repo');
+  if (trustedCanonical.length && !trustedCanonical.includes(selectedCanonical)) {
+    throw new Error('repoPath must resolve to an existing worktree.trustedRepos entry');
   }
+  if (!trustedCanonical.length && !launcherRepoRoot) {
+    throw new Error('relay-agent config without worktree.trustedRepos requires the exact launcher repository binding');
+  }
+  if (launcherRepoRoot && canonicalRealpath(fsImpl, launcherRepoRoot, 'launcher repo') !== selectedCanonical) {
+    throw new Error('autostart launcher repository must be the same exact canonical repo');
+  }
+  assertProjectRepoIdentity(fsImpl, selected);
+
+  const bindingSha256 = sha256(Buffer.from(JSON.stringify({
+    profileKind,
+    host,
+    port,
+    dataRoot: dataRoot ? normalizeWindowsPath(dataRoot).toLowerCase() : null,
+    governanceNamespace: String(raw.governanceNamespace || 'default'),
+    filesystemScope,
+    workspaceRoot: workspaceRoot ? normalizeWindowsPath(workspaceRoot).toLowerCase() : null,
+    workspaceRoots: workspaceRoots.map((entry) => normalizeWindowsPath(entry).toLowerCase()),
+    relayAgent: {
+      enabled: true,
+      relayUrl: String(raw.relayAgent.relayUrl).replace(/\/+$/u, ''),
+      deviceId: String(raw.relayAgent.deviceId).trim(),
+      credentialEnv,
+    },
+    tunnel: tunnelBinding,
+    repoPath: selectedCanonical,
+  }), 'utf8'));
 
   return {
     configPath: config,
     repoPath: selected,
     port,
+    profileKind,
     deviceId: String(raw.relayAgent.deviceId).trim(),
     credentialEnv,
-    tunnelHealthUrl: String(raw.tunnel.healthUrl),
+    filesystemScope,
+    dataRoot,
+    workspaceRoot,
+    workspaceRoots,
+    tunnelHealthUrl,
+    bindingSha256,
   };
 }
 
@@ -383,11 +466,22 @@ export function removeWindowsLoginTask({ existingXml, run = defaultCommandRunner
 }
 
 export function launchStableRuntime({
-  configPath, repoPath, launcherRepoRoot, nodePath = process.execPath, fsImpl = fs, run = defaultCommandRunner,
+  configPath, repoPath, launcherRepoRoot, targetSha = null, expectedBindingSha256,
+  nodePath = process.execPath, fsImpl = fs, run = defaultCommandRunner,
 } = {}) {
   const binding = validateStableRuntimeAutostartBinding({ configPath, repoPath, launcherRepoRoot, fsImpl });
+  const expectedBinding = String(expectedBindingSha256 || '').trim().toLowerCase();
+  if (!SHA256_RE.test(expectedBinding) || expectedBinding !== binding.bindingSha256) {
+    throw new Error('stable runtime autostart critical binding fingerprint mismatch');
+  }
+  const exactTarget = targetSha ? String(targetSha).trim().toLowerCase() : null;
+  if (exactTarget && !EXACT_SHA_RE.test(exactTarget)) throw new Error('target SHA must be an exact 40-hex commit SHA');
+  if (binding.profileKind === 'relay-agent' && !exactTarget) {
+    throw new Error('relay-agent autostart requires an explicit exact target SHA');
+  }
   const recovery = path.win32.join(absoluteWindowsPath(launcherRepoRoot, 'launcher repo'), 'host', 'stable-runtime-recover.mjs');
   const args = [recovery, '--config', binding.configPath, '--repo', binding.repoPath];
+  if (exactTarget) args.push('--sha', exactTarget);
   const result = run(nodePath, args, { inherit: true });
   return { status: result.code === 0 ? 'PASS' : 'FAIL', code: result.code, delegatedTo: 'stable-runtime-recover.mjs' };
 }

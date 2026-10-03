@@ -24,6 +24,9 @@ const SID = 'S-1-5-21-111-222-333-1001';
 const REPO = 'E:\\Project\\chatgpt-codex-orchestrator';
 const CONFIG = 'C:\\Users\\Simon\\AppData\\Local\\orchestrator\\stable.json';
 const NODE = 'C:\\Program Files\\nodejs\\node.exe';
+const SHA = 'a'.repeat(40);
+const PACKAGE = path.win32.join(REPO, 'package.json');
+const PACKAGE_BODY = JSON.stringify({ repository: { url: 'git+https://github.com/SIMON-WORLD/chatgpt-codex-orchestrator.git' } });
 
 function fakeFs(files = {}, realpaths = {}) {
   const readFileSync = (filename, encoding) => {
@@ -45,6 +48,9 @@ function stableConfig(repo = REPO) {
   return {
     host: '127.0.0.1',
     port: 18749,
+    dataRoot: 'E:\\Project\\chatgpt-codex-orchestrator\\stable-data',
+    filesystemScope: 'selected_roots',
+    workspaceRoots: ['E:\\Project\\chatgpt-codex-orchestrator\\workspace'],
     worktree: { trustedRepos: [repo] },
     tunnel: {
       external: true,
@@ -60,11 +66,30 @@ function stableConfig(repo = REPO) {
   };
 }
 
-function stableFs(config = stableConfig(), extraRealpaths = {}) {
+function stableFs(config = stableConfig(), extraRealpaths = {}, extraFiles = {}) {
   return fakeFs(
-    { [CONFIG]: JSON.stringify(config) },
+    { [CONFIG]: JSON.stringify(config), [PACKAGE]: PACKAGE_BODY, ...extraFiles },
     { [REPO]: REPO, ...extraRealpaths },
   );
+}
+
+function deviceBConfig() {
+  return {
+    dataRoot: 'E:\\Project\\chatgpt-codex-orchestrator\\issue-185-runtime-device-b\\device-b-data',
+    filesystemScope: 'os_user_scope',
+    host: '127.0.0.1',
+    port: 18749,
+    workspaceRoots: ['E:\\Project\\chatgpt-codex-orchestrator\\issue-185-device-b-workspace'],
+    relayAgent: {
+      enabled: true,
+      relayUrl: 'http://127.0.0.1:18746',
+      deviceId: '039923d2-be2d-4345-bfd8-fdf385abf715',
+      credentialEnv: 'ISSUE185_DEVICE_B_SECRET',
+      pollHoldMs: 25000,
+      reconnectInitialMs: 250,
+      reconnectMaxMs: 5000,
+    },
+  };
 }
 
 function stableTaskXml() {
@@ -121,9 +146,30 @@ test('Stable Runtime binding preserves exact topology, repo, deviceId, and env c
   });
   assert.equal(binding.port, 18749);
   assert.equal(binding.repoPath, REPO);
+  assert.equal(binding.profileKind, 'external-tunnel');
   assert.equal(binding.deviceId, 'device-a2');
   assert.equal(binding.credentialEnv, 'LOCAL_RELAY_DEVICE_SECRET');
+  assert.equal(binding.filesystemScope, 'selected_roots');
   assert.equal(binding.tunnelHealthUrl, 'http://127.0.0.1:18748/readyz');
+  assert.match(binding.bindingSha256, /^[0-9a-f]{64}$/u);
+});
+
+test('Device B-equivalent relay-agent config binds without tunnel or worktree fields', () => {
+  const config = deviceBConfig();
+  const binding = validateStableRuntimeAutostartBinding({
+    configPath: CONFIG,
+    repoPath: REPO,
+    launcherRepoRoot: REPO,
+    fsImpl: stableFs(config),
+  });
+  assert.equal(binding.profileKind, 'relay-agent');
+  assert.equal(binding.deviceId, '039923d2-be2d-4345-bfd8-fdf385abf715');
+  assert.equal(binding.credentialEnv, 'ISSUE185_DEVICE_B_SECRET');
+  assert.equal(binding.filesystemScope, 'os_user_scope');
+  assert.equal(binding.dataRoot, config.dataRoot);
+  assert.deepEqual(binding.workspaceRoots, config.workspaceRoots);
+  assert.equal(binding.tunnelHealthUrl, null);
+  assert.match(binding.bindingSha256, /^[0-9a-f]{64}$/u);
 });
 
 test('Stable Runtime binding fails closed on profile/port/repo/device credential drift', () => {
@@ -156,7 +202,65 @@ test('Stable Runtime binding fails closed on profile/port/repo/device credential
     repoPath: REPO,
     launcherRepoRoot: other,
     fsImpl: stableFs(stableConfig(), { [other]: other }),
-  }), /same exact trusted canonical repo/u);
+  }), /same exact canonical repo/u);
+});
+
+test('relay-agent launch pins exact critical binding and exact target revision', () => {
+  const config = deviceBConfig();
+  const fsImpl = stableFs(config);
+  const binding = validateStableRuntimeAutostartBinding({
+    configPath: CONFIG, repoPath: REPO, launcherRepoRoot: REPO, fsImpl,
+  });
+  const calls = [];
+  const result = launchStableRuntime({
+    configPath: CONFIG,
+    repoPath: REPO,
+    launcherRepoRoot: REPO,
+    targetSha: SHA,
+    expectedBindingSha256: binding.bindingSha256,
+    nodePath: NODE,
+    fsImpl,
+    run(command, args) {
+      calls.push({ command, args });
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.equal(result.status, 'PASS');
+  assert.deepEqual(calls[0].args.slice(1), ['--config', CONFIG, '--repo', REPO, '--sha', SHA]);
+});
+
+test('relay-agent autostart fails closed on critical drift and raw secret material', () => {
+  const original = deviceBConfig();
+  const binding = validateStableRuntimeAutostartBinding({
+    configPath: CONFIG, repoPath: REPO, launcherRepoRoot: REPO, fsImpl: stableFs(original),
+  });
+  const mutators = [
+    (c) => { c.relayAgent.deviceId = 'different-device'; },
+    (c) => { c.relayAgent.credentialEnv = 'DIFFERENT_ENV'; },
+    (c) => { c.filesystemScope = 'selected_roots'; },
+    (c) => { c.dataRoot = 'E:\\Other\\data'; },
+    (c) => { c.workspaceRoots = ['E:\\Other\\workspace']; },
+    (c) => { c.port = 18888; },
+  ];
+  for (const mutate of mutators) {
+    const config = structuredClone(original);
+    mutate(config);
+    assert.throws(() => launchStableRuntime({
+      configPath: CONFIG,
+      repoPath: REPO,
+      launcherRepoRoot: REPO,
+      targetSha: SHA,
+      expectedBindingSha256: binding.bindingSha256,
+      fsImpl: stableFs(config),
+      run() { throw new Error('must not execute'); },
+    }), /critical binding fingerprint mismatch/u);
+  }
+
+  const secret = structuredClone(original);
+  secret.relayAgent.credential = 'raw-secret';
+  assert.throws(() => validateStableRuntimeAutostartBinding({
+    configPath: CONFIG, repoPath: REPO, launcherRepoRoot: REPO, fsImpl: stableFs(secret),
+  }), /sensitive|credential/u);
 });
 
 test('Relay-host bootstrap is exact-hash pinned, secret-free, env-reference compatible, recovery+doctor delegated', () => {
@@ -198,12 +302,17 @@ test('Relay-host bootstrap rejects changed bytes, raw secrets, and missing canon
 });
 test('simulated device login delegates to the accepted Stable Runtime recovery command', () => {
   const calls = [];
+  const fsImpl = stableFs();
+  const binding = validateStableRuntimeAutostartBinding({
+    configPath: CONFIG, repoPath: REPO, launcherRepoRoot: REPO, fsImpl,
+  });
   const result = launchStableRuntime({
     configPath: CONFIG,
     repoPath: REPO,
     launcherRepoRoot: REPO,
+    expectedBindingSha256: binding.bindingSha256,
     nodePath: NODE,
-    fsImpl: stableFs(),
+    fsImpl,
     run(command, args) {
       calls.push({ command, args });
       return { code: 0, stdout: '', stderr: '' };

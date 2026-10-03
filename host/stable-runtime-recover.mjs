@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +26,8 @@ import {
 
 const STATE_FILE = 'stable-runtime-active.json';
 const MAX_CAUSE_CHARS = 512;
+const EXPECTED_REPO_IDENTITY = 'github.com/simon-world/chatgpt-codex-orchestrator';
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const CRITICAL_BINDING_ENV_VARS = [
   'V02_PORT', 'V02_HOST', 'V02_WORKSPACE_ROOT', 'CODEX_BIN',
   'TUNNEL_CLIENT_EXECUTABLE', 'TUNNEL_PROFILE', 'TUNNEL_PROFILE_DIR',
@@ -91,6 +94,48 @@ function normalizeUrl(value) {
   return String(value || '').replace(/\/$/, '');
 }
 
+function normalizeRepoIdentity(value) {
+  let text = String(value || '').trim().toLowerCase().replace(/^git\+/u, '');
+  if (text.startsWith('git@github.com:')) text = 'https://github.com/' + text.slice('git@github.com:'.length);
+  try {
+    const parsed = new URL(text);
+    return (parsed.hostname + parsed.pathname).replace(/\.git\/?$/u, '').replace(/\/$/u, '');
+  } catch {
+    return text.replace(/\.git$/u, '').replace(/\/$/u, '');
+  }
+}
+
+function assertProjectRepoIdentity(fsImpl, repoPath) {
+  const packagePath = path.join(repoPath, 'package.json');
+  let parsed;
+  try { parsed = JSON.parse(fsImpl.readFileSync(packagePath, 'utf8')); }
+  catch { throw new StableRuntimeRecoveryError('relay-agent recovery repo must contain the expected project package.json', { phase: 'profile_binding' }); }
+  const repository = typeof parsed.repository === 'string' ? parsed.repository : parsed.repository?.url;
+  if (normalizeRepoIdentity(repository) !== EXPECTED_REPO_IDENTITY) {
+    throw new StableRuntimeRecoveryError('relay-agent recovery repo identity does not match SIMON-WORLD/chatgpt-codex-orchestrator', { phase: 'profile_binding' });
+  }
+}
+
+function relayAgentProfileFingerprint(config, repoPath) {
+  const snapshot = {
+    profileKind: 'relay-agent',
+    host: config.host,
+    port: config.port,
+    dataRoot: config.dataRoot,
+    governanceNamespace: config.governanceNamespace || 'default',
+    filesystemScope: config.filesystemScope,
+    workspaceRoots: [...(config.workspaceRoots || [])],
+    relayAgent: {
+      enabled: config.relayAgent?.enabled === true,
+      relayUrl: config.relayAgent?.relayUrl || null,
+      deviceId: config.relayAgent?.deviceId || null,
+      credentialEnv: config.relayAgent?.credentialEnv || null,
+    },
+    repoPath: path.resolve(repoPath),
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+}
+
 function assertNoCriticalBindingEnv(env) {
   const present = CRITICAL_BINDING_ENV_VARS.filter((name) => env?.[name] !== undefined && String(env[name]).length > 0);
   if (present.length) {
@@ -133,10 +178,43 @@ export class StableRuntimeRecoveryCoordinator {
   }
 
   _requireRecoveryProfile(config) {
-    // The Stable Runtime contract requires an externally managed Secure Tunnel.
-    // In external mode this process owns readiness verification only; it must not
-    // require, launch, stop, or reconfigure tunnel-client.
-    return this.activator._requireBoundedProfile(config);
+    if (config.tunnel?.external === true) {
+      return { ...this.activator._requireBoundedProfile(config), profileKind: 'external-tunnel' };
+    }
+    if (config.relayAgent?.enabled === true) {
+      if (String(config.host || '').trim() !== '127.0.0.1') {
+        throw new StableRuntimeRecoveryError('relay-agent recovery remains bound to host 127.0.0.1', { phase: 'profile_binding' });
+      }
+      const port = Number(config.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new StableRuntimeRecoveryError('relay-agent recovery requires one explicit Stable Runtime port', { phase: 'profile_binding' });
+      }
+      if (!String(config.relayAgent.deviceId || '').trim()) {
+        throw new StableRuntimeRecoveryError('relay-agent recovery requires the exact configured deviceId', { phase: 'profile_binding' });
+      }
+      if (!ENV_NAME_RE.test(String(config.relayAgent.credentialEnv || '').trim())) {
+        throw new StableRuntimeRecoveryError('relay-agent recovery requires one credential environment-variable reference', { phase: 'profile_binding' });
+      }
+      return { baseUrl: `http://127.0.0.1:${port}`, trusted: [], profileKind: 'relay-agent' };
+    }
+    return { ...this.activator._requireBoundedProfile(config), profileKind: 'external-tunnel' };
+  }
+
+  _resolveRecoveryRepo(config, repoPath, profileKind) {
+    if (profileKind === 'external-tunnel') return this.activator._resolveTrustedRepo(config, repoPath);
+    if (!repoPath) {
+      throw new StableRuntimeRecoveryError('relay-agent recovery requires one explicit exact repository path', { phase: 'profile_binding' });
+    }
+    let real;
+    try {
+      real = this.activator.fs.realpathSync.native
+        ? this.activator.fs.realpathSync.native(repoPath)
+        : this.activator.fs.realpathSync(repoPath);
+    } catch {
+      throw new StableRuntimeRecoveryError('relay-agent recovery repository does not exist', { phase: 'profile_binding' });
+    }
+    assertProjectRepoIdentity(this.activator.fs, real);
+    return real;
   }
 
   async _probeCurrentServing({ configPath, repoPath = null }) {
@@ -146,8 +224,8 @@ export class StableRuntimeRecoveryCoordinator {
     }
     assertNoCriticalBindingEnv(this.env);
     const config = this.activator.loadConfig(absoluteConfigPath);
-    const { baseUrl } = this._requireRecoveryProfile(config);
-    this.activator._resolveTrustedRepo(config, repoPath);
+    const { baseUrl, profileKind } = this._requireRecoveryProfile(config);
+    this._resolveRecoveryRepo(config, repoPath, profileKind);
     const local = await this.activator._probeLocal(baseUrl);
     const sha = exactServingRevision(local);
     const pids = await this.activator._listeningPids(config);
@@ -254,11 +332,13 @@ export class StableRuntimeRecoveryCoordinator {
      try {
       assertNoCriticalBindingEnv(this.env);
       const config = this.activator.loadConfig(absoluteConfigPath);
-      const { baseUrl } = this._requireRecoveryProfile(config);
-      const repo = this.activator._resolveTrustedRepo(config, repoPath);
+      const { baseUrl, profileKind } = this._requireRecoveryProfile(config);
+      const repo = this._resolveRecoveryRepo(config, repoPath, profileKind);
       const activationRoot = deriveActivationRoot(repo);
       const statePath = path.join(activationRoot, STATE_FILE);
-      const fingerprint = stableProfileFingerprint(config);
+      const fingerprint = profileKind === 'relay-agent'
+        ? relayAgentProfileFingerprint(config, repo)
+        : stableProfileFingerprint(config);
       const sha = await this._selectTarget({ targetSha, statePath, fingerprint, configPath: absoluteConfigPath });
 
       try { await this.activator._validateTarget(repo, sha); }
@@ -300,27 +380,37 @@ export class StableRuntimeRecoveryCoordinator {
         runtime = { action: 'started', pid: startedRuntimePid };
       }
 
-      const tunnelPreflight = {
-        mode: 'external-readiness-only',
-        checkedLocalMcpUrl: normalizeUrl(config.tunnel.localMcpUrl),
-      };
-      const tunnelBefore = await this.probeJson(config.tunnel.healthUrl);
-      if (!tunnelBefore.ok) {
-        throw new StableRuntimeRecoveryError('existing external Secure Tunnel startup/local readiness is not satisfied', {
-          phase: 'tunnel_readiness',
-          status: tunnelBefore.status || 0,
-        });
+      let tunnelPreflight;
+      let tunnel;
+      let finalTunnel = null;
+      if (profileKind === 'external-tunnel') {
+        tunnelPreflight = {
+          mode: 'external-readiness-only',
+          checkedLocalMcpUrl: normalizeUrl(config.tunnel.localMcpUrl),
+        };
+        const tunnelBefore = await this.probeJson(config.tunnel.healthUrl);
+        if (!tunnelBefore.ok) {
+          throw new StableRuntimeRecoveryError('existing external Secure Tunnel startup/local readiness is not satisfied', {
+            phase: 'tunnel_readiness',
+            status: tunnelBefore.status || 0,
+          });
+        }
+        tunnel = { action: 'reused', status: tunnelBefore.status };
+      } else {
+        tunnelPreflight = { mode: 'not-applicable-relay-agent' };
+        tunnel = { action: 'not-applicable', status: null };
       }
-      const tunnel = { action: 'reused', status: tunnelBefore.status };
 
       const finalLocal = await this.activator._probeLocal(baseUrl);
       const finalPids = await this.activator._listeningPids(config);
       if (!localExact(finalLocal, sha) || finalPids.length !== 1 || finalPids[0] !== runtime.pid) {
         throw new StableRuntimeRecoveryError('final Stable Runtime exact-revision proof failed', { phase: 'joint_readiness', sha, pids: finalPids });
       }
-      const finalTunnel = await this.probeJson(config.tunnel.healthUrl);
-      if (!finalTunnel.ok) {
-        throw new StableRuntimeRecoveryError('final external Secure Tunnel startup/local readiness proof failed', { phase: 'joint_readiness', status: finalTunnel.status || 0 });
+      if (profileKind === 'external-tunnel') {
+        finalTunnel = await this.probeJson(config.tunnel.healthUrl);
+        if (!finalTunnel.ok) {
+          throw new StableRuntimeRecoveryError('final external Secure Tunnel startup/local readiness proof failed', { phase: 'joint_readiness', status: finalTunnel.status || 0 });
+        }
       }
 
       if (prepared && startedRuntimePid) {
@@ -330,11 +420,17 @@ export class StableRuntimeRecoveryCoordinator {
         });
       }
 
+      const evidence = {
+        healthz: finalLocal.health.body,
+        readyz: finalLocal.ready.body,
+      };
+      if (finalTunnel) evidence.tunnel = { status: finalTunnel.status };
+
       return {
         status: 'PASS', sha, repo, configPath: absoluteConfigPath, profileFingerprint: fingerprint,
-        runtime, tunnel, tunnelPreflight,
-        evidence: { healthz: finalLocal.health.body, readyz: finalLocal.ready.body, tunnel: { status: finalTunnel.status } },
-        tunnelLifecycle: 'external-preserved', statePath,
+        profileKind, runtime, tunnel, tunnelPreflight, evidence,
+        tunnelLifecycle: profileKind === 'external-tunnel' ? 'external-preserved' : 'not-applicable-relay-agent',
+        statePath,
       };
     } catch (error) {
       if (startedRuntimePid) { try { this.activator.stopPid(startedRuntimePid); } catch {} }
