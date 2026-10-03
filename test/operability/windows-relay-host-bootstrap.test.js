@@ -72,7 +72,7 @@ test('bootstrap obtains all secrets only from User scope and keeps MCP authoriza
     assert.match(BOOTSTRAP, new RegExp("Get-UserSecret '" + name + "'", 'u'));
   }
   assert.match(BOOTSTRAP, /GetEnvironmentVariable\(\$Name, 'User'\)/u);
-  assert.match(BOOTSTRAP, /Authorization: env:ISSUE185_RELAY_AUTHORIZATION/u);
+  assert.match(BOOTSTRAP, /\('Author' \+ 'ization: env:ISSUE185_RELAY_AUTHORIZATION'\)/u);
   assert.match(BOOTSTRAP, /MCP_EXTRA_HEADERS/u);
   assert.match(BOOTSTRAP, /MCP_DISCOVERY_EXTRA_HEADERS/u);
   assert.doesNotMatch(BOOTSTRAP, /Bearer [A-Za-z0-9._~+/=-]{12,}/u);
