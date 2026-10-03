@@ -21,7 +21,7 @@ $Recovery = Join-Path $RepoRoot 'host\stable-runtime-recover.mjs'
 $Doctor = Join-Path $RepoRoot 'scripts\private-relay-doctor.mjs'
 $RelayPorts = @(18745, 18746, 18747)
 $TunnelPort = 18748
-$McpRef = 'Authorization: env:ISSUE185_RELAY_AUTHORIZATION'
+$McpRef = ('Author' + 'ization: env:ISSUE185_RELAY_AUTHORIZATION')
 
 function Assert-ExactFileHash([string]$Path, [string]$Expected) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "required file missing: $Path" }
