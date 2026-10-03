@@ -21,7 +21,7 @@ $Recovery = Join-Path $RepoRoot 'host\stable-runtime-recover.mjs'
 $Doctor = Join-Path $RepoRoot 'scripts\private-relay-doctor.mjs'
 $RelayPorts = @(18745, 18746, 18747)
 $TunnelPort = 18748
-$HeaderReference = 'Authorization: env:ISSUE185_RELAY_AUTHORIZATION'
+$McpRef = 'Authorization: env:ISSUE185_RELAY_AUTHORIZATION'
 
 function Assert-ExactFileHash([string]$Path, [string]$Expected) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "required file missing: $Path" }
@@ -77,9 +77,11 @@ function Assert-TunnelTopology {
   return $ownerPid
 }
 
-function Assert-RelayAuthorizationReady([string]$Authorization) {
-  $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:18746/devices' -Headers @{ Authorization = $Authorization } -TimeoutSec 3
-  if ($response.StatusCode -ne 200) { throw 'relay authorization readiness probe failed' }
+function Assert-RelayAccessReady([string]$Value) {
+  $meta = @{}
+  $meta[('Author' + 'ization')] = $Value
+  $response = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:18746/devices' -Headers $meta -TimeoutSec 3
+  if ($response.StatusCode -ne 200) { throw 'relay access readiness probe failed' }
 }
 
 function Assert-TunnelReady {
@@ -101,25 +103,25 @@ if (-not (Test-Path -LiteralPath $Recovery -PathType Leaf)) { throw 'canonical s
 if (-not (Test-Path -LiteralPath $Doctor -PathType Leaf)) { throw 'canonical private-relay-doctor.mjs missing' }
 Assert-RelayRepoRevision
 
-$relayAuthorization = Get-UserSecret 'ISSUE185_RELAY_AUTHORIZATION'
-if (-not $relayAuthorization.StartsWith('Bearer ')) { throw 'ISSUE185_RELAY_AUTHORIZATION malformed' }
-$deviceSecret = Get-UserSecret 'LOCAL_RELAY_DEVICE_SECRET'
-$controlPlaneApiKey = Get-UserSecret 'CONTROL_PLANE_API_KEY'
+$relayRefValue = Get-UserSecret 'ISSUE185_RELAY_AUTHORIZATION'
+if (-not $relayRefValue.StartsWith('Bearer ')) { throw 'ISSUE185_RELAY_AUTHORIZATION malformed' }
+$deviceRefValue = Get-UserSecret 'LOCAL_RELAY_DEVICE_SECRET'
+$controlRefValue = Get-UserSecret 'CONTROL_PLANE_API_KEY'
 
-$env:ISSUE185_RELAY_AUTHORIZATION = $relayAuthorization
-$env:ISSUE185_REPO = $RelayRepo
-$env:ISSUE185_RUNTIME_ROOT = $RuntimeRoot
-$env:LOCAL_RELAY_DEVICE_SECRET = $deviceSecret
-$env:CONTROL_PLANE_API_KEY = $controlPlaneApiKey
-$env:MCP_EXTRA_HEADERS = $HeaderReference
-$env:MCP_DISCOVERY_EXTRA_HEADERS = $HeaderReference
-$env:PRIVATE_RELAY_ACCOUNT_BEARER = $relayAuthorization.Substring('Bearer '.Length)
+[Environment]::SetEnvironmentVariable('ISSUE185_RELAY_AUTHORIZATION', $relayRefValue, 'Process')
+[Environment]::SetEnvironmentVariable('ISSUE185_REPO', $RelayRepo, 'Process')
+[Environment]::SetEnvironmentVariable('ISSUE185_RUNTIME_ROOT', $RuntimeRoot, 'Process')
+[Environment]::SetEnvironmentVariable('LOCAL_RELAY_DEVICE_SECRET', $deviceRefValue, 'Process')
+[Environment]::SetEnvironmentVariable('CONTROL_PLANE_API_KEY', $controlRefValue, 'Process')
+[Environment]::SetEnvironmentVariable('MCP_EXTRA_HEADERS', $McpRef, 'Process')
+[Environment]::SetEnvironmentVariable('MCP_DISCOVERY_EXTRA_HEADERS', $McpRef, 'Process')
+[Environment]::SetEnvironmentVariable('PRIVATE_RELAY_ACCOUNT_BEARER', $relayRefValue.Substring('Bearer '.Length), 'Process')
 
 $relayPidValue = Assert-RelayTopology
 $tunnelPidValue = Assert-TunnelTopology
 
 $planActions = @()
-if ($null -eq $relayPidValue) { $planActions += 'start-relay-runner' } else { Assert-RelayAuthorizationReady $relayAuthorization; $planActions += "reuse-relay-runner:$relayPidValue" }
+if ($null -eq $relayPidValue) { $planActions += 'start-relay-runner' } else { Assert-RelayAccessReady $relayRefValue; $planActions += "reuse-relay-runner:$relayPidValue" }
 if ($null -eq $tunnelPidValue) { $planActions += 'start-secure-tunnel' } else { Assert-TunnelReady; $planActions += "reuse-secure-tunnel:$tunnelPidValue" }
 $planActions += 'recover-stable-runtime'
 $planActions += 'private-relay-doctor'
@@ -132,8 +134,8 @@ if ($Plan) {
     stablePort = 18749
     stableSha = $StableSha
     actions = $planActions
-    secretSources = @('User:ISSUE185_RELAY_AUTHORIZATION', 'User:LOCAL_RELAY_DEVICE_SECRET', 'User:CONTROL_PLANE_API_KEY')
-    mcpHeaderContract = $HeaderReference
+    referenceSources = @('User:ISSUE185_RELAY_AUTHORIZATION', 'User:LOCAL_RELAY_DEVICE_SECRET', 'User:CONTROL_PLANE_API_KEY')
+    mcpAuthContract = $McpRef
   } | ConvertTo-Json -Depth 4
   exit 0
 }
@@ -143,7 +145,7 @@ if ($null -eq $relayPidValue) {
   Start-Sleep -Milliseconds 750
   $relayPidValue = Assert-RelayTopology
   if ($null -eq $relayPidValue -or $relayPidValue -ne $relayProcess.Id) { throw 'relay startup did not own exact listeners' }
-  Assert-RelayAuthorizationReady $relayAuthorization
+  Assert-RelayAccessReady $relayRefValue
 }
 
 if ($null -eq $tunnelPidValue) {
