@@ -2,15 +2,19 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  RELAY_HOST_DURABLE_BOOTSTRAP_PATH,
   WINDOWS_LOGIN_TASK_NAME,
   applyWindowsLoginTask,
   buildLauncherAction,
+  buildRelayHostBootstrapAction,
   buildWindowsLoginTaskSpec,
   canonicalTaskFingerprint,
   currentWindowsUserSid,
   launchRelayHost,
   launchStableRuntime,
+  materializeRelayHostBootstrap,
   queryWindowsLoginTask,
+  reconcileTaskInstall,
   removeWindowsLoginTask,
   renderWindowsLoginTaskXml,
   safeTaskStatus,
@@ -93,15 +97,7 @@ function desiredSpec(args, userSid) {
       bootstrapPath: args.bootstrapPath,
       bootstrapSha256: args.bootstrapSha256,
     });
-    const action = buildLauncherAction({
-      nodePath: process.execPath,
-      repoRoot: ROOT,
-      launchArgs: [
-        'launch-relay-host',
-        '--bootstrap', binding.bootstrapPath,
-        '--bootstrap-sha256', binding.bootstrapSha256,
-      ],
-    });
+    const action = buildRelayHostBootstrapAction({ bootstrapSha256: binding.bootstrapSha256 });
     return buildWindowsLoginTaskSpec({ kind: args.kind, userSid, action });
   }
   throw new Error('--kind must be stable-runtime or relay-host');
@@ -119,6 +115,7 @@ function planSummary(spec, xml) {
     networkRequired: spec.networkRequired,
     restartOnFailure: spec.restartOnFailure,
     actionCommand: path.win32.basename(spec.action.command),
+    ...(spec.kind === 'relay-host' ? { durableBootstrapPath: RELAY_HOST_DURABLE_BOOTSTRAP_PATH } : {}),
     desiredTaskFingerprint: canonicalTaskFingerprint(xml),
   };
 }
@@ -191,7 +188,17 @@ async function main() {
       return;
     }
 
-    writeResult(applyWindowsLoginTask({ desiredXml: xml, existingXml: queryWindowsLoginTask() }));
+    const existingXml = queryWindowsLoginTask();
+    reconcileTaskInstall({ existingXml, desiredXml: xml });
+    let bootstrapMaterialization = null;
+    if (args.kind === 'relay-host') {
+      bootstrapMaterialization = materializeRelayHostBootstrap({
+        sourcePath: args.bootstrapPath,
+        sourceSha256: args.bootstrapSha256,
+      });
+    }
+    const taskResult = applyWindowsLoginTask({ desiredXml: xml, existingXml });
+    writeResult(bootstrapMaterialization ? { ...taskResult, bootstrapMaterialization } : taskResult);
   } catch (error) {
     process.stderr.write('WINDOWS_LOGIN_AUTOSTART ' + JSON.stringify({
       status: 'FAIL',

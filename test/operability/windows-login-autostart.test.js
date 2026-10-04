@@ -3,14 +3,17 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  RELAY_HOST_DURABLE_BOOTSTRAP_PATH,
   WINDOWS_LOGIN_TASK_MARKER,
   applyWindowsLoginTask,
   buildLauncherAction,
+  buildRelayHostBootstrapAction,
   buildWindowsLoginTaskSpec,
   canonicalTaskFingerprint,
   inspectWindowsLoginTaskXml,
   launchRelayHost,
   launchStableRuntime,
+  materializeRelayHostBootstrap,
   quoteWindowsArg,
   reconcileTaskInstall,
   reconcileTaskUninstall,
@@ -105,6 +108,7 @@ function stableTaskXml() {
 
 function relayBootstrapBody() {
   return [
+    '# chatgpt-codex-orchestrator#212/windows-relay-host-bootstrap/v1',
     '$ErrorActionPreference = "Stop"',
     '$env:MCP_EXTRA_HEADERS = [Environment]::GetEnvironmentVariable("MCP_EXTRA_HEADERS", "User")',
     '& node E:\\Project\\chatgpt-codex-orchestrator\\host\\stable-runtime-recover.mjs --config $env:STABLE_RUNTIME_CONFIG',
@@ -292,7 +296,7 @@ test('Relay-host bootstrap rejects changed bytes, raw secrets, and missing canon
     fsImpl: fakeFs({ [bootstrap]: sensitive }),
   }), /sensitive/u);
 
-  const incomplete = 'node host/stable-runtime-recover.mjs\n';
+  const incomplete = '# chatgpt-codex-orchestrator#212/windows-relay-host-bootstrap/v1\nnode host/stable-runtime-recover.mjs\n';
   const incompleteHash = crypto.createHash('sha256').update(incomplete).digest('hex');
   assert.throws(() => validateRelayHostBootstrap({
     bootstrapPath: bootstrap,
@@ -324,6 +328,40 @@ test('simulated device login delegates to the accepted Stable Runtime recovery c
   assert.equal(calls[0].command, NODE);
   assert.equal(calls[0].args[0], path.win32.join(REPO, 'host', 'stable-runtime-recover.mjs'));
   assert.deepEqual(calls[0].args.slice(1), ['--config', CONFIG, '--repo', REPO]);
+});
+
+test('relay-host Scheduled Task action is durable-path and hash fenced without mission-worktree dependency', () => {
+  const hash = 'a'.repeat(64);
+  const action = buildRelayHostBootstrapAction({ bootstrapSha256: hash });
+  assert.match(action.command, /WindowsPowerShell\\v1\.0\\powershell\.exe$/u);
+  assert.equal(action.workingDirectory, path.win32.dirname(RELAY_HOST_DURABLE_BOOTSTRAP_PATH));
+  assert.match(action.arguments, /Get-FileHash/u);
+  assert.match(action.arguments, new RegExp(hash, 'u'));
+  assert.equal(action.arguments.includes(RELAY_HOST_DURABLE_BOOTSTRAP_PATH), true);
+  assert.doesNotMatch(action.arguments, /issue-212-(?:revise|persistence-revise|autostart)/u);
+});
+
+test('durable relay-host bootstrap materialization is create/unchanged/update and refuses foreign collision', () => {
+  const source = 'C:\\source\\bootstrap.ps1';
+  const destination = RELAY_HOST_DURABLE_BOOTSTRAP_PATH;
+  const body = relayBootstrapBody();
+  const hash = crypto.createHash('sha256').update(body).digest('hex');
+  const files = new Map([[path.win32.normalize(source), Buffer.from(body)]]);
+  const fsImpl = {
+    readFileSync(filename) {
+      const key = path.win32.normalize(filename);
+      if (!files.has(key)) throw new Error('ENOENT');
+      return Buffer.from(files.get(key));
+    },
+    mkdirSync() {},
+    writeFileSync(filename, bytes) { files.set(path.win32.normalize(filename), Buffer.from(bytes)); },
+  };
+  assert.equal(materializeRelayHostBootstrap({ sourcePath: source, sourceSha256: hash, destinationPath: destination, fsImpl }).status, 'CREATED');
+  assert.equal(materializeRelayHostBootstrap({ sourcePath: source, sourceSha256: hash, destinationPath: destination, fsImpl }).status, 'UNCHANGED');
+  files.set(path.win32.normalize(destination), Buffer.from('# chatgpt-codex-orchestrator#212/windows-relay-host-bootstrap/v1\nold'));
+  assert.equal(materializeRelayHostBootstrap({ sourcePath: source, sourceSha256: hash, destinationPath: destination, fsImpl }).status, 'UPDATED');
+  files.set(path.win32.normalize(destination), Buffer.from('foreign'));
+  assert.throws(() => materializeRelayHostBootstrap({ sourcePath: source, sourceSha256: hash, destinationPath: destination, fsImpl }), /non-project durable/u);
 });
 
 test('simulated Relay-host login revalidates bootstrap bytes then delegates existing recovery+doctor bootstrap', () => {

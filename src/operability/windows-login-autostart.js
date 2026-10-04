@@ -6,6 +6,8 @@ import { spawnSync } from 'node:child_process';
 
 export const WINDOWS_LOGIN_TASK_NAME = 'ChatGPT Codex Orchestrator - Local Connector Login Recovery';
 export const WINDOWS_LOGIN_TASK_MARKER = 'chatgpt-codex-orchestrator#212/windows-login-autostart/v1';
+export const RELAY_HOST_BOOTSTRAP_MARKER = 'chatgpt-codex-orchestrator#212/windows-relay-host-bootstrap/v1';
+export const RELAY_HOST_DURABLE_BOOTSTRAP_PATH = 'E:\\Project\\chatgpt-codex-orchestrator\\issue-185-runtime\\windows-login-autostart\\windows-relay-host-bootstrap.ps1';
 
 const KINDS = new Set(['stable-runtime', 'relay-host']);
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
@@ -267,6 +269,7 @@ export function validateRelayHostBootstrap({ bootstrapPath, bootstrapSha256, fsI
   if (actual !== expected) throw new Error('relay-host bootstrap bytes do not match the reviewed SHA-256');
 
   const text = bytes.toString('utf8');
+  if (!text.includes(RELAY_HOST_BOOTSTRAP_MARKER)) throw new Error('relay-host bootstrap is missing the exact project ownership marker');
   if (hasSensitiveLiteral(text)) throw new Error('relay-host bootstrap contains a raw sensitive value');
   if (!/(?:stable-runtime-recover\.mjs|recover:private-relay)/u.test(text)) {
     throw new Error('relay-host bootstrap must delegate Stable Runtime recovery to the accepted entrypoint');
@@ -286,6 +289,50 @@ export function buildLauncherAction({ nodePath, repoRoot, launchArgs }) {
     arguments: argsString([launcher, ...launchArgs]),
     workingDirectory: root,
   };
+}
+
+export function buildRelayHostBootstrapAction({
+  bootstrapPath = RELAY_HOST_DURABLE_BOOTSTRAP_PATH, bootstrapSha256,
+} = {}) {
+  const bootstrap = absoluteWindowsPath(bootstrapPath, 'bootstrapPath');
+  const expected = String(bootstrapSha256 || '').trim().toLowerCase();
+  if (!SHA256_RE.test(expected)) throw new Error('bootstrapSha256 must be an exact 64-hex SHA-256');
+  const powershell = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+  const command = [
+    "$p='" + bootstrap.replaceAll("'", "''") + "'",
+    "$h=(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()",
+    "if ($h -ne '" + expected + "') { throw 'relay-host bootstrap hash drift' }",
+    '& $p',
+  ].join('; ');
+  return {
+    command: powershell,
+    arguments: argsString(['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command]),
+    workingDirectory: path.win32.dirname(bootstrap),
+  };
+}
+
+export function materializeRelayHostBootstrap({
+  sourcePath, sourceSha256, destinationPath = RELAY_HOST_DURABLE_BOOTSTRAP_PATH, fsImpl = fs,
+} = {}) {
+  const source = validateRelayHostBootstrap({ bootstrapPath: sourcePath, bootstrapSha256: sourceSha256, fsImpl });
+  const destination = absoluteWindowsPath(destinationPath, 'destinationPath');
+  let existing = null;
+  try { existing = fsImpl.readFileSync(destination); } catch {}
+  if (existing) {
+    const text = existing.toString('utf8');
+    if (!text.includes(RELAY_HOST_BOOTSTRAP_MARKER)) {
+      throw new Error('refusing to replace non-project durable relay-host bootstrap');
+    }
+    if (sha256(existing) === source.bootstrapSha256) {
+      return { status: 'UNCHANGED', bootstrapPath: destination, bootstrapSha256: source.bootstrapSha256 };
+    }
+  }
+  fsImpl.mkdirSync(path.win32.dirname(destination), { recursive: true });
+  const bytes = fsImpl.readFileSync(source.bootstrapPath);
+  fsImpl.writeFileSync(destination, bytes);
+  const actual = sha256(fsImpl.readFileSync(destination));
+  if (actual !== source.bootstrapSha256) throw new Error('durable relay-host bootstrap hash verification failed');
+  return { status: existing ? 'UPDATED' : 'CREATED', bootstrapPath: destination, bootstrapSha256: actual };
 }
 
 export function buildWindowsLoginTaskSpec({ kind, userSid, action }) {

@@ -89,17 +89,20 @@ npm run autostart:windows -- install --kind relay-host `
   --bootstrap-sha256 <exact-64-hex-sha256>
 ```
 
-The task action calls the repository launcher with only the bootstrap path and reviewed hash. At every login invocation, the launcher re-reads the bootstrap and refuses to run it unless:
+The source bootstrap is reviewed by exact SHA-256 during `plan`/`install`. `install` materializes those exact reviewed bytes into the project-owned durable host path `E:\\Project\\chatgpt-codex-orchestrator\\issue-185-runtime\\windows-login-autostart\\windows-relay-host-bootstrap.ps1`; a foreign file at that exact destination fails closed. The Scheduled Task then calls Windows PowerShell directly, not a repository launcher, and its action re-hashes the durable bootstrap before execution. Therefore the persistent login path has no dependency on the bounded implementation worktree.
 
-- it is one exact `.ps1` file;
-- its bytes still match the reviewed SHA-256;
-- it contains no raw bearer/token/credential/secret value;
-- it delegates Stable Runtime recovery to `stable-runtime-recover.mjs` / `recover:private-relay`;
-- it delegates final composed readiness diagnosis to `private-relay-doctor.mjs` / `doctor:private-relay`.
+The reviewed bootstrap must:
 
-The reviewed bootstrap remains responsible for invoking the already accepted Relay-runner, Secure-MCP-Tunnel, and agent-ingress owner entrypoints in their established order. Issue #212 does not invent replacements for those host-local artifacts and does not copy their secrets into Task Scheduler metadata.
+- carry the exact Issue #212 project-ownership marker;
+- contain no raw bearer/token/credential/secret value;
+- live at the exact durable bootstrap path when executed;
+- delegate Stable Runtime recovery to the accepted `host/stable-runtime-recover.mjs` and final readiness diagnosis to `scripts/private-relay-doctor.mjs` from the existing durable #185 Relay repository;
+- pin that durable repository to exact revision `5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9` and fail closed on tracked-file drift;
+- hash-fence the accepted recovery and doctor files before delegation.
 
-Existing user-scope environment/profile references remain external inputs inherited by the interactive user session. This includes the accepted `MCP_EXTRA_HEADERS` / `MCP_DISCOVERY_EXTRA_HEADERS` contract where applicable; those values are never serialized into task XML or arguments.
+The project now provides one fixed host bootstrap at `scripts/windows-relay-host-bootstrap.ps1` for the reviewed DESKTOP-29JHFM4 topology. It is not a generic supervisor: it pins the existing Relay runner, Relay repo/runtime-root, tunnel-client v0.0.14 profile, Device A config, and exact Stable Runtime revision; reuses only exact live processes/listeners; starts only an absent exact Relay runner or tunnel; delegates Stable Runtime recovery to the canonical recovery entrypoint; and finishes with `private-relay-doctor`.
+
+Relay authorization, Device secret, and `CONTROL_PLANE_API_KEY` are read only from their existing User-scope references at invocation time. The bootstrap rebuilds `MCP_EXTRA_HEADERS` and `MCP_DISCOVERY_EXTRA_HEADERS` only in process memory as `Authorization: env:ISSUE185_RELAY_AUTHORIZATION`; no duplicate raw header or credential value is persisted in bootstrap source, task XML/arguments, repository state, or machine/user environment.
 
 ### Current machine-specific assumptions for G05 review
 
@@ -116,9 +119,9 @@ agent ingress         existing tailnet-only Tailscale Serve binding
 
 The second paired Windows device owns its device-local Stable Runtime on `127.0.0.1:18749`; it does not own the Relay-host 18745-18748 listeners.
 
-The 2026-10-03 #212 read-only host reacquisition found the Relay/Tunnel/Stable Runtime listeners live but found **no `.ps1` file anywhere under the project-owned `E:\\Project` tree**. Therefore no existing reviewed Relay-host bootstrap path/hash is currently established. The smallest compatible follow-up is one fixed host-local PowerShell bootstrap, reviewed by exact SHA-256, that only composes the already accepted Relay runner / Secure Tunnel startup with `recover:private-relay` and `doctor:private-relay`; it must not become a generic supervisor or scheduler. No such host bootstrap is fabricated by this repository correction.
+The 2026-10-03 #212 read-only host reacquisition originally found no project-owned `.ps1` bootstrap. This correction adds exactly one fixed, reviewable bootstrap for that reacquired topology. Its `-Plan` mode performs hash/secret-reference/listener/process/profile/readiness validation without starting processes, running recovery/doctor, or touching Task Scheduler, so the real host topology can be simulated before any persistent action.
 
-These values are **not** configured by the installer. Before any persistent Relay-host installation, G05 Parent must reacquire the actual host bootstrap path/hash and review that exact bootstrap against the still-current topology. A stale or mismatched bootstrap hash fails closed.
+These topology values are **not** configured by the installer. Before any persistent Relay-host installation, G05 Parent must reacquire the still-current machine topology and compare it with this reviewed contract. The plan reports the durable bootstrap destination and deterministic task fingerprint. A stale source/durable bootstrap hash, wrong durable bootstrap path, stable-repo revision or tracked-file drift, recovery/doctor hash drift, runner/config/profile hash drift, wrong listener/process/profile/path, missing User-scope secret reference, or readiness failure fails closed.
 ## Status and bounded removal
 
 Read-only status:
@@ -144,8 +147,8 @@ Do not pass or embed raw bearer tokens, authorization/header values, device cred
 The existing accepted secret architecture remains authoritative:
 
 - Relay Agent uses `relayAgent.credentialEnv`; the raw device credential never belongs in runtime config.
-- Secure MCP Tunnel continues to use its existing user-scope profile/credential references.
-- Existing MCP authorization-header environment variables remain inherited user environment, not Scheduled Task metadata.
+- Secure MCP Tunnel continues to use its existing profile and User-scope `CONTROL_PLANE_API_KEY` reference.
+- MCP authorization headers are reconstructed only in bootstrap/tunnel process memory from the existing User-scope Relay authorization reference; they are not persisted as duplicate User/Machine variables or Scheduled Task metadata.
 
 The Relay-host bootstrap validator permits references such as `$env:NAME` / `GetEnvironmentVariable(...)` but rejects embedded sensitive values.
 
