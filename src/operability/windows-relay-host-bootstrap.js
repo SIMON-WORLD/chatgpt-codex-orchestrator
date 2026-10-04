@@ -1,6 +1,9 @@
 export const FIXED_RELAY_HOST = Object.freeze({
   nodeExe: 'D:\\Software\\nvm\\nodejs\\node.exe',
-  bootstrapRepoRoot: 'E:\\Project\\chatgpt-codex-orchestrator\\issue-212-revise',
+  durableBootstrapPath: 'E:\\Project\\chatgpt-codex-orchestrator\\issue-185-runtime\\windows-login-autostart\\windows-relay-host-bootstrap.ps1',
+  stableRepoRoot: 'E:\\Project\\chatgpt-codex-orchestrator\\chatgpt-codex-orchestrator-issue-185',
+  recoverySha256: 'f6f7d17fb4e6908eb6e34cbee60811eee3f436ae9a4aae6269a18f74976a2694',
+  doctorSha256: '2ad32ee6e91d9a9728452a3fb8ee1156c8a24d0f3d29eade58a117df69676f65',
   relayRepo: 'E:\\Project\\chatgpt-codex-orchestrator\\chatgpt-codex-orchestrator-issue-185',
   runtimeRoot: 'E:\\Project\\chatgpt-codex-orchestrator\\issue-185-runtime',
   relayRunner: 'E:\\Project\\chatgpt-codex-orchestrator\\issue-185-runtime\\relay-runner.mjs',
@@ -104,9 +107,9 @@ export function planFixedRelayHostBootstrap({
     kind: 'recover-stable-runtime',
     command: FIXED_RELAY_HOST.nodeExe,
     args: [
-      FIXED_RELAY_HOST.bootstrapRepoRoot + '\\host\\stable-runtime-recover.mjs',
+      FIXED_RELAY_HOST.stableRepoRoot + '\\host\\stable-runtime-recover.mjs',
       '--config', FIXED_RELAY_HOST.stableConfig,
-      '--repo', FIXED_RELAY_HOST.bootstrapRepoRoot,
+      '--repo', FIXED_RELAY_HOST.stableRepoRoot,
       '--sha', FIXED_RELAY_HOST.stableSha,
     ],
   });
@@ -114,7 +117,7 @@ export function planFixedRelayHostBootstrap({
     kind: 'private-relay-doctor',
     command: FIXED_RELAY_HOST.nodeExe,
     args: [
-      FIXED_RELAY_HOST.bootstrapRepoRoot + '\\scripts\\private-relay-doctor.mjs',
+      FIXED_RELAY_HOST.stableRepoRoot + '\\scripts\\private-relay-doctor.mjs',
       '--config', FIXED_RELAY_HOST.stableConfig,
       '--sha', FIXED_RELAY_HOST.stableSha,
       '--account-bearer-env', 'PRIVATE_RELAY_ACCOUNT_BEARER',

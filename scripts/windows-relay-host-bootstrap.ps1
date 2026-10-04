@@ -1,10 +1,11 @@
+# chatgpt-codex-orchestrator#212/windows-relay-host-bootstrap/v1
 param([switch]$Plan)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $NodeExe = 'D:\Software\nvm\nodejs\node.exe'
-$RepoRoot = 'E:\Project\chatgpt-codex-orchestrator\issue-212-revise'
+$ExpectedBootstrapPath = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime\windows-login-autostart\windows-relay-host-bootstrap.ps1'
 $RelayRepo = 'E:\Project\chatgpt-codex-orchestrator\chatgpt-codex-orchestrator-issue-185'
 $RuntimeRoot = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime'
 $RelayRunner = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime\relay-runner.mjs'
@@ -17,8 +18,10 @@ $TunnelProfileSha256 = '303370e08438977baa25f0cd9e16c8cc4c75fddd5297de40f56c94d3
 $StableConfig = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime\device-a-config.json'
 $StableConfigSha256 = '8092b6443dcd6c3b4409ae078cf3c483dc99ac1232d7aae25f1e53634deea148'
 $StableSha = '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9'
-$Recovery = Join-Path $RepoRoot 'host\stable-runtime-recover.mjs'
-$Doctor = Join-Path $RepoRoot 'scripts\private-relay-doctor.mjs'
+$Recovery = Join-Path $RelayRepo 'host\stable-runtime-recover.mjs'
+$RecoverySha256 = 'f6f7d17fb4e6908eb6e34cbee60811eee3f436ae9a4aae6269a18f74976a2694'
+$Doctor = Join-Path $RelayRepo 'scripts\private-relay-doctor.mjs'
+$DoctorSha256 = '2ad32ee6e91d9a9728452a3fb8ee1156c8a24d0f3d29eade58a117df69676f65'
 $RelayPorts = @(18745, 18746, 18747)
 $TunnelPort = 18748
 $McpRef = ('Author' + 'ization: env:ISSUE185_RELAY_AUTHORIZATION')
@@ -92,15 +95,20 @@ function Assert-TunnelReady {
 function Assert-RelayRepoRevision {
   $head = (& git -C $RelayRepo rev-parse HEAD 2>$null).Trim().ToLowerInvariant()
   if ($LASTEXITCODE -ne 0 -or $head -ne $StableSha) { throw 'Relay repo revision drift' }
+  $trackedDrift = @(& git -C $RelayRepo status --porcelain --untracked-files=no 2>$null)
+  if ($LASTEXITCODE -ne 0 -or $trackedDrift.Count -ne 0) { throw 'Relay repo tracked files drift' }
 }
+
+$actualBootstrapPath = (Resolve-Path -LiteralPath $PSCommandPath).Path
+if ($actualBootstrapPath.ToLowerInvariant() -ne $ExpectedBootstrapPath.ToLowerInvariant()) { throw 'bootstrap durable path drift' }
 
 Assert-ExactFileHash $RelayRunner $RelayRunnerSha256
 Assert-ExactFileHash $TunnelProfilePath $TunnelProfileSha256
 Assert-ExactFileHash $StableConfig $StableConfigSha256
 if (-not (Test-Path -LiteralPath $NodeExe -PathType Leaf)) { throw 'exact Node executable missing' }
 if (-not (Test-Path -LiteralPath $TunnelExe -PathType Leaf)) { throw 'exact tunnel-client executable missing' }
-if (-not (Test-Path -LiteralPath $Recovery -PathType Leaf)) { throw 'canonical stable-runtime-recover.mjs missing' }
-if (-not (Test-Path -LiteralPath $Doctor -PathType Leaf)) { throw 'canonical private-relay-doctor.mjs missing' }
+Assert-ExactFileHash $Recovery $RecoverySha256
+Assert-ExactFileHash $Doctor $DoctorSha256
 Assert-RelayRepoRevision
 
 $relayRefValue = Get-UserSecret 'ISSUE185_RELAY_AUTHORIZATION'
@@ -156,7 +164,7 @@ if ($null -eq $tunnelPidValue) {
   Assert-TunnelReady
 }
 
-& $NodeExe $Recovery '--config' $StableConfig '--repo' $RepoRoot '--sha' $StableSha
+& $NodeExe $Recovery '--config' $StableConfig '--repo' $RelayRepo '--sha' $StableSha
 if ($LASTEXITCODE -ne 0) { throw 'canonical Stable Runtime recovery failed' }
 
 & $NodeExe $Doctor '--config' $StableConfig '--sha' $StableSha '--account-bearer-env' 'PRIVATE_RELAY_ACCOUNT_BEARER'

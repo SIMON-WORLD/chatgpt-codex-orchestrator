@@ -51,6 +51,10 @@ test('fixed bootstrap pins exact current Relay/Tunnel/Device-A topology and cano
   assert.match(BOOTSTRAP, /host\\stable-runtime-recover\.mjs/u);
   assert.match(BOOTSTRAP, /scripts\\private-relay-doctor\.mjs/u);
   assert.match(BOOTSTRAP, /5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9/u);
+  assert.match(BOOTSTRAP, /issue-185-runtime\\windows-login-autostart\\windows-relay-host-bootstrap\.ps1/u);
+  assert.match(BOOTSTRAP, /f6f7d17fb4e6908eb6e34cbee60811eee3f436ae9a4aae6269a18f74976a2694/u);
+  assert.match(BOOTSTRAP, /2ad32ee6e91d9a9728452a3fb8ee1156c8a24d0f3d29eade58a117df69676f65/u);
+  assert.doesNotMatch(BOOTSTRAP, /issue-212-(?:revise|persistence-revise|autostart)/u);
 
   const actions = planFixedRelayHostBootstrap(baseEvidence());
   assert.deepEqual(actions.map((row) => row.kind), [
@@ -60,9 +64,9 @@ test('fixed bootstrap pins exact current Relay/Tunnel/Device-A topology and cano
     'private-relay-doctor',
   ]);
   assert.deepEqual(actions[2].args, [
-    FIXED_RELAY_HOST.bootstrapRepoRoot + '\\host\\stable-runtime-recover.mjs',
+    FIXED_RELAY_HOST.stableRepoRoot + '\\host\\stable-runtime-recover.mjs',
     '--config', FIXED_RELAY_HOST.stableConfig,
-    '--repo', FIXED_RELAY_HOST.bootstrapRepoRoot,
+    '--repo', FIXED_RELAY_HOST.stableRepoRoot,
     '--sha', FIXED_RELAY_HOST.stableSha,
   ]);
 });

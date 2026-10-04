@@ -89,13 +89,16 @@ npm run autostart:windows -- install --kind relay-host `
   --bootstrap-sha256 <exact-64-hex-sha256>
 ```
 
-The task action calls the repository launcher with only the bootstrap path and reviewed hash. At every login invocation, the launcher re-reads the bootstrap and refuses to run it unless:
+The source bootstrap is reviewed by exact SHA-256 during `plan`/`install`. `install` materializes those exact reviewed bytes into the project-owned durable host path `E:\\Project\\chatgpt-codex-orchestrator\\issue-185-runtime\\windows-login-autostart\\windows-relay-host-bootstrap.ps1`; a foreign file at that exact destination fails closed. The Scheduled Task then calls Windows PowerShell directly, not a repository launcher, and its action re-hashes the durable bootstrap before execution. Therefore the persistent login path has no dependency on the bounded implementation worktree.
 
-- it is one exact `.ps1` file;
-- its bytes still match the reviewed SHA-256;
-- it contains no raw bearer/token/credential/secret value;
-- it delegates Stable Runtime recovery to `stable-runtime-recover.mjs` / `recover:private-relay`;
-- it delegates final composed readiness diagnosis to `private-relay-doctor.mjs` / `doctor:private-relay`.
+The reviewed bootstrap must:
+
+- carry the exact Issue #212 project-ownership marker;
+- contain no raw bearer/token/credential/secret value;
+- live at the exact durable bootstrap path when executed;
+- delegate Stable Runtime recovery to the accepted `host/stable-runtime-recover.mjs` and final readiness diagnosis to `scripts/private-relay-doctor.mjs` from the existing durable #185 Relay repository;
+- pin that durable repository to exact revision `5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9` and fail closed on tracked-file drift;
+- hash-fence the accepted recovery and doctor files before delegation.
 
 The project now provides one fixed host bootstrap at `scripts/windows-relay-host-bootstrap.ps1` for the reviewed DESKTOP-29JHFM4 topology. It is not a generic supervisor: it pins the existing Relay runner, Relay repo/runtime-root, tunnel-client v0.0.14 profile, Device A config, and exact Stable Runtime revision; reuses only exact live processes/listeners; starts only an absent exact Relay runner or tunnel; delegates Stable Runtime recovery to the canonical recovery entrypoint; and finishes with `private-relay-doctor`.
 
@@ -118,7 +121,7 @@ The second paired Windows device owns its device-local Stable Runtime on `127.0.
 
 The 2026-10-03 #212 read-only host reacquisition originally found no project-owned `.ps1` bootstrap. This correction adds exactly one fixed, reviewable bootstrap for that reacquired topology. Its `-Plan` mode performs hash/secret-reference/listener/process/profile/readiness validation without starting processes, running recovery/doctor, or touching Task Scheduler, so the real host topology can be simulated before any persistent action.
 
-These values are **not** configured by the installer. Before any persistent Relay-host installation, G05 Parent must reacquire the current bootstrap path/hash and compare the still-current machine topology with this reviewed contract. A stale bootstrap hash, runner/config/profile hash drift, wrong listener/process/profile/path, missing User-scope secret reference, or readiness failure fails closed.
+These topology values are **not** configured by the installer. Before any persistent Relay-host installation, G05 Parent must reacquire the still-current machine topology and compare it with this reviewed contract. The plan reports the durable bootstrap destination and deterministic task fingerprint. A stale source/durable bootstrap hash, wrong durable bootstrap path, stable-repo revision or tracked-file drift, recovery/doctor hash drift, runner/config/profile hash drift, wrong listener/process/profile/path, missing User-scope secret reference, or readiness failure fails closed.
 ## Status and bounded removal
 
 Read-only status:
