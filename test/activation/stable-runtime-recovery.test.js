@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   StableRuntimeRecoveryCoordinator,
   StableRuntimeRecoveryError,
@@ -12,6 +14,7 @@ import {
   stableProfileFingerprint,
 } from '../../src/activation/stable-runtime-activator.js';
 
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SHA = 'a'.repeat(40);
 const OTHER_SHA = 'b'.repeat(40);
 
@@ -369,6 +372,47 @@ test('external tunnel readiness failure after starting runtime cleans up only th
   );
   assert.deepEqual(calls.stopPid, [222]);
   assert.equal(tunnelStarts, 0);
+});
+
+test('recovery CLI exits 0 despite an unrelated referenced handle', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stable-recovery-cli-exit-'));
+  const leak = path.join(root, 'leak.cjs');
+  fs.writeFileSync(leak, 'setInterval(() => {}, 60000);\n');
+  try {
+    const result = spawnSync(process.execPath, [
+      '--require', leak,
+      path.join(ROOT, 'host', 'stable-runtime-recover.mjs'),
+      '--help',
+    ], { encoding: 'utf8', timeout: 2500 });
+    assert.equal(result.error, undefined);
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Stable Runtime deterministic reboot\/login recovery/u);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('recovery CLI emits final FAIL evidence and exits non-zero despite an unrelated referenced handle', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stable-recovery-cli-fail-'));
+  const leak = path.join(root, 'leak.cjs');
+  const missingConfig = path.join(root, 'missing-config.json');
+  fs.writeFileSync(leak, 'setInterval(() => {}, 60000);\n');
+  try {
+    const result = spawnSync(process.execPath, [
+      '--require', leak,
+      path.join(ROOT, 'host', 'stable-runtime-recover.mjs'),
+      '--config', missingConfig,
+      '--repo', ROOT,
+      '--sha', SHA,
+    ], { encoding: 'utf8', timeout: 2500 });
+    assert.equal(result.error, undefined);
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /STABLE_RUNTIME_RECOVERY \{"status":"FAIL"/u);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('target validation failure remains fail-closed and does not prepare or start runtime', async () => {

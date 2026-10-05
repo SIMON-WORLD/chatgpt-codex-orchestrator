@@ -54,6 +54,7 @@ test('fixed bootstrap pins exact current Relay/Tunnel/Device-A topology and cano
   assert.match(BOOTSTRAP, /issue-185-runtime\\windows-login-autostart\\windows-relay-host-bootstrap\.ps1/u);
   assert.match(BOOTSTRAP, /f6f7d17fb4e6908eb6e34cbee60811eee3f436ae9a4aae6269a18f74976a2694/u);
   assert.match(BOOTSTRAP, /2ad32ee6e91d9a9728452a3fb8ee1156c8a24d0f3d29eade58a117df69676f65/u);
+  assert.match(BOOTSTRAP, /Write-Output 'WINDOWS_RELAY_HOST_BOOTSTRAP PASS'\r?\nexit 0/u);
   assert.doesNotMatch(BOOTSTRAP, /issue-212-(?:revise|persistence-revise|autostart)/u);
 
   const actions = planFixedRelayHostBootstrap(baseEvidence());
