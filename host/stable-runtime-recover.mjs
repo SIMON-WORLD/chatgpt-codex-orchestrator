@@ -473,22 +473,28 @@ function usage() {
   ].join('\n');
 }
 
+function writeCli(stream, text) {
+  if (Number.isInteger(stream?.fd)) {
+    fs.writeSync(stream.fd, String(text));
+    return;
+  }
+  stream.write(String(text));
+}
+
 async function main() {
   let args;
   try { args = parseArgs(process.argv.slice(2)); }
   catch (error) {
-    process.stderr.write(`${error.message}\n${usage()}\n`);
-    process.exitCode = 2;
-    return;
+    writeCli(process.stderr, `${error.message}\n${usage()}\n`);
+    return 2;
   }
-  if (args.help) { process.stdout.write(`${usage()}\n`); return; }
+  if (args.help) { writeCli(process.stdout, `${usage()}\n`); return 0; }
   args.configPath ||= process.env.STABLE_RUNTIME_CONFIG;
   args.repoPath ||= process.env.STABLE_RUNTIME_REPO || null;
   const hostMutationModes = Number(Boolean(args.readOnlySmokeFixture)) + Number(Boolean(args.authorizedWorkspaceRoot)) + Number(args.filesystemScope !== undefined);
   if (!args.configPath || hostMutationModes > 1 || (hostMutationModes === 1 && !args.targetSha) || (args.selectedRoots !== undefined && args.filesystemScope === undefined)) {
-    process.stderr.write(`${usage()}\n`);
-    process.exitCode = 2;
-    return;
+    writeCli(process.stderr, `${usage()}\n`);
+    return 2;
   }
   try {
     const coordinator = new StableRuntimeRecoveryCoordinator();
@@ -515,12 +521,15 @@ async function main() {
               repoPath: args.repoPath,
             })
         : await coordinator.recover(args);
-    process.stdout.write(`STABLE_RUNTIME_RECOVERY ${JSON.stringify(result)}\n`);
+    writeCli(process.stdout, `STABLE_RUNTIME_RECOVERY ${JSON.stringify(result)}\n`);
+    return 0;
   } catch (error) {
-    process.stderr.write(`STABLE_RUNTIME_RECOVERY ${JSON.stringify(recoveryFailurePayload(error))}\n`);
-    process.exitCode = 1;
+    writeCli(process.stderr, `STABLE_RUNTIME_RECOVERY ${JSON.stringify(recoveryFailurePayload(error))}\n`);
+    return 1;
   }
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
-if (invokedPath && invokedPath === path.resolve(fileURLToPath(import.meta.url))) await main();
+if (invokedPath && invokedPath === path.resolve(fileURLToPath(import.meta.url))) {
+  process.exit(await main());
+}

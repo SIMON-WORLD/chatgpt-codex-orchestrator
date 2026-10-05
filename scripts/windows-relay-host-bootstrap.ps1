@@ -171,3 +171,4 @@ if ($LASTEXITCODE -ne 0) { throw 'canonical Stable Runtime recovery failed' }
 if ($LASTEXITCODE -ne 0) { throw 'private-relay doctor failed' }
 
 Write-Output 'WINDOWS_RELAY_HOST_BOOTSTRAP PASS'
+exit 0
