@@ -138,6 +138,7 @@ test('real Computer1 Windows PowerShell -Plan reads split target with fixture-on
   const pathBinding = "$ExpectedBootstrapPath = '" + FIXED_RELAY_HOST.durableBootstrapPath + "'";
   assert.equal(BOOTSTRAP.split(pathBinding).length, 2);
   try {
+    const normalizedBootstrap = BOOTSTRAP.replace(/\r\n/gu, '\n');
     // Adapt only the test copy's self-path guard; real hash/revision,
     // reference-only credentials, listener queries and -Plan logic all run.
     // The ephemeral fixture is not at the durable production path. Bind its
@@ -157,12 +158,12 @@ test('real Computer1 Windows PowerShell -Plan reads split target with fixture-on
     ].join('\n');
     // Never read live User-scope credential values from an unreviewed temporary
     // script. Only the G05-approved durable bootstrap may access those values.
-    assert.equal(BOOTSTRAP.split(secretReader).length, 2);
+    assert.equal(normalizedBootstrap.split(secretReader).length, 2);
     const listeners = 'return @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)';
-    assert.equal(BOOTSTRAP.split(listeners).length, 2);
+    assert.equal(normalizedBootstrap.split(listeners).length, 2);
     // Force a cold all-absent listener fixture; do not probe or mutate existing
     // Computer1 Relay/Tunnel processes, and keep real hash/HEAD fences intact.
-    const fixture = BOOTSTRAP
+    const fixture = normalizedBootstrap
       .replace(pathBinding, '$ExpectedBootstrapPath = (Resolve-Path -LiteralPath $PSCommandPath).Path')
       .replace(secretReader, fixtureSecrets)
       .replace(listeners, 'return @()');
