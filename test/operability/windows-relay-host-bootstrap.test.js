@@ -132,7 +132,8 @@ test('real Computer1 Windows PowerShell -Plan uses actual cold-start topology an
   try {
     // Adapt only the test copy's self-path guard; real hash/revision,
     // reference-only credentials, listener queries and -Plan logic all run.
-    const fixture = BOOTSTRAP.replace(pathBinding, "$ExpectedBootstrapPath = '" + temporaryScript + "'");
+    const fixture = BOOTSTRAP.replace(pathBinding,
+      "$ExpectedBootstrapPath = (Resolve-Path -LiteralPath '" + temporaryScript.replaceAll("'", "''") + "').Path");
     fs.writeFileSync(temporaryScript, fixture, 'utf8');
     const outcome = spawnSync('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-File', temporaryScript, '-Plan',
