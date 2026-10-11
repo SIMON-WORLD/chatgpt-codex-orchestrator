@@ -28,6 +28,37 @@ $DoctorSha256 = '2ad32ee6e91d9a9728452a3fb8ee1156c8a24d0f3d29eade58a117df69676f6
 $RelayPorts = @(18745, 18746, 18747)
 $TunnelPort = 18748
 $McpRef = ('Author' + 'ization: env:ISSUE185_RELAY_AUTHORIZATION')
+$CheckpointPath = Join-Path $RuntimeRoot 'windows-login-autostart\last-result.json'
+$script:CheckpointArmed = $false
+$script:FailurePhase = 'preflight'
+
+# Task output may be unavailable after AtLogOn. Persist ONLY a fixed phase and
+# result; never exceptions, arguments, header values, or environment variables.
+function Write-SafeCheckpoint([string]$Status, [string]$Phase) {
+  $allowed = @('preflight', 'relay_start', 'relay_ready', 'tunnel_start', 'tunnel_ready', 'runtime_recovery', 'doctor', 'complete')
+  if ($Phase -notin $allowed) { $Phase = 'preflight' }
+  $record = [ordered]@{
+    schema = 'issue212-bootstrap-result-v1'
+    status = $Status
+    phase = $Phase
+    runtimeSha = $RuntimeSha
+    at = (Get-Date).ToUniversalTime().ToString('o')
+  }
+  $json = ConvertTo-Json -InputObject $record -Compress -Depth 3
+  $directory = Split-Path -Parent $CheckpointPath
+  if (-not (Test-Path -LiteralPath $directory -PathType Container)) { throw 'checkpoint directory missing' }
+  $temporary = Join-Path $directory 'last-result.tmp'
+  [System.IO.File]::WriteAllText($temporary, $json, (New-Object System.Text.UTF8Encoding($false)))
+  Move-Item -LiteralPath $temporary -Destination $CheckpointPath -Force
+}
+
+trap {
+  if ($script:CheckpointArmed -and -not $Plan) {
+    try { Write-SafeCheckpoint 'FAIL' $script:FailurePhase } catch {}
+  }
+  Write-Output ('WINDOWS_RELAY_HOST_BOOTSTRAP FAIL phase=' + $script:FailurePhase)
+  exit 1
+}
 
 function Assert-ExactFileHash([string]$Path, [string]$Expected) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "required file missing: $Path" }
@@ -95,6 +126,48 @@ function Assert-TunnelReady {
   if ($response.StatusCode -ne 200) { throw 'tunnel readiness failed' }
 }
 
+
+# A cold Windows login may bind the three Relay listeners on different ticks.
+# Poll ONLY the exact spawned child. Foreign/ambiguous owners fail immediately;
+# HTTP authorization must eventually prove 200 before advancing to Tunnel.
+function Wait-ExactRelayStartup([int]$ExpectedPid, [int]$TimeoutMs = 15000) {
+  $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
+  do {
+    if ($null -eq (Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue)) { throw 'relay spawned process exited before readiness' }
+    $allBound = $true
+    foreach ($port in $RelayPorts) {
+      $owners = @(Get-ExactListenerPids $port)
+      if ($owners.Count -gt 1 -or ($owners.Count -eq 1 -and $owners[0] -ne $ExpectedPid)) { throw 'relay listener owner drift during startup' }
+      if ($owners.Count -ne 1) { $allBound = $false }
+    }
+    if ($allBound) {
+      $ownerPid = Assert-RelayTopology
+      if ($ownerPid -ne $ExpectedPid) { throw 'relay startup listener PID mismatch' }
+      try { Assert-RelayAccessReady $relayRefValue; return $ownerPid } catch {}
+    }
+    Start-Sleep -Milliseconds 200
+  } while ($elapsed.ElapsedMilliseconds -lt $TimeoutMs)
+  throw 'relay exact startup readiness timeout'
+}
+
+# A tunnel listener alone is not sufficient: require its exact process/profile
+# AND a successful /readyz, without retrying over a foreign or ambiguous PID.
+function Wait-ExactTunnelStartup([int]$ExpectedPid, [int]$TimeoutMs = 15000) {
+  $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
+  do {
+    if ($null -eq (Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue)) { throw 'tunnel spawned process exited before readiness' }
+    $owners = @(Get-ExactListenerPids $TunnelPort)
+    if ($owners.Count -gt 1 -or ($owners.Count -eq 1 -and $owners[0] -ne $ExpectedPid)) { throw 'tunnel listener owner drift during startup' }
+    if ($owners.Count -eq 1) {
+      $ownerPid = Assert-TunnelTopology
+      if ($ownerPid -ne $ExpectedPid) { throw 'tunnel startup listener PID mismatch' }
+      try { Assert-TunnelReady; return $ownerPid } catch {}
+    }
+    Start-Sleep -Milliseconds 200
+  } while ($elapsed.ElapsedMilliseconds -lt $TimeoutMs)
+  throw 'tunnel exact startup readiness timeout'
+}
+
 function Assert-RelayRepoRevision {
   $head = (& git -C $RelayRepo rev-parse HEAD 2>$null).Trim().ToLowerInvariant()
   if ($LASTEXITCODE -ne 0 -or $head -ne $RelayRepoSha) { throw 'Relay repo revision drift' }
@@ -111,6 +184,7 @@ function Assert-RecoveryRepoRevision {
 
 $actualBootstrapPath = (Resolve-Path -LiteralPath $PSCommandPath).Path
 if ($actualBootstrapPath.ToLowerInvariant() -ne $ExpectedBootstrapPath.ToLowerInvariant()) { throw 'bootstrap durable path drift' }
+$script:CheckpointArmed = $true
 
 Assert-ExactFileHash $RelayRunner $RelayRunnerSha256
 Assert-ExactFileHash $TunnelProfilePath $TunnelProfileSha256
@@ -162,26 +236,28 @@ if ($Plan) {
 }
 
 if ($null -eq $relayPidValue) {
+  $script:FailurePhase = 'relay_start'
   $relayProcess = Start-Process -FilePath $NodeExe -ArgumentList @($RelayRunner) -WorkingDirectory $RelayRepo -WindowStyle Hidden -PassThru
-  Start-Sleep -Milliseconds 750
-  $relayPidValue = Assert-RelayTopology
-  if ($null -eq $relayPidValue -or $relayPidValue -ne $relayProcess.Id) { throw 'relay startup did not own exact listeners' }
-  Assert-RelayAccessReady $relayRefValue
+  $script:FailurePhase = 'relay_ready'
+  $relayPidValue = Wait-ExactRelayStartup $relayProcess.Id
 }
 
 if ($null -eq $tunnelPidValue) {
+  $script:FailurePhase = 'tunnel_start'
   $tunnelProcess = Start-Process -FilePath $TunnelExe -ArgumentList @('run', '--profile', $TunnelProfile, '--profile-dir', $TunnelProfileDir) -WorkingDirectory (Split-Path -Parent $TunnelExe) -WindowStyle Hidden -PassThru
-  Start-Sleep -Milliseconds 1000
-  $tunnelPidValue = Assert-TunnelTopology
-  if ($null -eq $tunnelPidValue -or $tunnelPidValue -ne $tunnelProcess.Id) { throw 'tunnel startup did not own exact readiness listener' }
-  Assert-TunnelReady
+  $script:FailurePhase = 'tunnel_ready'
+  $tunnelPidValue = Wait-ExactTunnelStartup $tunnelProcess.Id
 }
 
+$script:FailurePhase = 'runtime_recovery'
 & $NodeExe $Recovery '--config' $StableConfig '--repo' $RelayRepo '--sha' $RuntimeSha
 if ($LASTEXITCODE -ne 0) { throw 'canonical Stable Runtime recovery failed' }
 
+$script:FailurePhase = 'doctor'
 & $NodeExe $Doctor '--config' $StableConfig '--sha' $RuntimeSha '--account-bearer-env' 'PRIVATE_RELAY_ACCOUNT_BEARER'
 if ($LASTEXITCODE -ne 0) { throw 'private-relay doctor failed' }
 
+$script:FailurePhase = 'complete'
+Write-SafeCheckpoint 'PASS' 'complete'
 Write-Output 'WINDOWS_RELAY_HOST_BOOTSTRAP PASS'
 exit 0
