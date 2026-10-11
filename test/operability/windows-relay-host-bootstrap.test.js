@@ -298,7 +298,7 @@ test('real Windows isolated stage probes cover delayed owners, foreign owners, b
     '  Write-Output ("RESULT=" + $result)',
     '  exit 0',
     '} catch {',
-    '  Write-Output "FAIL_CLOSED"',
+    '  Write-Output ("FAIL_CLOSED:" + $_.Exception.Message)',
     '  exit 5',
     '}',
   ].join('\n');
