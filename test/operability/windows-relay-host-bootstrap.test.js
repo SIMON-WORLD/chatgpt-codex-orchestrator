@@ -327,6 +327,42 @@ test('real Windows isolated stage probes cover delayed owners, foreign owners, b
     assert.equal(json.runtimeSha, FIXED_RELAY_HOST.runtimeSha);
     assert.deepEqual(Object.keys(json).sort(), ['at', 'phase', 'runtimeSha', 'schema', 'status']);
     assert.doesNotMatch(record.stdout, /Bearer|Authorization|CONTROL_PLANE|LOCAL_RELAY_DEVICE_SECRET/u);
+    // Execute the actual script-scope trap as well as the writer, with only
+    // synthetic failure data. It must exit 1, record the fixed phase, and
+    // never serialize the thrown cause or any credentials.
+    const trapBlock = BOOTSTRAP.match(/\ntrap \{[\s\S]*?\n\}/u)?.[0]?.trim();
+    assert.ok(trapBlock, 'missing script-level PowerShell failure trap');
+    const trapHarness = path.join(folder, 'trap.ps1');
+    const trapSource = [
+      'param([switch]$Plan)',
+      "$ErrorActionPreference = 'Stop'",
+      'Set-StrictMode -Version Latest',
+      "$RuntimeSha = '628a2df906db9afcd8e80b7466f1667777e8cd69'",
+      "$CheckpointPath = Join-Path (Split-Path -Parent $PSCommandPath) 'last-result.json'",
+      '$script:CheckpointArmed = $true',
+      "$script:FailurePhase = 'doctor'",
+      extractBootstrapFunction('Write-SafeCheckpoint'),
+      trapBlock,
+      "throw 'synthetic_sensitive-looking_cause_must_not_persist'",
+    ].join('\n');
+    fs.writeFileSync(trapHarness, trapSource, 'utf8');
+    fs.rmSync(path.join(folder, 'last-result.json'));
+    const failed = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', trapHarness], {
+      encoding: 'utf8', windowsHide: true, timeout: 20_000,
+    });
+    assert.equal(failed.status, 1, failed.stderr);
+    assert.match(failed.stdout, /WINDOWS_RELAY_HOST_BOOTSTRAP FAIL phase=doctor/u);
+    assert.doesNotMatch(failed.stdout, /synthetic_sensitive-looking_cause_must_not_persist/u);
+    const failRecord = JSON.parse(fs.readFileSync(path.join(folder, 'last-result.json'), 'utf8'));
+    assert.equal(failRecord.status, 'FAIL');
+    assert.equal(failRecord.phase, 'doctor');
+    assert.doesNotMatch(JSON.stringify(failRecord), /synthetic_sensitive-looking_cause_must_not_persist/u);
+    fs.rmSync(path.join(folder, 'last-result.json'));
+    const readOnlyPlan = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', trapHarness, '-Plan'], {
+      encoding: 'utf8', windowsHide: true, timeout: 20_000,
+    });
+    assert.equal(readOnlyPlan.status, 1, readOnlyPlan.stderr);
+    assert.equal(fs.existsSync(path.join(folder, 'last-result.json')), false);
   } finally {
     fs.rmSync(folder, { recursive: true, force: true });
   }
