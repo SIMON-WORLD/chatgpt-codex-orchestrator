@@ -72,7 +72,7 @@ test('fixed bootstrap pins exact current Relay/Tunnel/Device-A topology and cano
     FIXED_RELAY_HOST.recoveryRepoRoot + '\\host\\stable-runtime-recover.mjs',
     '--config', FIXED_RELAY_HOST.stableConfig,
     '--repo', FIXED_RELAY_HOST.stableRepoRoot,
-    '--sha', FIXED_RELAY_HOST.stableSha,
+    '--sha', FIXED_RELAY_HOST.runtimeSha,
   ]);
 });
 
@@ -92,8 +92,16 @@ test('fixed recovery executable uses #216 deterministic CLI exit from the durabl
   assert.match(BOOTSTRAP, /\$RecoveryRepoSha = 'f87f4665fa225e904f4edf0408181f52074e267e'/u);
   assert.doesNotMatch(BOOTSTRAP, /\$Recovery = Join-Path \$RelayRepo/u);
   assert.doesNotMatch(BOOTSTRAP, /f6f7d17fb4e6908eb6e34cbee60811eee3f436ae9a4aae6269a18f74976a2694/u);
-  assert.match(BOOTSTRAP, /& \$NodeExe \$Recovery '--config' \$StableConfig '--repo' \$RelayRepo '--sha' \$StableSha/u);
-  assert.equal(FIXED_RELAY_HOST.stableSha, '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9');
+  assert.match(BOOTSTRAP, /& \$NodeExe \$Recovery '--config' \$StableConfig '--repo' \$RelayRepo '--sha' \$RuntimeSha/u);
+  assert.match(BOOTSTRAP, /& \$NodeExe \$Doctor '--config' \$StableConfig '--sha' \$RuntimeSha/u);
+  assert.match(BOOTSTRAP, /\$head -ne \$RelayRepoSha/u);
+  assert.doesNotMatch(BOOTSTRAP, /\$head -ne \$RuntimeSha/u);
+  assert.equal(FIXED_RELAY_HOST.relayRepoSha, '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9');
+  assert.equal(FIXED_RELAY_HOST.runtimeSha, '628a2df906db9afcd8e80b7466f1667777e8cd69');
+  assert.notEqual(FIXED_RELAY_HOST.relayRepoSha, FIXED_RELAY_HOST.runtimeSha);
+  assert.equal(FIXED_RELAY_HOST.stableSha, FIXED_RELAY_HOST.runtimeSha);
+  assert.match(BOOTSTRAP, /\$RelayRepoSha = '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9'/u);
+  assert.match(BOOTSTRAP, /\$RuntimeSha = '628a2df906db9afcd8e80b7466f1667777e8cd69'/u);
   assert.equal(FIXED_RELAY_HOST.stableRepoRoot, FIXED_RELAY_HOST.relayRepo);
   assert.match(BOOTSTRAP, /\$Doctor = Join-Path \$RelayRepo 'scripts\\private-relay-doctor\.mjs'/u);
 });
@@ -111,7 +119,7 @@ test('Computer1 cold-start plan keeps existing Relay/Tunnel/Device A bindings wi
     FIXED_RELAY_HOST.recoveryRepoRoot + '\\host\\stable-runtime-recover.mjs',
     '--config', FIXED_RELAY_HOST.stableConfig,
     '--repo', FIXED_RELAY_HOST.stableRepoRoot,
-    '--sha', FIXED_RELAY_HOST.stableSha,
+    '--sha', FIXED_RELAY_HOST.runtimeSha,
   ]);
   assert.equal(FIXED_RELAY_HOST.stablePort, 18749);
   assert.equal(FIXED_RELAY_HOST.stableConfigSha256, '8092b6443dcd6c3b4409ae078cf3c483dc99ac1232d7aae25f1e53634deea148');
@@ -119,7 +127,7 @@ test('Computer1 cold-start plan keeps existing Relay/Tunnel/Device A bindings wi
   assert.equal(FIXED_RELAY_HOST.tunnelProfileSha256, '303370e08438977baa25f0cd9e16c8cc4c75fddd5297de40f56c94d3b80cfaa3');
 });
 
-test('real Computer1 Windows PowerShell -Plan uses actual cold-start topology and exits without side effects', {
+test('real Computer1 Windows PowerShell -Plan reads split target with fixture-only secrets and no host changes', {
   skip: process.platform !== 'win32' || process.env.ISSUE212_REAL_WINDOWS_PLAN !== '1',
 }, () => {
   // Opt-in on the reviewed Relay host only. This is a temporary test copy,
@@ -130,12 +138,36 @@ test('real Computer1 Windows PowerShell -Plan uses actual cold-start topology an
   const pathBinding = "$ExpectedBootstrapPath = '" + FIXED_RELAY_HOST.durableBootstrapPath + "'";
   assert.equal(BOOTSTRAP.split(pathBinding).length, 2);
   try {
+    const normalizedBootstrap = BOOTSTRAP.replace(/\r\n/gu, '\n');
     // Adapt only the test copy's self-path guard; real hash/revision,
     // reference-only credentials, listener queries and -Plan logic all run.
     // The ephemeral fixture is not at the durable production path. Bind its
     // self-path check to the real script path (also safe with Windows 8.3 aliases).
-    const fixture = BOOTSTRAP.replace(pathBinding,
-      '$ExpectedBootstrapPath = (Resolve-Path -LiteralPath $PSCommandPath).Path');
+    const secretReader = [
+      "function Get-UserSecret([string]$Name) {",
+      "  $value = [Environment]::GetEnvironmentVariable($Name, 'User')",
+      '  if ([string]::IsNullOrWhiteSpace($value)) { throw "missing User-scope secret reference: $Name" }',
+      '  return $value',
+      '}',
+    ].join('\n');
+    const fixtureSecrets = [
+      'function Get-UserSecret([string]$Name) {',
+      "  if ($Name -eq 'ISSUE185_RELAY_AUTHORIZATION') { return 'Bearer fixture-only' }",
+      "  return 'fixture-only'",
+      '}',
+    ].join('\n');
+    // Never read live User-scope credential values from an unreviewed temporary
+    // script. Only the G05-approved durable bootstrap may access those values.
+    assert.equal(normalizedBootstrap.split(secretReader).length, 2);
+    const listeners = 'return @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)';
+    assert.equal(normalizedBootstrap.split(listeners).length, 2);
+    // Force a cold all-absent listener fixture; do not probe or mutate existing
+    // Computer1 Relay/Tunnel processes, and keep real hash/HEAD fences intact.
+    const fixture = normalizedBootstrap
+      .replace(pathBinding, '$ExpectedBootstrapPath = (Resolve-Path -LiteralPath $PSCommandPath).Path')
+      .replace(secretReader, fixtureSecrets)
+      .replace(listeners, 'return @()');
+    assert.doesNotMatch(fixture, /GetEnvironmentVariable\(\$Name, 'User'\)/u);
     fs.writeFileSync(temporaryScript, fixture, 'utf8');
     const outcome = spawnSync('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-File', temporaryScript, '-Plan',
@@ -153,7 +185,10 @@ test('real Computer1 Windows PowerShell -Plan uses actual cold-start topology an
     assert.deepEqual(plan.relayPorts, [18745, 18746, 18747]);
     assert.equal(plan.tunnelPort, 18748);
     assert.equal(plan.stablePort, 18749);
-    assert.equal(plan.stableSha, FIXED_RELAY_HOST.stableSha);
+    assert.equal(plan.runtimeSha, FIXED_RELAY_HOST.runtimeSha);
+    assert.equal(plan.relayRepoSha, FIXED_RELAY_HOST.relayRepoSha);
+    assert.equal(plan.stableSha, FIXED_RELAY_HOST.runtimeSha);
+    assert.notEqual(plan.relayRepoSha, plan.runtimeSha);
     assert.deepEqual(plan.referenceSources, [
       'User:ISSUE185_RELAY_AUTHORIZATION',
       'User:LOCAL_RELAY_DEVICE_SECRET',
@@ -164,6 +199,23 @@ test('real Computer1 Windows PowerShell -Plan uses actual cold-start topology an
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
   }
+});
+
+test('split repository HEAD and serving revision remain independently fail-closed and do not drift security references', () => {
+  assert.equal(FIXED_RELAY_HOST.relayRepoSha, '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9');
+  assert.equal(FIXED_RELAY_HOST.runtimeSha, '628a2df906db9afcd8e80b7466f1667777e8cd69');
+  assert.match(BOOTSTRAP, /\$head -ne \$RelayRepoSha/u);
+  assert.match(BOOTSTRAP, /Assert-RelayRepoRevision/u);
+  assert.match(BOOTSTRAP, /Assert-RecoveryRepoRevision/u);
+  assert.match(BOOTSTRAP, /\$RecoveryRepoSha = 'f87f4665fa225e904f4edf0408181f52074e267e'/u);
+  assert.match(BOOTSTRAP, /\$StableConfigSha256 = '8092b6443dcd6c3b4409ae078cf3c483dc99ac1232d7aae25f1e53634deea148'/u);
+  assert.match(BOOTSTRAP, /\$DoctorSha256 = '2ad32ee6e91d9a9728452a3fb8ee1156c8a24d0f3d29eade58a117df69676f65'/u);
+  for (const name of ['ISSUE185_RELAY_AUTHORIZATION', 'LOCAL_RELAY_DEVICE_SECRET', 'CONTROL_PLANE_API_KEY']) {
+    assert.match(BOOTSTRAP, new RegExp("Get-UserSecret '" + name + "'", 'u'));
+  }
+  assert.match(BOOTSTRAP, /\$McpRef = \('Author' \+ 'ization: env:ISSUE185_RELAY_AUTHORIZATION'\)/u);
+  assert.doesNotMatch(BOOTSTRAP, /SetEnvironmentVariable\([^)]*'User'/u);
+  assert.deepEqual(planFixedRelayHostBootstrap(baseEvidence()).slice(-2).map(a => a.args.includes(FIXED_RELAY_HOST.runtimeSha)), [true, true]);
 });
 
 test('bootstrap obtains all secrets only from User scope and keeps MCP authorization as an in-process env reference', () => {

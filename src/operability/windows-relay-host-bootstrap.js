@@ -17,7 +17,9 @@ export const FIXED_RELAY_HOST = Object.freeze({
   tunnelProfileSha256: '303370e08438977baa25f0cd9e16c8cc4c75fddd5297de40f56c94d3b80cfaa3',
   stableConfig: 'E:\\Project\\chatgpt-codex-orchestrator\\issue-185-runtime\\device-a-config.json',
   stableConfigSha256: '8092b6443dcd6c3b4409ae078cf3c483dc99ac1232d7aae25f1e53634deea148',
-  stableSha: '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9',
+  relayRepoSha: '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9',
+  runtimeSha: '628a2df906db9afcd8e80b7466f1667777e8cd69',
+  stableSha: '628a2df906db9afcd8e80b7466f1667777e8cd69', // compatibility label: always serving target, never source HEAD
   relayPorts: Object.freeze([18745, 18746, 18747]),
   tunnelPort: 18748,
   stablePort: 18749,
@@ -112,7 +114,7 @@ export function planFixedRelayHostBootstrap({
       FIXED_RELAY_HOST.recoveryRepoRoot + '\\host\\stable-runtime-recover.mjs',
       '--config', FIXED_RELAY_HOST.stableConfig,
       '--repo', FIXED_RELAY_HOST.stableRepoRoot,
-      '--sha', FIXED_RELAY_HOST.stableSha,
+      '--sha', FIXED_RELAY_HOST.runtimeSha,
     ],
   });
   actions.push({
@@ -121,7 +123,7 @@ export function planFixedRelayHostBootstrap({
     args: [
       FIXED_RELAY_HOST.stableRepoRoot + '\\scripts\\private-relay-doctor.mjs',
       '--config', FIXED_RELAY_HOST.stableConfig,
-      '--sha', FIXED_RELAY_HOST.stableSha,
+      '--sha', FIXED_RELAY_HOST.runtimeSha,
       '--account-bearer-env', 'PRIVATE_RELAY_ACCOUNT_BEARER',
     ],
   });
