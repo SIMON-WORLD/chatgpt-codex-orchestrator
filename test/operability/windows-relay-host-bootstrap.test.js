@@ -132,8 +132,10 @@ test('real Computer1 Windows PowerShell -Plan uses actual cold-start topology an
   try {
     // Adapt only the test copy's self-path guard; real hash/revision,
     // reference-only credentials, listener queries and -Plan logic all run.
+    // The ephemeral fixture is not at the durable production path. Bind its
+    // self-path check to the real script path (also safe with Windows 8.3 aliases).
     const fixture = BOOTSTRAP.replace(pathBinding,
-      "$ExpectedBootstrapPath = (Resolve-Path -LiteralPath '" + temporaryScript.replaceAll("'", "''") + "').Path");
+      '$ExpectedBootstrapPath = (Resolve-Path -LiteralPath $PSCommandPath).Path');
     fs.writeFileSync(temporaryScript, fixture, 'utf8');
     const outcome = spawnSync('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-File', temporaryScript, '-Plan',
