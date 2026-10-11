@@ -17,7 +17,8 @@ $TunnelProfilePath = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime\tu
 $TunnelProfileSha256 = '303370e08438977baa25f0cd9e16c8cc4c75fddd5297de40f56c94d3b80cfaa3'
 $StableConfig = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime\device-a-config.json'
 $StableConfigSha256 = '8092b6443dcd6c3b4409ae078cf3c483dc99ac1232d7aae25f1e53634deea148'
-$StableSha = '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9'
+$RelayRepoSha = '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9'
+$RuntimeSha = '628a2df906db9afcd8e80b7466f1667777e8cd69'
 $RecoveryRepo = 'E:\Project\chatgpt-codex-orchestrator\windows-login-runtime'
 $RecoveryRepoSha = 'f87f4665fa225e904f4edf0408181f52074e267e'
 $Recovery = Join-Path $RecoveryRepo 'host\stable-runtime-recover.mjs'
@@ -96,7 +97,7 @@ function Assert-TunnelReady {
 
 function Assert-RelayRepoRevision {
   $head = (& git -C $RelayRepo rev-parse HEAD 2>$null).Trim().ToLowerInvariant()
-  if ($LASTEXITCODE -ne 0 -or $head -ne $StableSha) { throw 'Relay repo revision drift' }
+  if ($LASTEXITCODE -ne 0 -or $head -ne $RelayRepoSha) { throw 'Relay repo revision drift' }
   $trackedDrift = @(& git -C $RelayRepo status --porcelain --untracked-files=no 2>$null)
   if ($LASTEXITCODE -ne 0 -or $trackedDrift.Count -ne 0) { throw 'Relay repo tracked files drift' }
 }
@@ -150,7 +151,9 @@ if ($Plan) {
     relayPorts = $RelayPorts
     tunnelPort = $TunnelPort
     stablePort = 18749
-    stableSha = $StableSha
+    stableSha = $RuntimeSha
+    runtimeSha = $RuntimeSha
+    relayRepoSha = $RelayRepoSha
     actions = $planActions
     referenceSources = @('User:ISSUE185_RELAY_AUTHORIZATION', 'User:LOCAL_RELAY_DEVICE_SECRET', 'User:CONTROL_PLANE_API_KEY')
     mcpAuthContract = $McpRef
@@ -174,10 +177,10 @@ if ($null -eq $tunnelPidValue) {
   Assert-TunnelReady
 }
 
-& $NodeExe $Recovery '--config' $StableConfig '--repo' $RelayRepo '--sha' $StableSha
+& $NodeExe $Recovery '--config' $StableConfig '--repo' $RelayRepo '--sha' $RuntimeSha
 if ($LASTEXITCODE -ne 0) { throw 'canonical Stable Runtime recovery failed' }
 
-& $NodeExe $Doctor '--config' $StableConfig '--sha' $StableSha '--account-bearer-env' 'PRIVATE_RELAY_ACCOUNT_BEARER'
+& $NodeExe $Doctor '--config' $StableConfig '--sha' $RuntimeSha '--account-bearer-env' 'PRIVATE_RELAY_ACCOUNT_BEARER'
 if ($LASTEXITCODE -ne 0) { throw 'private-relay doctor failed' }
 
 Write-Output 'WINDOWS_RELAY_HOST_BOOTSTRAP PASS'
