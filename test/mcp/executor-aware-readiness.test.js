@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WorkspaceRegistry } from '../../src/local/workspace.js';
-import { startMcpServer } from '../../src/mcp/server.js';
+import { EXECUTOR_COLD_START_TIMEOUT_MS, EXECUTOR_READY_TIMEOUT_MS, executorProbeTimeoutMs, startMcpServer } from '../../src/mcp/server.js';
 
 function registry() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'issue177-ready-'));
@@ -101,4 +101,41 @@ test('activation-preflight readiness remains independent of the serving executor
   assert.equal(body.activationPreflight, true);
   assert.equal(body.executorRequired, false);
   assert.equal(body.executorReady, null);
+});
+
+test('cold-start executor handshake has a separately bounded proof window; steady state stays strict', async (t) => {
+  assert.equal(EXECUTOR_READY_TIMEOUT_MS, 5000);
+  assert.equal(EXECUTOR_COLD_START_TIMEOUT_MS, 10000);
+  const gate = { state: 'idle', timeMs: 0 };
+  const child = {
+    health: () => health(gate.state, gate.state === 'ready' ? 1 : 0),
+    probeReady: async () => {
+      gate.state = 'starting';
+      await new Promise((resolve) => setTimeout(resolve, 5800));
+      gate.state = 'ready';
+      return health('ready', 1);
+    },
+  };
+  assert.equal(executorProbeTimeoutMs(child), 10000);
+  const srv = await startMcpServer({ workspaceRegistry: registry(), desktopCommanderChild: child, host: '127.0.0.1', port: 0 });
+  t.after(() => srv.close());
+  const res = await fetch(srv.url.replace('/mcp', '') + '/readyz');
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(body.executorReady, true);
+  assert.equal(body.compositeDesktopCommander.state, 'ready');
+  assert.equal(executorProbeTimeoutMs(child), 5000);
+});
+
+test('readiness remains fail-closed on cold-start proof error without exposing credential material', async (t) => {
+  const child = {
+    health: () => health('starting', 0, 'CHILD_START_FAILED'),
+    probeReady: async () => { throw new Error('cold-start-probe-failure'); },
+  };
+  assert.equal(executorProbeTimeoutMs(child), 10000);
+  const srv = await startMcpServer({ workspaceRegistry: registry(), desktopCommanderChild: child, host: '127.0.0.1', port: 0 });
+  t.after(() => srv.close());
+  const res = await fetch(srv.url.replace('/mcp', '') + '/readyz');
+  assert.equal(res.status, 503);
+  assert.equal((await res.json()).executorReady, false);
 });

@@ -33,7 +33,16 @@ function runtimeRevision() {
   return /^[0-9a-f]{40}$/.test(value) ? value : null;
 }
 
-const EXECUTOR_READY_TIMEOUT_MS = 5000;
+// Real Computer1 cold DesktopCommander initialization took 5,797ms on an otherwise
+// healthy pinned child. Bound only the first generation/recovery handshake to
+// 10s; already-ready health proofs keep the original 5s safety ceiling.
+export const EXECUTOR_READY_TIMEOUT_MS = 5000;
+export const EXECUTOR_COLD_START_TIMEOUT_MS = 10000;
+
+export function executorProbeTimeoutMs(child) {
+  const state = typeof child?.health === 'function' ? child.health()?.state : null;
+  return state && state !== 'ready' ? EXECUTOR_COLD_START_TIMEOUT_MS : EXECUTOR_READY_TIMEOUT_MS;
+}
 const EXECUTOR_READY_TIMEOUT = 'EXECUTOR_READY_TIMEOUT';
 
 async function runExecutorProbe(child) {
@@ -46,7 +55,7 @@ async function runExecutorProbe(child) {
         throw new Error('executor readiness probe unavailable');
       }),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(Object.assign(new Error('executor readiness timeout'), { code: EXECUTOR_READY_TIMEOUT })), EXECUTOR_READY_TIMEOUT_MS);
+        timer = setTimeout(() => reject(Object.assign(new Error('executor readiness timeout'), { code: EXECUTOR_READY_TIMEOUT })), executorProbeTimeoutMs(child));
       }),
     ]);
     const health = typeof child.health === 'function' ? child.health() : proof;

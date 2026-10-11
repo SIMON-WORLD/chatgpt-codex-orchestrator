@@ -451,15 +451,20 @@ export function safeTaskStatus(existingXml) {
   };
 }
 export function defaultCommandRunner(command, args, options = {}) {
+  // The exact schtasks /Query missing-task error is emitted in the active Windows
+  // console code page (GBK on zh-CN hosts), not UTF-8. Preserve its original
+  // stderr bytes only for that query; all other command-output contracts stay UTF-8.
+  const captureNativeStderr = options.captureNativeStderr === true;
   const result = spawnSync(command, args, {
-    encoding: 'utf8',
+    encoding: captureNativeStderr ? null : 'utf8',
     windowsHide: true,
     stdio: options.inherit ? 'inherit' : 'pipe',
   });
   return {
     code: Number.isInteger(result.status) ? result.status : 1,
-    stdout: result.stdout || '',
-    stderr: result.stderr || '',
+    stdout: Buffer.isBuffer(result.stdout) ? result.stdout.toString('utf8') : (result.stdout || ''),
+    stderr: Buffer.isBuffer(result.stderr) ? result.stderr.toString('utf8') : (result.stderr || ''),
+    ...(captureNativeStderr && Buffer.isBuffer(result.stderr) ? { nativeStderr: result.stderr } : {}),
     error: result.error || null,
   };
 }
@@ -476,10 +481,14 @@ export function currentWindowsUserSid({ run = defaultCommandRunner } = {}) {
 }
 
 export function queryWindowsLoginTask({ run = defaultCommandRunner } = {}) {
-  const result = run('schtasks.exe', ['/Query', '/TN', WINDOWS_LOGIN_TASK_NAME, '/XML', 'ONE']);
+  const result = run('schtasks.exe', ['/Query', '/TN', WINDOWS_LOGIN_TASK_NAME, '/XML', 'ONE'], { captureNativeStderr: true });
+  if (result.error) throw new Error('unable to query the exact Windows login autostart task');
   if (result.code === 0) return result.stdout;
   const combined = String(result.stdout || '') + '\n' + String(result.stderr || '');
-  if (/cannot find|not exist|not found|系统找不到|找不到指定/iu.test(combined)) return null;
+  // Decode only the one known Windows schtasks absence path. A garbled or
+  // unrelated failure never becomes an ownership-exempt "not installed" result.
+  const native = Buffer.isBuffer(result.nativeStderr) ? new TextDecoder('gbk').decode(result.nativeStderr) : '';
+  if (/cannot find|not exist|not found|系统找不到|找不到指定/iu.test(combined + '\n' + native)) return null;
   throw new Error('unable to query the exact Windows login autostart task');
 }
 
