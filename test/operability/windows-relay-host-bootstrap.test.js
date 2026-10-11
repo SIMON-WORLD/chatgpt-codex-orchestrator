@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { FIXED_RELAY_HOST, planFixedRelayHostBootstrap } from '../../src/operability/windows-relay-host-bootstrap.js';
@@ -115,6 +117,53 @@ test('Computer1 cold-start plan keeps existing Relay/Tunnel/Device A bindings wi
   assert.equal(FIXED_RELAY_HOST.stableConfigSha256, '8092b6443dcd6c3b4409ae078cf3c483dc99ac1232d7aae25f1e53634deea148');
   assert.equal(FIXED_RELAY_HOST.relayRunnerSha256, 'ff64a79bc20bb7104a2536e5c205451f96b219d0b08e197211a720dfcb9e84e1');
   assert.equal(FIXED_RELAY_HOST.tunnelProfileSha256, '303370e08438977baa25f0cd9e16c8cc4c75fddd5297de40f56c94d3b80cfaa3');
+});
+
+test('real Computer1 Windows PowerShell -Plan uses actual cold-start topology and exits without side effects', {
+  skip: process.platform !== 'win32' || process.env.ISSUE212_REAL_WINDOWS_PLAN !== '1',
+}, () => {
+  // Opt-in on the reviewed Relay host only. This is a temporary test copy,
+  // never the Parent-materialized durable bootstrap or an installed task.
+  assert.equal(os.hostname().toUpperCase(), 'DESKTOP-29JHFM4');
+  const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue212-cold-plan-'));
+  const temporaryScript = path.join(temporaryDir, 'windows-relay-host-bootstrap.ps1');
+  const pathBinding = "$ExpectedBootstrapPath = '" + FIXED_RELAY_HOST.durableBootstrapPath + "'";
+  assert.equal(BOOTSTRAP.split(pathBinding).length, 2);
+  try {
+    // Adapt only the test copy's self-path guard; real hash/revision,
+    // reference-only credentials, listener queries and -Plan logic all run.
+    // The ephemeral fixture is not at the durable production path. Bind its
+    // self-path check to the real script path (also safe with Windows 8.3 aliases).
+    const fixture = BOOTSTRAP.replace(pathBinding,
+      '$ExpectedBootstrapPath = (Resolve-Path -LiteralPath $PSCommandPath).Path');
+    fs.writeFileSync(temporaryScript, fixture, 'utf8');
+    const outcome = spawnSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-File', temporaryScript, '-Plan',
+    ], { encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+    assert.equal(outcome.error, undefined);
+    assert.equal(outcome.status, 0, outcome.stderr);
+    const plan = JSON.parse(outcome.stdout);
+    assert.equal(plan.status, 'PLAN');
+    assert.deepEqual(plan.actions, [
+      'start-relay-runner',
+      'start-secure-tunnel',
+      'recover-stable-runtime',
+      'private-relay-doctor',
+    ]);
+    assert.deepEqual(plan.relayPorts, [18745, 18746, 18747]);
+    assert.equal(plan.tunnelPort, 18748);
+    assert.equal(plan.stablePort, 18749);
+    assert.equal(plan.stableSha, FIXED_RELAY_HOST.stableSha);
+    assert.deepEqual(plan.referenceSources, [
+      'User:ISSUE185_RELAY_AUTHORIZATION',
+      'User:LOCAL_RELAY_DEVICE_SECRET',
+      'User:CONTROL_PLANE_API_KEY',
+    ]);
+    assert.equal(plan.mcpAuthContract, FIXED_RELAY_HOST.mcpHeaderReference);
+    assert.doesNotMatch(outcome.stdout, /Bearer\s+\S{12,}/u);
+  } finally {
+    fs.rmSync(temporaryDir, { recursive: true, force: true });
+  }
 });
 
 test('bootstrap obtains all secrets only from User scope and keeps MCP authorization as an in-process env reference', () => {
