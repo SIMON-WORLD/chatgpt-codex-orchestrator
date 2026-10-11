@@ -64,7 +64,7 @@ function Assert-ExactProcess([int]$ProcessId, [string]$Exe, [string[]]$ExpectedA
 function Assert-RelayTopology {
   $sets = @()
   foreach ($port in $RelayPorts) { $sets += ,@(Get-ExactListenerPids $port) }
-  $allAbsent = ($sets | Where-Object { $_.Count -ne 0 }).Count -eq 0
+  $allAbsent = @($sets | Where-Object { $_.Count -ne 0 }).Count -eq 0
   if ($allAbsent) { return $null }
   foreach ($set in $sets) { if ($set.Count -ne 1) { throw 'relay listener topology drift' } }
   $ownerPid = $sets[0][0]
