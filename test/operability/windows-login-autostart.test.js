@@ -11,6 +11,7 @@ import {
   buildWindowsLoginTaskSpec,
   canonicalTaskFingerprint,
   inspectWindowsLoginTaskXml,
+  queryWindowsLoginTask,
   launchRelayHost,
   launchStableRuntime,
   materializeRelayHostBootstrap,
@@ -440,4 +441,30 @@ test('tampered owned task with raw secret-looking metadata is untrusted and cann
   assert.equal(safeTaskStatus(tampered).status, 'UNTRUSTED');
   assert.throws(() => reconcileTaskInstall({ existingXml: tampered, desiredXml: desired }), /sensitive-looking/u);
   assert.throws(() => reconcileTaskUninstall({ existingXml: tampered }), /sensitive-looking/u);
+});
+
+test('Chinese Windows GBK schtasks missing-task stderr is absence, not UTF-8 decode failure', () => {
+  // Exact bytes obtained from a read-only query on DESKTOP-29JHFM4.
+  const gbkStderr = Buffer.from('b4edcef33a20cfb5cdb3d5d2b2bbb5bdd6b8b6a8b5c4cec4bcfea1a30d0d0a', 'hex');
+  const calls = [];
+  const result = queryWindowsLoginTask({ run(command, args, options) {
+    calls.push({ command, args, options });
+    return { code: 1, stdout: '', stderr: gbkStderr.toString('utf8'), nativeStderr: gbkStderr };
+  } });
+  assert.equal(result, null);
+  assert.equal(calls[0].command, 'schtasks.exe');
+  assert.deepEqual(calls[0].args, ['/Query', '/TN', 'ChatGPT Codex Orchestrator - Local Connector Login Recovery', '/XML', 'ONE']);
+  assert.deepEqual(calls[0].options, { captureNativeStderr: true });
+});
+
+test('schtasks query keeps owned XML readback and fails closed on unrelated errors or spawn failures', () => {
+  const xml = stableTaskXml();
+  assert.equal(queryWindowsLoginTask({ run: () => ({ code: 0, stdout: xml, stderr: '' }) }), xml);
+  for (const fault of [
+    { code: 1, stdout: '', stderr: 'Access is denied' },
+    { code: 1, stdout: '', stderr: '', nativeStderr: Buffer.from('access denied') },
+    { code: 1, stdout: '', stderr: 'not found', error: new Error('spawn ENOENT') },
+  ]) {
+    assert.throws(() => queryWindowsLoginTask({ run: () => fault }), /unable to query/u);
+  }
 });
