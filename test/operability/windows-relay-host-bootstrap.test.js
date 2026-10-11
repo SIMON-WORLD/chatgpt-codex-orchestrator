@@ -309,7 +309,7 @@ test('real Windows isolated stage probes cover delayed owners, foreign owners, b
     });
     for (const scenario of ['relay_delayed', 'tunnel_delayed']) {
       const result = run(scenario);
-      assert.equal(result.status, 0, scenario + ': ' + result.stderr);
+      assert.equal(result.status, 0, scenario + ': ' + result.stderr + ' stdout=' + result.stdout);
       assert.match(result.stdout, /RESULT=4242/u);
     }
     for (const scenario of ['relay_foreign', 'tunnel_foreign', 'relay_timeout', 'tunnel_timeout', 'relay_dead']) {
