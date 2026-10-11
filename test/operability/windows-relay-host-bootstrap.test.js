@@ -124,7 +124,7 @@ test('real Computer1 Windows PowerShell -Plan uses actual cold-start topology an
 }, () => {
   // Opt-in on the reviewed Relay host only. This is a temporary test copy,
   // never the Parent-materialized durable bootstrap or an installed task.
-  assert.equal(process.env.COMPUTERNAME?.toUpperCase(), 'DESKTOP-29JHFM4');
+  assert.equal(os.hostname().toUpperCase(), 'DESKTOP-29JHFM4');
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issue212-cold-plan-'));
   const temporaryScript = path.join(temporaryDir, 'windows-relay-host-bootstrap.ps1');
   const pathBinding = "$ExpectedBootstrapPath = '" + FIXED_RELAY_HOST.durableBootstrapPath + "'";
