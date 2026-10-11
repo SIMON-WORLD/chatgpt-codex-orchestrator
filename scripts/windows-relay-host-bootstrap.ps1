@@ -210,12 +210,22 @@ $controlRefValue = Get-UserSecret 'CONTROL_PLANE_API_KEY'
 [Environment]::SetEnvironmentVariable('MCP_DISCOVERY_EXTRA_HEADERS', $McpRef, 'Process')
 [Environment]::SetEnvironmentVariable('PRIVATE_RELAY_ACCOUNT_BEARER', $relayRefValue.Substring('Bearer '.Length), 'Process')
 
+$script:FailurePhase = 'relay_ready'
 $relayPidValue = Assert-RelayTopology
+$script:FailurePhase = 'tunnel_ready'
 $tunnelPidValue = Assert-TunnelTopology
 
 $planActions = @()
-if ($null -eq $relayPidValue) { $planActions += 'start-relay-runner' } else { Assert-RelayAccessReady $relayRefValue; $planActions += "reuse-relay-runner:$relayPidValue" }
-if ($null -eq $tunnelPidValue) { $planActions += 'start-secure-tunnel' } else { Assert-TunnelReady; $planActions += "reuse-secure-tunnel:$tunnelPidValue" }
+if ($null -eq $relayPidValue) { $planActions += 'start-relay-runner' } else {
+  $script:FailurePhase = 'relay_ready'
+  Assert-RelayAccessReady $relayRefValue
+  $planActions += "reuse-relay-runner:$relayPidValue"
+}
+if ($null -eq $tunnelPidValue) { $planActions += 'start-secure-tunnel' } else {
+  $script:FailurePhase = 'tunnel_ready'
+  Assert-TunnelReady
+  $planActions += "reuse-secure-tunnel:$tunnelPidValue"
+}
 $planActions += 'recover-stable-runtime'
 $planActions += 'private-relay-doctor'
 
