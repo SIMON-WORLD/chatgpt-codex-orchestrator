@@ -18,8 +18,10 @@ $TunnelProfileSha256 = '303370e08438977baa25f0cd9e16c8cc4c75fddd5297de40f56c94d3
 $StableConfig = 'E:\Project\chatgpt-codex-orchestrator\issue-185-runtime\device-a-config.json'
 $StableConfigSha256 = '8092b6443dcd6c3b4409ae078cf3c483dc99ac1232d7aae25f1e53634deea148'
 $StableSha = '5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9'
-$Recovery = Join-Path $RelayRepo 'host\stable-runtime-recover.mjs'
-$RecoverySha256 = 'f6f7d17fb4e6908eb6e34cbee60811eee3f436ae9a4aae6269a18f74976a2694'
+$RecoveryRepo = 'E:\Project\chatgpt-codex-orchestrator\windows-login-runtime'
+$RecoveryRepoSha = 'f87f4665fa225e904f4edf0408181f52074e267e'
+$Recovery = Join-Path $RecoveryRepo 'host\stable-runtime-recover.mjs'
+$RecoverySha256 = '9ed8978d4075e782cb7c573bdb97fe426e11865a80250b10c183919317d08536'
 $Doctor = Join-Path $RelayRepo 'scripts\private-relay-doctor.mjs'
 $DoctorSha256 = '2ad32ee6e91d9a9728452a3fb8ee1156c8a24d0f3d29eade58a117df69676f65'
 $RelayPorts = @(18745, 18746, 18747)
@@ -99,6 +101,13 @@ function Assert-RelayRepoRevision {
   if ($LASTEXITCODE -ne 0 -or $trackedDrift.Count -ne 0) { throw 'Relay repo tracked files drift' }
 }
 
+function Assert-RecoveryRepoRevision {
+  $head = (& git -C $RecoveryRepo rev-parse HEAD 2>$null).Trim().ToLowerInvariant()
+  if ($LASTEXITCODE -ne 0 -or $head -ne $RecoveryRepoSha) { throw 'Recovery CLI repo revision drift' }
+  $trackedDrift = @(& git -C $RecoveryRepo status --porcelain --untracked-files=no 2>$null)
+  if ($LASTEXITCODE -ne 0 -or $trackedDrift.Count -ne 0) { throw 'Recovery CLI repo tracked files drift' }
+}
+
 $actualBootstrapPath = (Resolve-Path -LiteralPath $PSCommandPath).Path
 if ($actualBootstrapPath.ToLowerInvariant() -ne $ExpectedBootstrapPath.ToLowerInvariant()) { throw 'bootstrap durable path drift' }
 
@@ -110,6 +119,7 @@ if (-not (Test-Path -LiteralPath $TunnelExe -PathType Leaf)) { throw 'exact tunn
 Assert-ExactFileHash $Recovery $RecoverySha256
 Assert-ExactFileHash $Doctor $DoctorSha256
 Assert-RelayRepoRevision
+Assert-RecoveryRepoRevision
 
 $relayRefValue = Get-UserSecret 'ISSUE185_RELAY_AUTHORIZATION'
 if (-not $relayRefValue.StartsWith('Bearer ')) { throw 'ISSUE185_RELAY_AUTHORIZATION malformed' }
