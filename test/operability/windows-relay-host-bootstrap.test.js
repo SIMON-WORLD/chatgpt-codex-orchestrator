@@ -218,6 +218,119 @@ test('split repository HEAD and serving revision remain independently fail-close
   assert.deepEqual(planFixedRelayHostBootstrap(baseEvidence()).slice(-2).map(a => a.args.includes(FIXED_RELAY_HOST.runtimeSha)), [true, true]);
 });
 
+
+function extractBootstrapFunction(name) {
+  const marker = 'function ' + name + '(';
+  const start = BOOTSTRAP.indexOf(marker);
+  assert.notEqual(start, -1, 'missing PowerShell function ' + name);
+  const open = BOOTSTRAP.indexOf('{', start);
+  let depth = 0;
+  for (let i = open; i < BOOTSTRAP.length; i += 1) {
+    if (BOOTSTRAP[i] === '{') depth += 1;
+    else if (BOOTSTRAP[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return BOOTSTRAP.slice(start, i + 1);
+    }
+  }
+  throw new Error('unterminated PowerShell function ' + name);
+}
+
+test('cold-logon stages retain bounded startup waits, exact process ownership, and sanitized status only', () => {
+  for (const [name, token] of [
+    ['Wait-ExactRelayStartup', 'Assert-RelayTopology'],
+    ['Wait-ExactTunnelStartup', 'Assert-TunnelTopology'],
+    ['Write-SafeCheckpoint', 'ConvertTo-Json'],
+  ]) assert.match(extractBootstrapFunction(name), new RegExp(token, 'u'));
+  assert.match(BOOTSTRAP, /Wait-ExactRelayStartup \$relayProcess\.Id/u);
+  assert.match(BOOTSTRAP, /Wait-ExactTunnelStartup \$tunnelProcess\.Id/u);
+  assert.doesNotMatch(BOOTSTRAP, /Start-Sleep -Milliseconds (?:750|1000)/u);
+  assert.match(BOOTSTRAP, /if \(\$script:CheckpointArmed -and -not \$Plan\)/u);
+  assert.match(BOOTSTRAP, /Write-SafeCheckpoint 'FAIL' \$script:FailurePhase/u);
+  assert.match(BOOTSTRAP, /Write-SafeCheckpoint 'PASS' 'complete'/u);
+  for (const phase of ['preflight', 'relay_start', 'relay_ready', 'tunnel_start', 'tunnel_ready', 'runtime_recovery', 'doctor', 'complete']) {
+    assert.match(BOOTSTRAP, new RegExp("'" + phase + "'", 'u'));
+  }
+  assert.match(BOOTSTRAP, /last-result\.json/u);
+  assert.doesNotMatch(extractBootstrapFunction('Write-SafeCheckpoint'), /relayRefValue|deviceRefValue|controlRefValue|Get-UserSecret|GetEnvironmentVariable|CommandLine|Exception|ErrorRecord/u);
+});
+
+test('real Windows isolated stage probes cover delayed owners, foreign owners, bounded timeout and sanitized failure checkpoint', {
+  skip: process.platform !== 'win32' || process.env.ISSUE212_REAL_WINDOWS_PLAN !== '1',
+}, () => {
+  assert.equal(os.hostname().toUpperCase(), 'DESKTOP-29JHFM4');
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'issue212-stages-'));
+  const harness = path.join(folder, 'probe.ps1');
+  const source = [
+    'param([string]$Scenario)',
+    "$ErrorActionPreference = 'Stop'",
+    'Set-StrictMode -Version Latest',
+    '$RelayPorts = @(18745,18746,18747)',
+    '$TunnelPort = 18748',
+    "$RuntimeSha = '628a2df906db9afcd8e80b7466f1667777e8cd69'",
+    "$CheckpointPath = Join-Path (Split-Path -Parent $PSCommandPath) 'last-result.json'",
+    "$relayRefValue = 'Bearer fixture-only'",
+    '$script:Cycles = 0',
+    '$script:Checks = 0',
+    "function Get-Process { param([int]$Id,[string]$ErrorAction) if ($Scenario -eq 'relay_dead') { return $null }; return [pscustomobject]@{ Id = $Id } }",
+    'function Get-ExactListenerPids([int]$Port) {',
+    "  if ($Port -eq 18745 -or $Port -eq 18748) { $script:Cycles += 1 }",
+    "  if ($Scenario -match 'foreign') { return @(9999) }",
+    "  if ($Scenario -match 'timeout') { return @() }",
+    "  if ($script:Cycles -eq 1) { return @() }",
+    "  if ($Scenario -eq 'relay_delayed' -and $script:Cycles -eq 2 -and $Port -eq 18747) { return @() }",
+    '  return @(4242)',
+    '}',
+    'function Assert-RelayTopology { return 4242 }',
+    'function Assert-TunnelTopology { return 4242 }',
+    'function Assert-RelayAccessReady([string]$Value) { $script:Checks += 1; if ($script:Checks -eq 1) { throw "not yet listening" } }',
+    'function Assert-TunnelReady { $script:Checks += 1; if ($script:Checks -eq 1) { throw "not yet ready" } }',
+    extractBootstrapFunction('Wait-ExactRelayStartup'),
+    extractBootstrapFunction('Wait-ExactTunnelStartup'),
+    extractBootstrapFunction('Write-SafeCheckpoint'),
+    'if ($Scenario -eq "checkpoint") {',
+    '  Write-SafeCheckpoint "FAIL" "tunnel_ready"',
+    '  Get-Content -LiteralPath $CheckpointPath -Raw',
+    '  exit 0',
+    '}',
+    'try {',
+    '  if ($Scenario -match "^relay_") { $result = Wait-ExactRelayStartup 4242 620 }',
+    '  else { $result = Wait-ExactTunnelStartup 4242 620 }',
+    '  Write-Output ("RESULT=" + $result)',
+    '  exit 0',
+    '} catch {',
+    '  Write-Output "FAIL_CLOSED"',
+    '  exit 5',
+    '}',
+  ].join('\n');
+  fs.writeFileSync(harness, source, 'utf8');
+  try {
+    const run = (scenario) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', harness, scenario], {
+      encoding: 'utf8', windowsHide: true, timeout: 20_000,
+    });
+    for (const scenario of ['relay_delayed', 'tunnel_delayed']) {
+      const result = run(scenario);
+      assert.equal(result.status, 0, scenario + ': ' + result.stderr);
+      assert.match(result.stdout, /RESULT=4242/u);
+    }
+    for (const scenario of ['relay_foreign', 'tunnel_foreign', 'relay_timeout', 'tunnel_timeout', 'relay_dead']) {
+      const result = run(scenario);
+      assert.equal(result.status, 5, scenario + ': ' + result.stderr);
+      assert.match(result.stdout, /FAIL_CLOSED/u);
+      assert.doesNotMatch(result.stdout, /Bearer/u);
+    }
+    const record = run('checkpoint');
+    assert.equal(record.status, 0, record.stderr);
+    const json = JSON.parse(fs.readFileSync(path.join(folder, 'last-result.json'), 'utf8'));
+    assert.equal(json.status, 'FAIL');
+    assert.equal(json.phase, 'tunnel_ready');
+    assert.equal(json.runtimeSha, FIXED_RELAY_HOST.runtimeSha);
+    assert.deepEqual(Object.keys(json).sort(), ['at', 'phase', 'runtimeSha', 'schema', 'status']);
+    assert.doesNotMatch(record.stdout, /Bearer|Authorization|CONTROL_PLANE|LOCAL_RELAY_DEVICE_SECRET/u);
+  } finally {
+    fs.rmSync(folder, { recursive: true, force: true });
+  }
+});
+
 test('bootstrap obtains all secrets only from User scope and keeps MCP authorization as an in-process env reference', () => {
   for (const name of ['ISSUE185_RELAY_AUTHORIZATION', 'LOCAL_RELAY_DEVICE_SECRET', 'CONTROL_PLANE_API_KEY']) {
     assert.match(BOOTSTRAP, new RegExp("Get-UserSecret '" + name + "'", 'u'));
