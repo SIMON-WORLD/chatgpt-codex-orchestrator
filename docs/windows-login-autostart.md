@@ -96,9 +96,12 @@ The reviewed bootstrap must:
 - carry the exact Issue #212 project-ownership marker;
 - contain no raw bearer/token/credential/secret value;
 - live at the exact durable bootstrap path when executed;
-- delegate Stable Runtime recovery to the accepted `host/stable-runtime-recover.mjs` and final readiness diagnosis to `scripts/private-relay-doctor.mjs` from the existing durable #185 Relay repository;
-- pin that durable repository to exact revision `5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9` and fail closed on tracked-file drift;
-- hash-fence the accepted recovery and doctor files before delegation.
+- delegate Stable Runtime recovery to the #216-corrected `host/stable-runtime-recover.mjs` in the durable `E:\\Project\\chatgpt-codex-orchestrator\\windows-login-runtime` recovery checkout; keep final readiness diagnosis at `scripts/private-relay-doctor.mjs` in the existing durable #185 Relay repository;
+- pin the recovery checkout to exact accepted #216-containing revision `f87f4665fa225e904f4edf0408181f52074e267e` and the **unchanged** #185 runtime repository to `5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9`, rejecting tracked-file or HEAD drift in either;
+- hash-fence the corrected recovery CLI (`SHA-256: 9ed8978d4075e782cb7c573bdb97fe426e11865a80250b10c183919317d08536`) and existing doctor (unchanged) before delegation;
+- continue to pass the unchanged #185 repository as `--repo` and `5c36a7aaebe0f51e012f8a27ab160c2bf9eebde9` as `--sha`, regardless of the recovery executable's source revision.
+
+The recovery checkout and the runtime checkout serve **different roles**: `windows-login-runtime` supplies only the #216-corrected CLI and must be independently deployed at the fixed durable path before host `-Plan`/install; the immutable #185 checkout remains the actual runtime target and doctor source. Computer1's 2026-10-11 cold-start preflight found no `windows-login-runtime` checkout yet; that absence must fail closed until G05 Parent performs the separately authorized host deployment. No #212 bounded implementation task creates a Windows Scheduled Task, materializes a host bootstrap, or changes the accepted #185 checkout.
 
 The project now provides one fixed host bootstrap at `scripts/windows-relay-host-bootstrap.ps1` for the reviewed DESKTOP-29JHFM4 topology. It is not a generic supervisor: it pins the existing Relay runner, Relay repo/runtime-root, tunnel-client v0.0.14 profile, Device A config, and exact Stable Runtime revision; reuses only exact live processes/listeners; starts only an absent exact Relay runner or tunnel; delegates Stable Runtime recovery to the canonical recovery entrypoint; and finishes with `private-relay-doctor`.
 
