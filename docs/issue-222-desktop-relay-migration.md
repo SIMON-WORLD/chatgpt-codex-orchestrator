@@ -71,13 +71,13 @@ The desktop bootstrap requires an already staged, consistent `relay.sqlite`. It 
 
 ## Task coexistence: preserve Device B
 
-The existing Computer2 Task remains untouched:
+The existing Computer2 Task keeps the same name, role and authority:
 
 ```text
 ChatGPT Codex Orchestrator - Local Connector Login Recovery
 ```
 
-It continues to own Device B Stable Runtime :18749.
+It continues to own Device B Stable Runtime :18749. Because the #212 critical binding fingerprint includes `relayAgent.relayUrl`, the cutover updates this same owned Task's binding/action hash after the one-field B config URL change; it is not replaced by a coordinator. Computer1's same-name Task must change from the old Relay-host mode to ordinary Device A Stable Runtime recovery so a later laptop login cannot resurrect a second Relay/Tunnel host.
 
 Issue #222 adds one **different**, project-owned Task:
 
@@ -133,11 +133,12 @@ Before starting anything it fail-closes on:
 - missing User-scope credential references;
 - wrong process path/command/profile.
 
-`-Plan` checks only the **presence** of the required User-scope references and exits before reading their values. Non-plan execution reads approved existing references only into process memory:
+`-Plan` checks only the **presence** of the required User-scope references and exits before reading their values. Non-plan execution reads only the Relay/Tunnel-host references it actually needs into process memory:
 
 - `ISSUE185_RELAY_AUTHORIZATION`;
-- `LOCAL_RELAY_DEVICE_SECRET`;
 - `CONTROL_PLANE_API_KEY`.
+
+`LOCAL_RELAY_DEVICE_SECRET` remains exclusively on Computer1 for Device A. `ISSUE185_DEVICE_B_SECRET` remains the existing Device B credential reference on Computer2. Neither device secret is duplicated into the desktop Relay bootstrap.
 
 Its journal contains only fixed status/phase/time fields. It does not persist exception text, environment values, headers or command lines.
 
@@ -160,9 +161,9 @@ No snapshot boolean such as `parentCutoverApproved: true` can grant host-change 
 3. **Non-secret staging** — after Parent disclosure, stage the exact runner, tunnel binary/profile and reviewed bootstrap under the new disjoint Computer2 root. Do not start them and do not install the Task.
 4. **Narrow cutover authorization** — before any availability/security mutation, disclose the exact Computer2 Task name, SID, trigger, executable/action hash, credential reference names, new Serve mapping, A/B config changes, source stop/quiescence operation and rollback.
 5. **Single-writer SQLite transition** — with explicit authorization, fence the source writer, capture a consistent SQLite backup/checkpoint including live WAL state, validate integrity/provenance, transfer to the destination, and keep the source rollback copy. Never copy only the live `relay.sqlite` while WAL is active.
-6. **Credential/profile/network handoff** — securely provision the existing reference values/profile without printing them, configure the Computer2 tailnet-only Serve ingress, and update A/B Relay-agent URLs while preserving device IDs, credentialEnv names and filesystem scopes.
+6. **Credential/profile/network handoff** — securely provision only the missing `ISSUE185_RELAY_AUTHORIZATION` on Computer2 without printing it; reuse the already-present Computer2 `CONTROL_PLANE_API_KEY`. Configure the Computer2 tailnet-only Serve ingress and update A/B Relay-agent URLs to `https://desktop-2.tail4d2a66.ts.net` while preserving device IDs, credentialEnv names and filesystem scopes. Keep A's `LOCAL_RELAY_DEVICE_SECRET` on A and B's `ISSUE185_DEVICE_B_SECRET` on B.
 7. **Start destination** — prove source Relay/Tunnel are fenced, then run the reviewed Computer2 bootstrap. There must be only one active Relay writer and one tunnel queue client.
-8. **Install the distinct Task** — only after the running destination has passed canaries; the existing Device B Task remains unchanged.
+8. **Install/update login Tasks** — install the distinct Computer2 Relay-host Task after destination canaries; refresh the existing Device B #212 Task binding for the new relayUrl without changing its role/name/privilege, and convert Computer1's existing #212 Task from old Relay-host recovery to Device A Stable Runtime recovery.
 9. **Acceptance** — the existing ChatGPT connector must list exact B Ready, open a B workspace and execute a harmless B process with exit 0. Then, with separately approved real laptop shutdown, B must remain usable while Computer1 is off. When Computer1 returns, A must reconnect with its original identity.
 10. **Cold-login proof** — a real Computer2 Windows login must restore the Relay/Tunnel host and Device B using the two non-conflicting Tasks.
 

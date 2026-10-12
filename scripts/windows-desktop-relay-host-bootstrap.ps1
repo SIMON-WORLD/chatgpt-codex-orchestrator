@@ -184,7 +184,7 @@ if (-not (Test-Path -LiteralPath $RelayDb -PathType Leaf)) { throw 'consistent R
 if (-not (Test-Path -LiteralPath $NodeExe -PathType Leaf)) { throw 'exact Node executable missing' }
 Assert-RelayRepoRevision
 
-$requiredReferences = @('ISSUE185_RELAY_AUTHORIZATION', 'LOCAL_RELAY_DEVICE_SECRET', 'CONTROL_PLANE_API_KEY')
+$requiredReferences = @('ISSUE185_RELAY_AUTHORIZATION', 'CONTROL_PLANE_API_KEY')
 $missingReferences = @($requiredReferences | Where-Object { -not (Get-UserReferencePresent $_) })
 
 $script:FailurePhase = 'relay_ready'
@@ -211,7 +211,6 @@ if ($Plan) {
     missingUserReferences = $missingReferences
     referenceSources = @(
       'User:ISSUE185_RELAY_AUTHORIZATION',
-      'User:LOCAL_RELAY_DEVICE_SECRET',
       'User:CONTROL_PLANE_API_KEY'
     )
     relayRunnerSha256 = $RelayRunnerSha256
@@ -226,13 +225,11 @@ if ($missingReferences.Count -ne 0) { throw 'required User-scope reference missi
 
 $relayRefValue = Get-UserRef 'ISSUE185_RELAY_AUTHORIZATION'
 if (-not $relayRefValue.StartsWith('Bearer ')) { throw 'Relay authorization reference malformed' }
-$deviceRefValue = Get-UserRef 'LOCAL_RELAY_DEVICE_SECRET'
 $controlRefValue = Get-UserRef 'CONTROL_PLANE_API_KEY'
 
 [Environment]::SetEnvironmentVariable('ISSUE185_RELAY_AUTHORIZATION', $relayRefValue, 'Process')
 [Environment]::SetEnvironmentVariable('ISSUE185_REPO', $RelayRepo, 'Process')
 [Environment]::SetEnvironmentVariable('ISSUE185_RUNTIME_ROOT', $RuntimeRoot, 'Process')
-[Environment]::SetEnvironmentVariable('LOCAL_RELAY_DEVICE_SECRET', $deviceRefValue, 'Process')
 [Environment]::SetEnvironmentVariable('CONTROL_PLANE_API_KEY', $controlRefValue, 'Process')
 [Environment]::SetEnvironmentVariable('MCP_EXTRA_HEADERS', $McpRef, 'Process')
 [Environment]::SetEnvironmentVariable('MCP_DISCOVERY_EXTRA_HEADERS', $McpRef, 'Process')

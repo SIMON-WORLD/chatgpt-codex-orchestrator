@@ -3,7 +3,7 @@ import path from 'node:path';
 const HEX40 = /^[a-f0-9]{40}$/u;
 const HEX64 = /^[a-f0-9]{64}$/u;
 const PORTS = [18745, 18746, 18747, 18748, 18749];
-const REQUIRED_REFS = ['ISSUE185_RELAY_AUTHORIZATION', 'LOCAL_RELAY_DEVICE_SECRET', 'CONTROL_PLANE_API_KEY', 'ISSUE185_DEVICE_B_SECRET'];
+const REQUIRED_REFS = ['ISSUE185_RELAY_AUTHORIZATION', 'CONTROL_PLANE_API_KEY', 'ISSUE185_DEVICE_B_SECRET'];
 const SOURCE_TUNNEL_STATES = new Set(['running', 'verified-stopped']);
 
 function absolute(value) {
