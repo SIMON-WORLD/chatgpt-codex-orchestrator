@@ -3,7 +3,7 @@ import test from 'node:test';
 import { planDesktopRelayMigration } from '../../src/operability/desktop-relay-migration.js';
 
 const H = 'a'.repeat(64);
-const REQUIRED_REFS = ['ISSUE185_RELAY_AUTHORIZATION', 'LOCAL_RELAY_DEVICE_SECRET', 'CONTROL_PLANE_API_KEY', 'ISSUE185_DEVICE_B_SECRET'];
+const REQUIRED_REFS = ['ISSUE185_RELAY_AUTHORIZATION', 'CONTROL_PLANE_API_KEY', 'ISSUE185_DEVICE_B_SECRET'];
 
 function snapshot() {
   return {
@@ -51,6 +51,7 @@ test('real incident shape accepts independently verified stopped source Tunnel a
   assert.equal(p.cutoverAuthorized, false);
   assert.equal(p.cutoverAuthorization, 'EXTERNAL_PARENT_HUMAN_ONLY');
   assert.ok(p.blockers.some((x) => x.includes('ISSUE185_RELAY_AUTHORIZATION')));
+  assert.equal(p.blockers.some((x) => x.includes('LOCAL_RELAY_DEVICE_SECRET')), false);
   assert.deepEqual(s, before);
 });
 
