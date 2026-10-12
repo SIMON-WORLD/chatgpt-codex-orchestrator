@@ -193,8 +193,10 @@ test('actual Computer2 bootstrap owns only Relay/Tunnel, hash-fences staged arti
   const secretValueIndex = ACTUAL_BOOTSTRAP.indexOf("$relayRefValue = Get-UserRef");
   assert.ok(planIndex > 0 && secretValueIndex > planIndex, 'dry-run must exit before reading credential values');
 
-  const writerStart = ACTUAL_BOOTSTRAP.indexOf('function Write-SafeCheckpoint');
-  const writerEnd = ACTUAL_BOOTSTRAP.indexOf('\n}\n\ntrap', writerStart);
-  const writer = ACTUAL_BOOTSTRAP.slice(writerStart, writerEnd);
+  const normalizedBootstrap = ACTUAL_BOOTSTRAP.replace(/\r\n/gu, '\n');
+  const writerStart = normalizedBootstrap.indexOf('function Write-SafeCheckpoint');
+  const writerEnd = normalizedBootstrap.indexOf('\n}\n\ntrap', writerStart);
+  assert.ok(writerStart >= 0 && writerEnd > writerStart, 'checkpoint writer block must be extractable');
+  const writer = normalizedBootstrap.slice(writerStart, writerEnd);
   assert.doesNotMatch(writer, /relayRefValue|deviceRefValue|controlRefValue|Get-UserRef|GetEnvironmentVariable|Exception|CommandLine/u);
 });
