@@ -184,6 +184,9 @@ test('actual Computer2 bootstrap owns only Relay/Tunnel, hash-fences staged arti
   assert.match(ACTUAL_BOOTSTRAP, /fcc85a69ec0ad82518e4f8964f60c45e31787957782a0fc9c1b0c44e82d61b9b/u);
   assert.match(ACTUAL_BOOTSTRAP, /303370e08438977baa25f0cd9e16c8cc4c75fddd5297de40f56c94d3b80cfaa3/u);
   assert.match(ACTUAL_BOOTSTRAP, /GetEnvironmentVariable\(\$Name, 'User'\)/u);
+  assert.doesNotMatch(ACTUAL_BOOTSTRAP, /LOCAL_RELAY_DEVICE_SECRET/u);
+  assert.match(ACTUAL_BOOTSTRAP, /ISSUE185_RELAY_AUTHORIZATION/u);
+  assert.match(ACTUAL_BOOTSTRAP, /CONTROL_PLANE_API_KEY/u);
   assert.doesNotMatch(ACTUAL_BOOTSTRAP, /SetEnvironmentVariable\([^)]*,\s*'User'\)/u);
 
   const planIndex = ACTUAL_BOOTSTRAP.indexOf('if ($Plan) {');
