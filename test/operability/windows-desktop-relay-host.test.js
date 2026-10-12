@@ -170,7 +170,7 @@ test('bootstrap validator requires exact reviewed bytes and rejects raw secrets 
 });
 
 test('actual Computer2 bootstrap owns only Relay/Tunnel, hash-fences staged artifacts, and keeps dry-run credential-value-free', () => {
-  assert.match(ACTUAL_BOOTSTRAP, new RegExp(DESKTOP_RELAY_BOOTSTRAP_MARKER.replaceAll('#', '\\#'), 'u'));
+  assert.ok(ACTUAL_BOOTSTRAP.includes(DESKTOP_RELAY_BOOTSTRAP_MARKER));
   assert.match(ACTUAL_BOOTSTRAP, /\$RelayPorts = @\(18745, 18746, 18747\)/u);
   assert.match(ACTUAL_BOOTSTRAP, /\$TunnelPort = 18748/u);
   assert.match(ACTUAL_BOOTSTRAP, /excludedDeviceRuntimePort = 18749/u);
