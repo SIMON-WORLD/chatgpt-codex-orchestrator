@@ -161,6 +161,12 @@ test('cold-starts exact runtime and only verifies externally managed tunnel read
     spawnTunnel: async () => { tunnelStarts += 1; return { pid: 333, stop() {} }; },
     sleep: async () => {},
   });
+  let runtimeReadyTimeoutMs = null;
+  const originalWaitForLocalExact = coordinator._waitForLocalExact.bind(coordinator);
+  coordinator._waitForLocalExact = async (...args) => {
+    runtimeReadyTimeoutMs = args[4];
+    return await originalWaitForLocalExact(...args);
+  };
 
   const result = await coordinator.recover({ targetSha: SHA, configPath, repoPath: repo });
   assert.equal(result.status, 'PASS');
@@ -175,6 +181,7 @@ test('cold-starts exact runtime and only verifies externally managed tunnel read
   assert.equal(result.evidence.healthz.revision, SHA);
   assert.equal(result.evidence.readyz.revision, SHA);
   assert.equal(result.evidence.tunnel.status, 200);
+  assert.equal(runtimeReadyTimeoutMs, 15_000);
   assert.equal(calls.prepare, 1);
   assert.equal(calls.spawnRuntime, 1);
   assert.equal(runCalls, 0);
@@ -213,6 +220,12 @@ test('relay-agent profile cold-starts exact runtime without requiring external t
     probeJson: async () => { tunnelProbes += 1; throw new Error('relay-agent recovery must not probe external tunnel'); },
     sleep: async () => {},
   });
+  let runtimeReadyTimeoutMs = null;
+  const originalWaitForLocalExact = coordinator._waitForLocalExact.bind(coordinator);
+  coordinator._waitForLocalExact = async (...args) => {
+    runtimeReadyTimeoutMs = args[4];
+    return await originalWaitForLocalExact(...args);
+  };
 
   const result = await coordinator.recover({ targetSha: SHA, configPath, repoPath: repo });
   assert.equal(result.status, 'PASS');
@@ -224,6 +237,7 @@ test('relay-agent profile cold-starts exact runtime without requiring external t
   assert.equal(result.evidence.healthz.revision, SHA);
   assert.equal(result.evidence.readyz.revision, SHA);
   assert.equal(Object.prototype.hasOwnProperty.call(result.evidence, 'tunnel'), false);
+  assert.equal(runtimeReadyTimeoutMs, 60_000);
   assert.equal(tunnelProbes, 0);
   assert.equal(calls.prepare, 1);
   assert.equal(calls.spawnRuntime, 1);
