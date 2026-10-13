@@ -25,6 +25,8 @@ import {
 } from '../src/activation/filesystem-scope-installer.js';
 
 const STATE_FILE = 'stable-runtime-active.json';
+const DEFAULT_RUNTIME_READY_TIMEOUT_MS = 15_000;
+const RELAY_AGENT_RUNTIME_READY_TIMEOUT_MS = 60_000;
 const MAX_CAUSE_CHARS = 512;
 const EXPECTED_REPO_IDENTITY = 'github.com/simon-world/chatgpt-codex-orchestrator';
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
@@ -304,7 +306,7 @@ export class StableRuntimeRecoveryCoordinator {
     return assertExactCommitSha(validated.sha);
   }
 
-  async _waitForLocalExact(config, baseUrl, sha, expectedPid, timeoutMs = 15000) {
+  async _waitForLocalExact(config, baseUrl, sha, expectedPid, timeoutMs = DEFAULT_RUNTIME_READY_TIMEOUT_MS) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const local = await this.activator._probeLocal(baseUrl);
@@ -376,7 +378,10 @@ export class StableRuntimeRecoveryCoordinator {
           throw new StableRuntimeRecoveryError('recovery runtime did not return a valid process id', { phase: 'runtime_start' });
         }
         startedRuntimePid = started.pid;
-        await this._waitForLocalExact(config, baseUrl, sha, startedRuntimePid);
+        const runtimeReadyTimeoutMs = profileKind === 'relay-agent'
+          ? RELAY_AGENT_RUNTIME_READY_TIMEOUT_MS
+          : DEFAULT_RUNTIME_READY_TIMEOUT_MS;
+        await this._waitForLocalExact(config, baseUrl, sha, startedRuntimePid, runtimeReadyTimeoutMs);
         runtime = { action: 'started', pid: startedRuntimePid };
       }
 

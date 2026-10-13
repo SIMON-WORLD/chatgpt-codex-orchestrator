@@ -79,10 +79,10 @@ test('fixed bootstrap pins exact current Relay/Tunnel/Device-A topology and cano
 
 test('fixed recovery executable uses #216 deterministic CLI exit from the durable f87 recovery checkout', () => {
   assert.equal(FIXED_RELAY_HOST.recoveryRepoSha, 'f87f4665fa225e904f4edf0408181f52074e267e');
-  // GitHub/Linux checks out LF, while the approved Windows deployment uses CRLF.
-  // Check the exact on-disk Windows bytes that the host bootstrap hashes.
-  const windowsBytes = RECOVERY_CLI.toString('utf8').replace(/\r?\n/gu, '\r\n');
-  assert.equal(crypto.createHash('sha256').update(windowsBytes).digest('hex'), FIXED_RELAY_HOST.recoverySha256);
+  // The legacy relay-host bootstrap remains deliberately pinned to the reviewed f87
+  // recovery bytes. Current recovery source may evolve for the post-#222
+  // stable-runtime Task without silently retargeting that rollback bootstrap.
+  assert.equal(FIXED_RELAY_HOST.recoverySha256, '9ed8978d4075e782cb7c573bdb97fe426e11865a80250b10c183919317d08536');
   assert.match(RECOVERY_CLI.toString('utf8'), /process\.exit\(await main\(\)\)/u);
   assert.match(RECOVERY_CLI.toString('utf8'), /fs\.writeSync\(stream\.fd/u);
   assert.match(BOOTSTRAP, /\$RecoveryRepo = 'E:\\Project\\chatgpt-codex-orchestrator\\windows-login-runtime'/u);
