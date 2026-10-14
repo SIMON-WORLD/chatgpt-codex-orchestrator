@@ -243,6 +243,81 @@ test('relay-agent profile cold-starts exact runtime without requiring external t
   assert.equal(calls.spawnRuntime, 1);
 });
 
+test('relay-agent login recovery reuses a validated exact local active-state proof when origin fetch is unavailable', async () => {
+  const { repo, activationRoot, checkout, configPath, config } = relayFixture();
+  const first = makeActivator({
+    config,
+    repo,
+    checkout,
+    runtime: 'down',
+    pids: (state) => state === 'down' ? [] : [222],
+  });
+  const firstCoordinator = new StableRuntimeRecoveryCoordinator({
+    activator: first.activator,
+    sleep: async () => {},
+  });
+  const firstResult = await firstCoordinator.recover({ targetSha: SHA, configPath, repoPath: repo });
+  assert.equal(firstResult.status, 'PASS');
+  assert.deepEqual(first.calls.validateTarget, [SHA]);
+
+  const statePath = path.join(activationRoot, 'stable-runtime-active.json');
+  assert.equal(fs.existsSync(statePath), true);
+
+  const second = makeActivator({
+    config,
+    repo,
+    checkout,
+    runtime: 'down',
+    pids: (state) => state === 'down' ? [] : [222],
+    onValidateTarget: async () => {
+      throw new StableRuntimeActivationError('origin unavailable', { phase: 'target_binding' });
+    },
+  });
+  const secondCoordinator = new StableRuntimeRecoveryCoordinator({
+    activator: second.activator,
+    sleep: async () => {},
+  });
+
+  const secondResult = await secondCoordinator.recover({ targetSha: SHA, configPath, repoPath: repo });
+  assert.equal(secondResult.status, 'PASS');
+  assert.deepEqual(second.calls.validateTarget, []);
+
+  const checkpoint = JSON.parse(fs.readFileSync(path.join(activationRoot, 'stable-runtime-last-result.json'), 'utf8'));
+  assert.equal(checkpoint.status, 'PASS');
+  assert.equal(checkpoint.targetProof, 'validated-local-active-state');
+});
+
+test('relay-agent recovery still requires fresh origin proof when local active-state proof does not match', async () => {
+  const { repo, activationRoot, checkout, configPath, config } = relayFixture();
+  fs.mkdirSync(activationRoot, { recursive: true });
+  fs.writeFileSync(path.join(activationRoot, 'stable-runtime-active.json'), JSON.stringify({
+    version: 1,
+    sha: SHA,
+    checkout,
+    pid: 999,
+    configPath,
+    profileFingerprint: 'not-the-current-profile',
+    activatedAt: '2026-10-14T00:00:00.000Z',
+  }));
+
+  const { activator, calls } = makeActivator({
+    config,
+    repo,
+    checkout,
+    runtime: 'down',
+    onValidateTarget: async () => {
+      throw new StableRuntimeActivationError('origin unavailable', { phase: 'target_binding' });
+    },
+  });
+  const coordinator = new StableRuntimeRecoveryCoordinator({ activator, sleep: async () => {} });
+
+  await assert.rejects(
+    () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
+    (error) => error instanceof StableRuntimeRecoveryError && error.details.phase === 'target_binding',
+  );
+  assert.deepEqual(calls.validateTarget, [SHA]);
+});
+
 test('relay-agent recovery retry reuses exact runtime without duplicate start', async () => {
   const { repo, checkout, configPath, config } = relayFixture();
   const { activator, calls } = makeActivator({ config, repo, checkout, runtime: 'exact', pids: [111] });
