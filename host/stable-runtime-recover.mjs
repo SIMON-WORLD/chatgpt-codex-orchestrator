@@ -25,6 +25,7 @@ import {
 } from '../src/activation/filesystem-scope-installer.js';
 
 const STATE_FILE = 'stable-runtime-active.json';
+const RECOVERY_RESULT_FILE = 'stable-runtime-last-result.json';
 const DEFAULT_RUNTIME_READY_TIMEOUT_MS = 15_000;
 const RELAY_AGENT_RUNTIME_READY_TIMEOUT_MS = 60_000;
 const MAX_CAUSE_CHARS = 512;
@@ -308,8 +309,10 @@ export class StableRuntimeRecoveryCoordinator {
 
   async _waitForLocalExact(config, baseUrl, sha, expectedPid, timeoutMs = DEFAULT_RUNTIME_READY_TIMEOUT_MS) {
     const deadline = Date.now() + timeoutMs;
+    let lastLocal = null;
     while (Date.now() < deadline) {
       const local = await this.activator._probeLocal(baseUrl);
+      lastLocal = local;
       if (localExact(local, sha)) {
         const pids = await this.activator._listeningPids(config);
         if (pids.length !== 1 || (expectedPid && pids[0] !== expectedPid)) {
@@ -321,7 +324,24 @@ export class StableRuntimeRecoveryCoordinator {
       }
       await this.sleep(150);
     }
-    throw new StableRuntimeRecoveryError('Stable Runtime did not become ready at the exact recovery revision', { phase: 'runtime_readiness', sha });
+    const readyBody = lastLocal?.ready?.body || null;
+    throw new StableRuntimeRecoveryError('Stable Runtime did not become ready at the exact recovery revision', {
+      phase: 'runtime_readiness',
+      sha,
+      healthOk: lastLocal?.health?.ok === true,
+      healthStatus: Number(lastLocal?.health?.status || 0),
+      readyOk: lastLocal?.ready?.ok === true,
+      readyStatus: Number(lastLocal?.ready?.status || 0),
+      executorReady: typeof readyBody?.executorReady === 'boolean' ? readyBody.executorReady : null,
+      compositeDesktopCommander: readyBody?.compositeDesktopCommander ? {
+        state: String(readyBody.compositeDesktopCommander.state || ''),
+        version: String(readyBody.compositeDesktopCommander.version || ''),
+        generation: Number(readyBody.compositeDesktopCommander.generation || 0),
+        failureCode: readyBody.compositeDesktopCommander.failureCode == null
+          ? null
+          : String(readyBody.compositeDesktopCommander.failureCode),
+      } : null,
+    });
   }
 
   async recover({ targetSha = null, configPath, repoPath = null }) {
@@ -331,13 +351,22 @@ export class StableRuntimeRecoveryCoordinator {
     }
 
     let startedRuntimePid = null;
+    let resultPath = null;
+    let profileKind = null;
+    let credentialEnvPresent = null;
      try {
       assertNoCriticalBindingEnv(this.env);
       const config = this.activator.loadConfig(absoluteConfigPath);
-      const { baseUrl, profileKind } = this._requireRecoveryProfile(config);
+      const recoveryProfile = this._requireRecoveryProfile(config);
+      const { baseUrl } = recoveryProfile;
+      profileKind = recoveryProfile.profileKind;
       const repo = this._resolveRecoveryRepo(config, repoPath, profileKind);
       const activationRoot = deriveActivationRoot(repo);
       const statePath = path.join(activationRoot, STATE_FILE);
+      resultPath = path.join(activationRoot, RECOVERY_RESULT_FILE);
+      credentialEnvPresent = profileKind === 'relay-agent'
+        ? Boolean(this.env?.[String(config.relayAgent?.credentialEnv || '').trim()])
+        : null;
       const fingerprint = profileKind === 'relay-agent'
         ? relayAgentProfileFingerprint(config, repo)
         : stableProfileFingerprint(config);
@@ -431,19 +460,48 @@ export class StableRuntimeRecoveryCoordinator {
       };
       if (finalTunnel) evidence.tunnel = { status: finalTunnel.status };
 
-      return {
+      const result = {
         status: 'PASS', sha, repo, configPath: absoluteConfigPath, profileFingerprint: fingerprint,
         profileKind, runtime, tunnel, tunnelPreflight, evidence,
         tunnelLifecycle: profileKind === 'external-tunnel' ? 'external-preserved' : 'not-applicable-relay-agent',
         statePath,
       };
+      if (resultPath) {
+        writeJsonAtomic(this.activator.fs, resultPath, {
+          schema: 'stable-runtime-recovery-result-v1',
+          status: 'PASS',
+          phase: 'complete',
+          at: this.now(),
+          sha,
+          profileKind,
+          credentialEnvPresent,
+        });
+      }
+      return result;
     } catch (error) {
       if (startedRuntimePid) { try { this.activator.stopPid(startedRuntimePid); } catch {} }
-      if (error instanceof StableRuntimeRecoveryError) throw error;
-      if (error instanceof StableRuntimeActivationError) {
-        throw new StableRuntimeRecoveryError(error.message, { ...safeDetails(error.details), cause: boundedCause(error) });
+      let normalized;
+      if (error instanceof StableRuntimeRecoveryError) normalized = error;
+      else if (error instanceof StableRuntimeActivationError) {
+        normalized = new StableRuntimeRecoveryError(error.message, { ...safeDetails(error.details), cause: boundedCause(error) });
+      } else {
+        normalized = new StableRuntimeRecoveryError(error?.message || String(error), { phase: 'recovery', cause: boundedCause(error) });
       }
-      throw new StableRuntimeRecoveryError(error?.message || String(error), { phase: 'recovery', cause: boundedCause(error) });
+      if (resultPath) {
+        try {
+          const failure = recoveryFailurePayload(normalized);
+          writeJsonAtomic(this.activator.fs, resultPath, {
+            schema: 'stable-runtime-recovery-result-v1',
+            status: 'FAIL',
+            phase: String(failure.phase || 'recovery'),
+            at: this.now(),
+            profileKind,
+            credentialEnvPresent,
+            failure,
+          });
+        } catch {}
+      }
+      throw normalized;
     }
   }
 }
