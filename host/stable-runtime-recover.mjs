@@ -297,14 +297,12 @@ export class StableRuntimeRecoveryCoordinator {
     }
   }
 
-  async _selectTarget({ targetSha, statePath, fingerprint, configPath }) {
+  _selectTarget({ targetSha, validatedState }) {
     if (targetSha) return assertExactCommitSha(targetSha);
-    const state = readJsonIfPresent(this.activator.fs, statePath);
-    const validated = await this.activator._validateRollbackState(state, { fingerprint, configPath });
-    if (!validated) {
+    if (!validatedState) {
       throw new StableRuntimeRecoveryError('no validated same-profile exact last-active revision is available; provide --sha explicitly', { phase: 'target_binding' });
     }
-    return assertExactCommitSha(validated.sha);
+    return assertExactCommitSha(validatedState.sha);
   }
 
   async _waitForLocalExact(config, baseUrl, sha, expectedPid, timeoutMs = DEFAULT_RUNTIME_READY_TIMEOUT_MS) {
@@ -370,12 +368,22 @@ export class StableRuntimeRecoveryCoordinator {
       const fingerprint = profileKind === 'relay-agent'
         ? relayAgentProfileFingerprint(config, repo)
         : stableProfileFingerprint(config);
-      const sha = await this._selectTarget({ targetSha, statePath, fingerprint, configPath: absoluteConfigPath });
+      const persistedState = readJsonIfPresent(this.activator.fs, statePath);
+      const validatedState = await this.activator._validateRollbackState(persistedState, {
+        fingerprint,
+        configPath: absoluteConfigPath,
+      });
+      const sha = this._selectTarget({ targetSha, validatedState });
 
-      try { await this.activator._validateTarget(repo, sha); }
-      catch (error) {
-        const phase = error instanceof StableRuntimeActivationError ? (error.details?.phase || 'target_binding') : 'target_binding';
-        throw new StableRuntimeRecoveryError(error?.message || 'target validation failed', { phase, cause: boundedCause(error) });
+      const canReuseDurableTargetProof = profileKind === 'relay-agent'
+        && validatedState
+        && validatedState.sha === sha;
+      if (!canReuseDurableTargetProof) {
+        try { await this.activator._validateTarget(repo, sha); }
+        catch (error) {
+          const phase = error instanceof StableRuntimeActivationError ? (error.details?.phase || 'target_binding') : 'target_binding';
+          throw new StableRuntimeRecoveryError(error?.message || 'target validation failed', { phase, cause: boundedCause(error) });
+        }
       }
 
       const before = await this.activator._probeLocal(baseUrl);
@@ -475,6 +483,7 @@ export class StableRuntimeRecoveryCoordinator {
           sha,
           profileKind,
           credentialEnvPresent,
+          targetProof: canReuseDurableTargetProof ? 'validated-local-active-state' : 'fresh-origin-main',
         });
       }
       return result;
@@ -497,6 +506,7 @@ export class StableRuntimeRecoveryCoordinator {
             at: this.now(),
             profileKind,
             credentialEnvPresent,
+            targetProof: 'unresolved',
             failure,
           });
         } catch {}
