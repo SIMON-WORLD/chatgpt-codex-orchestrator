@@ -429,6 +429,89 @@ test('recovery CLI emits final FAIL evidence and exits non-zero despite an unrel
   }
 });
 
+test('runtime readiness timeout keeps only bounded composite executor diagnostics', async () => {
+  const activator = {
+    _probeLocal: async () => ({
+      health: { ok: true, status: 200, body: { status: 'ok', revision: SHA } },
+      ready: {
+        ok: false,
+        status: 503,
+        body: {
+          status: 'not_ready',
+          revision: SHA,
+          executorReady: false,
+          compositeDesktopCommander: {
+            state: 'failed',
+            version: '0.2.51',
+            generation: 0,
+            failureCode: 'CHILD_START_FAILED',
+          },
+        },
+      },
+    }),
+    _listeningPids: async () => [222],
+  };
+  const coordinator = new StableRuntimeRecoveryCoordinator({
+    activator,
+    sleep: async () => new Promise((resolve) => setTimeout(resolve, 25)),
+  });
+
+  await assert.rejects(
+    () => coordinator._waitForLocalExact({}, 'http://127.0.0.1:8745', SHA, 222, 20),
+    (error) => {
+      assert.equal(error instanceof StableRuntimeRecoveryError, true);
+      assert.equal(error.details.phase, 'runtime_readiness');
+      assert.equal(error.details.healthOk, true);
+      assert.equal(error.details.readyOk, false);
+      assert.equal(error.details.readyStatus, 503);
+      assert.equal(error.details.executorReady, false);
+      assert.deepEqual(error.details.compositeDesktopCommander, {
+        state: 'failed',
+        version: '0.2.51',
+        generation: 0,
+        failureCode: 'CHILD_START_FAILED',
+      });
+      return true;
+    },
+  );
+});
+
+test('relay-agent recovery writes a secret-free durable failure checkpoint', async () => {
+  const { repo, activationRoot, checkout, configPath, config } = relayFixture();
+  const secret = 'do-not-persist-this-secret-value';
+  const { activator, calls } = makeActivator({
+    config,
+    repo,
+    checkout,
+    runtime: 'down',
+    onValidateTarget: async () => {
+      throw new StableRuntimeActivationError('target unavailable', { phase: 'target_binding' });
+    },
+  });
+  const coordinator = new StableRuntimeRecoveryCoordinator({
+    activator,
+    env: { ISSUE185_DEVICE_B_SECRET: secret },
+  });
+
+  await assert.rejects(
+    () => coordinator.recover({ targetSha: SHA, configPath, repoPath: repo }),
+    (error) => error instanceof StableRuntimeRecoveryError && error.details.phase === 'target_binding',
+  );
+
+  const resultPath = path.join(activationRoot, 'stable-runtime-last-result.json');
+  const raw = fs.readFileSync(resultPath, 'utf8');
+  const checkpoint = JSON.parse(raw);
+  assert.equal(checkpoint.schema, 'stable-runtime-recovery-result-v1');
+  assert.equal(checkpoint.status, 'FAIL');
+  assert.equal(checkpoint.phase, 'target_binding');
+  assert.equal(checkpoint.profileKind, 'relay-agent');
+  assert.equal(checkpoint.credentialEnvPresent, true);
+  assert.equal(checkpoint.failure.phase, 'target_binding');
+  assert.equal(raw.includes(secret), false);
+  assert.equal(calls.prepare, 0);
+  assert.equal(calls.spawnRuntime, 0);
+});
+
 test('target validation failure remains fail-closed and does not prepare or start runtime', async () => {
   const { repo, checkout, configPath, config } = fixture();
   const { activator, calls } = makeActivator({
