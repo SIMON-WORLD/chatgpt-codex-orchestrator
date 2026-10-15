@@ -37,6 +37,10 @@ function reviewedBootstrapBody() {
     '$RelayPorts = @(18745, 18746, 18747)',
     '$TunnelPort = 18748',
     "$TunnelProfile = 'issue-185-relay'",
+    "$TailscaleExe = 'C:\\Program Files\\Tailscale\\tailscale.exe'",
+    "$TailscaleServeHost = 'desktop-2.tail4d2a66.ts.net:443'",
+    "$TailscaleServeTarget = 'http://127.0.0.1:18747'",
+    'function Ensure-ExactTailscaleServe { tailscale.exe serve status --json }',
     'function Wait-ExactRelayStartup([int]$ExpectedPid) { return $ExpectedPid }',
     'function Wait-ExactTunnelStartup([int]$ExpectedPid) { return $ExpectedPid }',
   ].join('\n');
@@ -169,10 +173,18 @@ test('bootstrap validator requires exact reviewed bytes and rejects raw secrets 
   }), /must not recover Device A\/B/u);
 });
 
-test('actual Computer2 bootstrap owns only Relay/Tunnel, hash-fences staged artifacts, and keeps dry-run credential-value-free', () => {
+test('actual Computer2 bootstrap owns Relay/Tunnel plus exact Tailscale Serve recovery, and keeps dry-run credential-value-free', () => {
   assert.ok(ACTUAL_BOOTSTRAP.includes(DESKTOP_RELAY_BOOTSTRAP_MARKER));
   assert.match(ACTUAL_BOOTSTRAP, /\$RelayPorts = @\(18745, 18746, 18747\)/u);
   assert.match(ACTUAL_BOOTSTRAP, /\$TunnelPort = 18748/u);
+  assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleExe = 'C:\\\\Program Files\\\\Tailscale\\\\tailscale\.exe'/u);
+  assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleServeHost = 'desktop-2\.tail4d2a66\.ts\.net:443'/u);
+  assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleServeTarget = 'http:\/\/127\.0\.0\.1:18747'/u);
+  assert.match(ACTUAL_BOOTSTRAP, /serve status --json/u);
+  assert.match(ACTUAL_BOOTSTRAP, /serve --bg --yes \$TailscaleServeTarget/u);
+  assert.match(ACTUAL_BOOTSTRAP, /Ensure-ExactTailscaleServe/u);
+  assert.match(ACTUAL_BOOTSTRAP, /'serve_ready'/u);
+  assert.doesNotMatch(ACTUAL_BOOTSTRAP, /tailscale(?:\.exe)?\s+(?:serve\s+)?(?:reset|clear)|tailscale(?:\.exe)?\s+funnel/iu);
   assert.match(ACTUAL_BOOTSTRAP, /excludedDeviceRuntimePort = 18749/u);
   assert.doesNotMatch(ACTUAL_BOOTSTRAP, /stable-runtime-recover\.mjs|private-relay-doctor\.mjs/u);
   assert.doesNotMatch(ACTUAL_BOOTSTRAP, /schtasks|Register-ScheduledTask|New-Service|sc\.exe/iu);
