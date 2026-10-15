@@ -187,7 +187,7 @@ test('actual Computer2 bootstrap owns Relay/Tunnel plus exact Tailscale Serve re
   assert.ok(ACTUAL_BOOTSTRAP.includes(DESKTOP_RELAY_BOOTSTRAP_MARKER));
   assert.match(ACTUAL_BOOTSTRAP, /\$RelayPorts = @\(18745, 18746, 18747\)/u);
   assert.match(ACTUAL_BOOTSTRAP, /\$TunnelPort = 18748/u);
-  assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleExe = 'C:\\\\Program Files\\\\Tailscale\\\\tailscale\.exe'/u);
+  assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleExe = 'C:\\Program Files\\Tailscale\\tailscale\.exe'/u);
   assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleServeHost = 'desktop-2\.tail4d2a66\.ts\.net:443'/u);
   assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleServeTarget = 'http:\/\/127\.0\.0\.1:18747'/u);
   assert.match(ACTUAL_BOOTSTRAP, /serve status --json/u);
