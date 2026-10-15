@@ -120,9 +120,10 @@ npm run autostart:desktop-relay-host -- uninstall
 - Relay MCP :18745;
 - Relay internal API :18746;
 - agent ingress :18747;
-- Secure MCP Tunnel readiness :18748.
+- Secure MCP Tunnel readiness :18748;
+- the exact tailnet-only Tailscale Serve ingress `https://desktop-2.tail4d2a66.ts.net:443 -> http://127.0.0.1:18747`.
 
-It **does not** recover Device A or Device B and does not own :18749. It does not install Tasks, change Tailscale Serve, edit agent configs or copy credentials.
+It **does not** recover Device A or Device B and does not own :18749. It does not install Tasks, edit agent configs, copy credentials, enable Funnel, or reset/clear unrelated Tailscale Serve configuration. On login it may create the one reviewed Serve mapping only when Serve is absent; an existing non-exact Serve configuration fails closed instead of being overwritten.
 
 Before starting anything it fail-closes on:
 
@@ -131,7 +132,8 @@ Before starting anything it fail-closes on:
 - missing staged `relay.sqlite`;
 - foreign/partial/ambiguous listener ownership;
 - missing User-scope credential references;
-- wrong process path/command/profile.
+- wrong process path/command/profile;
+- missing Tailscale executable, unavailable Serve status, or any existing Serve configuration that differs from the reviewed desktop-2 :443 -> 127.0.0.1:18747 mapping.
 
 `-Plan` checks only the **presence** of the required User-scope references and exits before reading their values. Non-plan execution reads only the Relay/Tunnel-host references it actually needs into process memory:
 
@@ -165,7 +167,7 @@ No snapshot boolean such as `parentCutoverApproved: true` can grant host-change 
 7. **Start destination** — prove source Relay/Tunnel are fenced, then run the reviewed Computer2 bootstrap. There must be only one active Relay writer and one tunnel queue client.
 8. **Install/update login Tasks** — install the distinct Computer2 Relay-host Task after destination canaries; refresh the existing Device B #212 Task binding for the new relayUrl without changing its role/name/privilege, and convert Computer1's existing #212 Task from old Relay-host recovery to Device A Stable Runtime recovery.
 9. **Acceptance** — the existing ChatGPT connector must list exact B Ready, open a B workspace and execute a harmless B process with exit 0. Then, with separately approved real laptop shutdown, B must remain usable while Computer1 is off. When Computer1 returns, A must reconnect with its original identity.
-10. **Cold-login proof** — a real Computer2 Windows login must restore the Relay/Tunnel host and Device B using the two non-conflicting Tasks.
+10. **Cold-login proof** — a real Computer2 Windows login must restore the Relay/Tunnel host, the exact tailnet-only Tailscale Serve ingress, and Device B using the two non-conflicting Tasks; Device A must then be able to reconnect through that restored ingress without manual network repair.
 
 ## Rollback
 

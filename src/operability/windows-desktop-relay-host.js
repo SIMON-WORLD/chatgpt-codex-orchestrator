@@ -87,6 +87,16 @@ export function validateDesktopRelayBootstrap({
     throw new Error('desktop Relay bootstrap must own only Relay/Tunnel ports 18745-18748');
   }
   if (!text.includes("issue-185-relay")) throw new Error('desktop Relay bootstrap tunnel profile binding missing');
+  if (!text.includes("$TailscaleExe = 'C:\\Program Files\\Tailscale\\tailscale.exe'")
+      || !text.includes("$TailscaleServeHost = 'desktop-2.tail4d2a66.ts.net:443'")
+      || !text.includes("$TailscaleServeTarget = 'http://127.0.0.1:18747'")
+      || !text.includes('Ensure-ExactTailscaleServe')
+      || !text.includes('serve status --json')) {
+    throw new Error('desktop Relay bootstrap exact Tailscale Serve recovery binding missing');
+  }
+  if (/tailscale(?:\.exe)?\s+(?:serve\s+)?(?:reset|clear)|tailscale(?:\.exe)?\s+funnel/iu.test(text)) {
+    throw new Error('desktop Relay bootstrap must not reset, clear, or funnel Tailscale routing');
+  }
   if (/(?:stable-runtime-recover\.mjs|private-relay-doctor\.mjs)/u.test(text)) {
     throw new Error('desktop Relay bootstrap must not recover Device A/B Stable Runtime');
   }
