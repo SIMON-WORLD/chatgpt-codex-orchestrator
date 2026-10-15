@@ -173,11 +173,21 @@ test('bootstrap validator requires exact reviewed bytes and rejects raw secrets 
   }), /must not recover Device A\/B/u);
 });
 
+test('actual reviewed bootstrap validates as one exact deployable artifact', () => {
+  const fsImpl = readOnlyFs({ [path.win32.normalize(BOOTSTRAP)]: ACTUAL_BOOTSTRAP });
+  const validated = validateDesktopRelayBootstrap({
+    bootstrapPath: BOOTSTRAP,
+    bootstrapSha256: hash(ACTUAL_BOOTSTRAP),
+    fsImpl,
+  });
+  assert.equal(validated.bootstrapSha256, hash(ACTUAL_BOOTSTRAP));
+});
+
 test('actual Computer2 bootstrap owns Relay/Tunnel plus exact Tailscale Serve recovery, and keeps dry-run credential-value-free', () => {
   assert.ok(ACTUAL_BOOTSTRAP.includes(DESKTOP_RELAY_BOOTSTRAP_MARKER));
   assert.match(ACTUAL_BOOTSTRAP, /\$RelayPorts = @\(18745, 18746, 18747\)/u);
   assert.match(ACTUAL_BOOTSTRAP, /\$TunnelPort = 18748/u);
-  assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleExe = 'C:\\\\Program Files\\\\Tailscale\\\\tailscale\.exe'/u);
+  assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleExe = 'C:\\Program Files\\Tailscale\\tailscale\.exe'/u);
   assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleServeHost = 'desktop-2\.tail4d2a66\.ts\.net:443'/u);
   assert.match(ACTUAL_BOOTSTRAP, /\$TailscaleServeTarget = 'http:\/\/127\.0\.0\.1:18747'/u);
   assert.match(ACTUAL_BOOTSTRAP, /serve status --json/u);
