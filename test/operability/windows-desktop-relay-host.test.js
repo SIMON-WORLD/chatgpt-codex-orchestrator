@@ -211,8 +211,8 @@ test('actual Computer2 bootstrap owns Relay/Tunnel plus exact Tailscale Serve re
   assert.match(ACTUAL_BOOTSTRAP, /CONTROL_PLANE_API_KEY/u);
   assert.doesNotMatch(ACTUAL_BOOTSTRAP, /SetEnvironmentVariable\([^)]*,\s*'User'\)/u);
 
-  assert.match(ACTUAL_BOOTSTRAP, /\\$state = Get-TailscaleServeState/u);
-  assert.doesNotMatch(ACTUAL_BOOTSTRAP, /try\\s*\\{\\s*\\$state = Get-TailscaleServeState\\s*\\}\\s*catch\\s*\\{\\s*\\}/u);
+  assert.ok(ACTUAL_BOOTSTRAP.includes('    $state = Get-TailscaleServeState'));
+  assert.ok(!ACTUAL_BOOTSTRAP.includes('try { $state = Get-TailscaleServeState } catch {}'));
   assert.match(ACTUAL_BOOTSTRAP, /Tailscale Serve exact ingress readiness timeout after create attempts/u);
 
   const planIndex = ACTUAL_BOOTSTRAP.indexOf('if ($Plan) {');
