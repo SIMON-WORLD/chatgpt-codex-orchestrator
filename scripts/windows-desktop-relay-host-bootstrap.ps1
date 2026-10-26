@@ -158,7 +158,7 @@ function Ensure-ExactTailscaleServe([int]$TimeoutMs = 30000) {
   $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
   do {
     $state = $null
-    try { $state = Get-TailscaleServeState } catch {}
+    $state = Get-TailscaleServeState
     if ($state -eq 'exact') { return }
     if ($state -eq 'drift') { throw 'existing Tailscale Serve configuration differs from reviewed Relay ingress' }
     if ($state -eq 'absent') {
@@ -167,7 +167,7 @@ function Ensure-ExactTailscaleServe([int]$TimeoutMs = 30000) {
     }
     Start-Sleep -Milliseconds 500
   } while ($elapsed.ElapsedMilliseconds -lt $TimeoutMs)
-  throw 'Tailscale Serve exact ingress readiness timeout'
+  throw 'Tailscale Serve exact ingress readiness timeout after create attempts'
 }
 
 function Assert-TunnelReady {
