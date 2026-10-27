@@ -211,9 +211,33 @@ test('actual Computer2 bootstrap owns Relay/Tunnel plus exact Tailscale Serve re
   assert.match(ACTUAL_BOOTSTRAP, /CONTROL_PLANE_API_KEY/u);
   assert.doesNotMatch(ACTUAL_BOOTSTRAP, /SetEnvironmentVariable\([^)]*,\s*'User'\)/u);
 
-  assert.ok(ACTUAL_BOOTSTRAP.includes('    $state = Get-TailscaleServeState'));
-  assert.ok(!ACTUAL_BOOTSTRAP.includes('try { $state = Get-TailscaleServeState } catch {}'));
-  assert.match(ACTUAL_BOOTSTRAP, /Tailscale Serve exact ingress readiness timeout after create attempts/u);
+  // Cold-login status may be temporarily unavailable. Keep bounded retries
+  // without silently discarding the failure class or logging raw command errors.
+  const serveStart = ACTUAL_BOOTSTRAP.indexOf('function Ensure-ExactTailscaleServe');
+  const serveEnd = ACTUAL_BOOTSTRAP.indexOf('\n}\n\nfunction Assert-TunnelReady', serveStart);
+  assert.ok(serveStart >= 0 && serveEnd > serveStart, 'Serve readiness function must be extractable');
+  const serve = ACTUAL_BOOTSTRAP.slice(serveStart, serveEnd);
+  assert.match(serve, /\$elapsed = \[System\.Diagnostics\.Stopwatch\]::StartNew\(\)/u);
+  assert.match(serve, /try\s*\{\s*\$state = Get-TailscaleServeState\s*\}\s*catch\s*\{/u);
+  assert.match(serve, /\$message -eq 'Tailscale Serve status unavailable'/u);
+  assert.match(serve, /\$message -eq 'Tailscale Serve status JSON invalid'/u);
+  assert.match(serve, /\$script:ServeFailureClass = 'status_unavailable'/u);
+  assert.match(serve, /\$script:ServeFailureClass = 'status_json_invalid'/u);
+  assert.match(serve, /Start-Sleep -Milliseconds 500\s+continue/u);
+  assert.match(serve, /\$state -eq 'drift'/u);
+  assert.match(serve, /\$script:ServeFailureClass = 'configuration_drift'/u);
+  assert.match(serve, /\$createAttempted = \$true/u);
+  assert.match(serve, /\$script:ServeFailureClass = 'create_command_failed'/u);
+  assert.match(serve, /Tailscale Serve exact ingress readiness timeout after create attempts/u);
+  assert.match(serve, /Tailscale Serve status remained unavailable after readiness retries/u);
+  assert.doesNotMatch(serve, /Write-Output|Write-Host/u, 'Serve must not log raw status errors');
+  assert.ok(!serve.includes('try { $state = Get-TailscaleServeState } catch {}'));
+  const trapStart = ACTUAL_BOOTSTRAP.indexOf('trap {');
+  const trapEnd = ACTUAL_BOOTSTRAP.indexOf('\n}\n\nfunction Assert-ExactFileHash', trapStart);
+  assert.ok(trapStart >= 0 && trapEnd > trapStart, 'safe failure trap must be extractable');
+  const trap = ACTUAL_BOOTSTRAP.slice(trapStart, trapEnd);
+  assert.match(trap, /reason=' \+ \$script:ServeFailureClass/u);
+  assert.doesNotMatch(trap, /Exception\.Message/u, 'trap must print only an allowlisted reason code');
 
   const planIndex = ACTUAL_BOOTSTRAP.indexOf('if ($Plan) {');
   const secretValueIndex = ACTUAL_BOOTSTRAP.indexOf("$relayRefValue = Get-UserRef");
