@@ -116,6 +116,9 @@ export function buildDesktopRelayTaskAction({
   const powershell = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
   const command = [
     "$p='" + bootstrap.replaceAll("'", "''") + "'",
+    // Windows PowerShell 5.1 may auto-select the incompatible PowerShell 7 Utility
+    // module on a host with both versions installed. Pin the built-in 5.1 one.
+    "Import-Module Microsoft.PowerShell.Utility -RequiredVersion '3.1.0.0' -ErrorAction Stop",
     '$h=(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()',
     "if ($h -ne '" + expected + "') { throw 'desktop Relay bootstrap hash drift' }",
     '& $p',
