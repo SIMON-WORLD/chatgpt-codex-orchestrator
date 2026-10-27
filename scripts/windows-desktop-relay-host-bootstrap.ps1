@@ -38,6 +38,16 @@ function Write-SafeCheckpoint([string]$Status, [string]$Phase) {
     phase = $Phase
     at = (Get-Date).ToUniversalTime().ToString('o')
   }
+  if ($Status -eq 'FAIL' -and $Phase -eq 'serve_ready') {
+    # Only persisted failure categories are allowed; never store raw CLI output.
+    $allowedReasons = @(
+      'none', 'status_unavailable', 'status_json_invalid',
+      'unexpected_status_failure', 'configuration_drift',
+      'create_pending', 'create_command_failed'
+    )
+    if ($script:ServeFailureClass -notin $allowedReasons) { throw 'invalid Serve diagnostic class' }
+    $record['reason'] = $script:ServeFailureClass
+  }
   $directory = Split-Path -Parent $CheckpointPath
   if (-not (Test-Path -LiteralPath $directory -PathType Container)) { throw 'checkpoint directory missing' }
   $temporary = Join-Path $directory 'last-result.tmp'
