@@ -80,7 +80,13 @@ test('desktop Relay Task is distinct from Device B Task and is exact AtLogOn lea
   assert.equal(parsed.restartInterval, 'PT1M');
   assert.equal(parsed.restartCount, 5);
   assert.match(parsed.action.arguments, /desktop-relay-host-bootstrap\.ps1/u);
+  assert.match(parsed.action.arguments, /Import-Module Microsoft\.PowerShell\.Utility -RequiredVersion '3\.1\.0\.0' -ErrorAction Stop/u);
   assert.match(parsed.action.arguments, /Get-FileHash/u);
+  assert.ok(
+    parsed.action.arguments.indexOf('Import-Module Microsoft.PowerShell.Utility')
+      < parsed.action.arguments.indexOf('Get-FileHash'),
+    'Windows PowerShell 5.1 Utility module must be pinned before hash check',
+  );
   assert.equal(parsed.action.workingDirectory, path.win32.dirname(DESKTOP_RELAY_DURABLE_BOOTSTRAP_PATH));
   assert.equal(parsed.sensitiveMetadataDetected, false);
   assert.doesNotMatch(xml, /ISSUE185_RELAY_AUTHORIZATION|LOCAL_RELAY_DEVICE_SECRET|CONTROL_PLANE_API_KEY|Bearer\s/u);
@@ -211,6 +217,34 @@ test('actual Computer2 bootstrap owns Relay/Tunnel plus exact Tailscale Serve re
   assert.match(ACTUAL_BOOTSTRAP, /CONTROL_PLANE_API_KEY/u);
   assert.doesNotMatch(ACTUAL_BOOTSTRAP, /SetEnvironmentVariable\([^)]*,\s*'User'\)/u);
 
+  // Cold-login status may be temporarily unavailable. Keep bounded retries
+  // without silently discarding the failure class or logging raw command errors.
+  const serveStart = ACTUAL_BOOTSTRAP.indexOf('function Ensure-ExactTailscaleServe');
+  const serveEnd = ACTUAL_BOOTSTRAP.indexOf('\n}\n\nfunction Assert-TunnelReady', serveStart);
+  assert.ok(serveStart >= 0 && serveEnd > serveStart, 'Serve readiness function must be extractable');
+  const serve = ACTUAL_BOOTSTRAP.slice(serveStart, serveEnd);
+  assert.match(serve, /\$elapsed = \[System\.Diagnostics\.Stopwatch\]::StartNew\(\)/u);
+  assert.match(serve, /try\s*\{\s*\$state = Get-TailscaleServeState\s*\}\s*catch\s*\{/u);
+  assert.match(serve, /\$message -eq 'Tailscale Serve status unavailable'/u);
+  assert.match(serve, /\$message -eq 'Tailscale Serve status JSON invalid'/u);
+  assert.match(serve, /\$script:ServeFailureClass = 'status_unavailable'/u);
+  assert.match(serve, /\$script:ServeFailureClass = 'status_json_invalid'/u);
+  assert.match(serve, /Start-Sleep -Milliseconds 500\s+continue/u);
+  assert.match(serve, /\$state -eq 'drift'/u);
+  assert.match(serve, /\$script:ServeFailureClass = 'configuration_drift'/u);
+  assert.match(serve, /\$createAttempted = \$true/u);
+  assert.match(serve, /\$script:ServeFailureClass = 'create_command_failed'/u);
+  assert.match(serve, /Tailscale Serve exact ingress readiness timeout after create attempts/u);
+  assert.match(serve, /Tailscale Serve status remained unavailable after readiness retries/u);
+  assert.doesNotMatch(serve, /Write-Output|Write-Host/u, 'Serve must not log raw status errors');
+  assert.ok(!serve.includes('try { $state = Get-TailscaleServeState } catch {}'));
+  const trapStart = ACTUAL_BOOTSTRAP.indexOf('trap {');
+  const trapEnd = ACTUAL_BOOTSTRAP.indexOf('\n}\n\nfunction Assert-ExactFileHash', trapStart);
+  assert.ok(trapStart >= 0 && trapEnd > trapStart, 'safe failure trap must be extractable');
+  const trap = ACTUAL_BOOTSTRAP.slice(trapStart, trapEnd);
+  assert.match(trap, /reason=' \+ \$script:ServeFailureClass/u);
+  assert.doesNotMatch(trap, /Exception\.Message/u, 'trap must print only an allowlisted reason code');
+
   const planIndex = ACTUAL_BOOTSTRAP.indexOf('if ($Plan) {');
   const secretValueIndex = ACTUAL_BOOTSTRAP.indexOf("$relayRefValue = Get-UserRef");
   assert.ok(planIndex > 0 && secretValueIndex > planIndex, 'dry-run must exit before reading credential values');
@@ -221,4 +255,13 @@ test('actual Computer2 bootstrap owns Relay/Tunnel plus exact Tailscale Serve re
   assert.ok(writerStart >= 0 && writerEnd > writerStart, 'checkpoint writer block must be extractable');
   const writer = normalizedBootstrap.slice(writerStart, writerEnd);
   assert.doesNotMatch(writer, /relayRefValue|deviceRefValue|controlRefValue|Get-UserRef|GetEnvironmentVariable|Exception|CommandLine/u);
+  assert.match(writer, /\$Status -eq 'FAIL' -and \$Phase -eq 'serve_ready'/u);
+  assert.match(writer, /\$script:ServeFailureClass -notin \$allowedReasons/u);
+  assert.match(writer, /\$record\['reason'\] = \$script:ServeFailureClass/u);
+  for (const code of [
+    'status_unavailable', 'status_json_invalid', 'unexpected_status_failure',
+    'configuration_drift', 'create_pending', 'create_command_failed',
+  ]) {
+    assert.ok(writer.includes("'" + code + "'"), 'checkpoint must explicitly allow ' + code);
+  }
 });
