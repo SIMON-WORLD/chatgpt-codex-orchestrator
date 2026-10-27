@@ -27,6 +27,7 @@ $McpRef = ('Author' + 'ization: env:ISSUE185_RELAY_AUTHORIZATION')
 $CheckpointPath = Join-Path $RuntimeRoot 'windows-login\last-result.json'
 $script:CheckpointArmed = -not $Plan
 $script:FailurePhase = 'preflight'
+$script:ServeFailureClass = 'none'
 
 function Write-SafeCheckpoint([string]$Status, [string]$Phase) {
   $allowed = @('preflight', 'relay_start', 'relay_ready', 'tunnel_start', 'tunnel_ready', 'serve_ready', 'complete')
@@ -48,7 +49,8 @@ trap {
   if ($script:CheckpointArmed) {
     try { Write-SafeCheckpoint 'FAIL' $script:FailurePhase } catch {}
   }
-  Write-Output ('WINDOWS_DESKTOP_RELAY_HOST_BOOTSTRAP FAIL phase=' + $script:FailurePhase)
+  $safeServeReason = if ($script:FailurePhase -eq 'serve_ready') { ' reason=' + $script:ServeFailureClass } else { '' }
+  Write-Output ('WINDOWS_DESKTOP_RELAY_HOST_BOOTSTRAP FAIL phase=' + $script:FailurePhase + $safeServeReason)
   exit 1
 }
 
@@ -156,18 +158,45 @@ function Get-TailscaleServeState {
 
 function Ensure-ExactTailscaleServe([int]$TimeoutMs = 30000) {
   $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
+  $createAttempted = $false
   do {
     $state = $null
-    $state = Get-TailscaleServeState
+    try {
+      $state = Get-TailscaleServeState
+    } catch {
+      # A cold-login Tailscale status probe may temporarily be unavailable.
+      # Retry only these two known status-query failures; never print raw CLI/errors.
+      $message = [string]$_.Exception.Message
+      if ($message -eq 'Tailscale Serve status unavailable') {
+        $script:ServeFailureClass = 'status_unavailable'
+      } elseif ($message -eq 'Tailscale Serve status JSON invalid') {
+        $script:ServeFailureClass = 'status_json_invalid'
+      } else {
+        $script:ServeFailureClass = 'unexpected_status_failure'
+        throw
+      }
+      Start-Sleep -Milliseconds 500
+      continue
+    }
     if ($state -eq 'exact') { return }
-    if ($state -eq 'drift') { throw 'existing Tailscale Serve configuration differs from reviewed Relay ingress' }
+    if ($state -eq 'drift') {
+      $script:ServeFailureClass = 'configuration_drift'
+      throw 'existing Tailscale Serve configuration differs from reviewed Relay ingress'
+    }
     if ($state -eq 'absent') {
+      $createAttempted = $true
+      $script:ServeFailureClass = 'create_pending'
       & $TailscaleExe serve --bg --yes $TailscaleServeTarget | Out-Null
-      if ($LASTEXITCODE -ne 0) { Start-Sleep -Milliseconds 500; continue }
+      if ($LASTEXITCODE -ne 0) {
+        $script:ServeFailureClass = 'create_command_failed'
+        Start-Sleep -Milliseconds 500
+        continue
+      }
     }
     Start-Sleep -Milliseconds 500
   } while ($elapsed.ElapsedMilliseconds -lt $TimeoutMs)
-  throw 'Tailscale Serve exact ingress readiness timeout after create attempts'
+  if ($createAttempted) { throw 'Tailscale Serve exact ingress readiness timeout after create attempts' }
+  throw 'Tailscale Serve status remained unavailable after readiness retries'
 }
 
 function Assert-TunnelReady {
