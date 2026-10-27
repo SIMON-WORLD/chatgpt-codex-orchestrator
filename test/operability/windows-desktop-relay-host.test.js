@@ -249,4 +249,13 @@ test('actual Computer2 bootstrap owns Relay/Tunnel plus exact Tailscale Serve re
   assert.ok(writerStart >= 0 && writerEnd > writerStart, 'checkpoint writer block must be extractable');
   const writer = normalizedBootstrap.slice(writerStart, writerEnd);
   assert.doesNotMatch(writer, /relayRefValue|deviceRefValue|controlRefValue|Get-UserRef|GetEnvironmentVariable|Exception|CommandLine/u);
+  assert.match(writer, /\$Status -eq 'FAIL' -and \$Phase -eq 'serve_ready'/u);
+  assert.match(writer, /\$script:ServeFailureClass -notin \$allowedReasons/u);
+  assert.match(writer, /\$record\['reason'\] = \$script:ServeFailureClass/u);
+  for (const code of [
+    'status_unavailable', 'status_json_invalid', 'unexpected_status_failure',
+    'configuration_drift', 'create_pending', 'create_command_failed',
+  ]) {
+    assert.ok(writer.includes("'" + code + "'"), 'checkpoint must explicitly allow ' + code);
+  }
 });
