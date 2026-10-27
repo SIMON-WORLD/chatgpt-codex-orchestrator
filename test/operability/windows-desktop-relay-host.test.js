@@ -80,7 +80,13 @@ test('desktop Relay Task is distinct from Device B Task and is exact AtLogOn lea
   assert.equal(parsed.restartInterval, 'PT1M');
   assert.equal(parsed.restartCount, 5);
   assert.match(parsed.action.arguments, /desktop-relay-host-bootstrap\.ps1/u);
+  assert.match(parsed.action.arguments, /Import-Module Microsoft\.PowerShell\.Utility -RequiredVersion '3\.1\.0\.0' -ErrorAction Stop/u);
   assert.match(parsed.action.arguments, /Get-FileHash/u);
+  assert.ok(
+    parsed.action.arguments.indexOf('Import-Module Microsoft.PowerShell.Utility')
+      < parsed.action.arguments.indexOf('Get-FileHash'),
+    'Windows PowerShell 5.1 Utility module must be pinned before hash check',
+  );
   assert.equal(parsed.action.workingDirectory, path.win32.dirname(DESKTOP_RELAY_DURABLE_BOOTSTRAP_PATH));
   assert.equal(parsed.sensitiveMetadataDetected, false);
   assert.doesNotMatch(xml, /ISSUE185_RELAY_AUTHORIZATION|LOCAL_RELAY_DEVICE_SECRET|CONTROL_PLANE_API_KEY|Bearer\s/u);
