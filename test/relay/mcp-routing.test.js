@@ -391,10 +391,10 @@ test('public relay MCP is bearer-account scoped, stateless, strict, and exposes 
 
   const listedTools = await client.listTools();
   const names = listedTools.tools.map((tool) => tool.name);
-  for (const required of ['list_devices', 'workspace_open', 'read', 'search', 'git_status', 'read_excel', 'pdf_mutate_pages', 'process_start', 'process_read_output', 'process_terminate']) {
+  for (const required of ['list_devices', 'workspace_open', 'read', 'search', 'git_status', 'read_excel', 'pdf_mutate_pages', 'process_start', 'process_read_output', 'process_terminate', 'codex_start', 'codex_get', 'codex_continue', 'codex_interrupt', 'codex_reconcile', 'codex_respond_approval', 'codex_recover']) {
     assert.ok(names.includes(required), 'missing public relay tool ' + required);
   }
-  for (const forbidden of ['governance_plan', 'governance_task', 'governance_transition', 'governance_takeover', 'codex_start', 'worktree_create']) {
+  for (const forbidden of ['governance_plan', 'governance_task', 'governance_transition', 'governance_takeover', 'worktree_create']) {
     assert.equal(names.includes(forbidden), false, 'relay must not expose ' + forbidden);
   }
 
@@ -429,4 +429,204 @@ test('public relay MCP is bearer-account scoped, stateless, strict, and exposes 
     arguments: { workspaceId: relayWorkspaceId, path: 'a.txt', deviceId: device.deviceId },
   });
   assert.equal(strictFailure.isError, true);
+});
+
+
+test('Codex relay exact-job affinity masks local IDs, binds approvals, and refuses ambiguous operation replay', async (t) => {
+  const { store, core, facade } = harness(t);
+  const a = await pair(core, 'acct-a', 'same display name', 'runtime-a');
+  const b = await pair(core, 'acct-a', 'same display name', 'runtime-b');
+  const acct = await core.accountForBearer('acct-a');
+  const other = await core.accountForBearer('acct-b');
+
+  const openedPending = facade.workspaceOpen(acct.account_id, { deviceId: a.deviceId, path: '/codex-a' });
+  const opened = await answerNext(core, a, async (payload) => {
+    assert.equal(payload.params.name, 'workspace_open');
+    return mcpResult({ workspaceId: 'secret-local-workspace-a', root: '/codex-a' });
+  }, openedPending);
+  const workspaceId = textJson(opened).workspaceId;
+
+  const otherPending = facade.workspaceOpen(acct.account_id, { deviceId: b.deviceId, path: '/codex-b' });
+  const otherOpened = await answerNext(core, b, async () => mcpResult({ workspaceId: 'secret-local-workspace-b' }), otherPending);
+  const otherWs = textJson(otherOpened).workspaceId;
+
+  const startArgs = { workspaceId, prompt: 'bounded code fix', accessMode: 'workspace_write', operationKey: 'start-unique-001' };
+  const startPending = facade.codexStart(acct.account_id, startArgs);
+  await answerNext(core, a, async (payload) => {
+    assert.equal(payload.params.name, 'codex_recovery_preflight');
+    assert.equal(payload.params.arguments.workspaceId, 'secret-local-workspace-a');
+    assert.equal(payload.params.arguments.identity, 'relay-start-unique-001');
+    return mcpResult({ ok: true, status: 'safe_to_start', dangerousCandidateCount: 0 });
+  }, Promise.resolve());
+  const started = await answerNext(core, a, async (payload) => {
+    assert.equal(payload.params.name, 'codex_start');
+    assert.equal(payload.params.arguments.accessMode, 'workspace_write');
+    assert.equal(payload.params.arguments.identity, 'relay-start-unique-001');
+    assert.equal('authorityToken' in payload.params.arguments, false);
+    return mcpResult({ jobId: 'secret-local-job-a', threadId: 'secret-thread', turnId: 'secret-turn', state: 'running' });
+  }, startPending);
+  const startResult = textJson(started);
+  assert.match(startResult.jobId, /^job_[A-Za-z0-9_-]{32}$/u);
+  assert.equal(startResult.state, 'running');
+  for (const secret of ['secret-local-job-a', 'secret-thread', 'secret-turn', 'secret-local-workspace-a']) {
+    assert.equal(JSON.stringify(startResult).includes(secret), false);
+  }
+
+  const cached = await facade.codexStart(acct.account_id, startArgs);
+  assert.equal(textJson(cached).jobId, startResult.jobId, 'same request cannot create another turn');
+  await assert.rejects(facade.codexStart(acct.account_id, { ...startArgs, prompt: 'different task' }),
+    (error) => error?.code === 'CODEX_OPERATION_KEY_CONFLICT');
+  await assert.rejects(facade.codexJobTool(other.account_id, 'codex_get', { workspaceId, jobId: startResult.jobId }),
+    (error) => error?.code === 'WORKSPACE_HANDLE_NOT_FOUND');
+  await assert.rejects(facade.codexJobTool(acct.account_id, 'codex_get', { workspaceId: otherWs, jobId: startResult.jobId }),
+    (error) => error?.code === 'CODEX_JOB_SCOPE_MISMATCH');
+
+  const getPending = facade.codexJobTool(acct.account_id, 'codex_get', { workspaceId, jobId: startResult.jobId });
+  const got = await answerNext(core, a, async (payload) => {
+    assert.equal(payload.params.name, 'codex_get');
+    assert.equal(payload.params.arguments.jobId, 'secret-local-job-a');
+    return mcpResult({
+      jobId: 'secret-local-job-a', threadId: 'secret-thread', turnId: 'secret-turn',
+      state: 'running', pendingApprovals: [
+        { approvalId: 'secret-local-approval-a', method: 'item/commandExecution/requestApproval', kind: 'command', threadId: 'secret-thread' },
+      ],
+    });
+  }, getPending);
+  const getBody = textJson(got);
+  assert.match(getBody.pendingApprovals[0].approvalId, /^approval_[A-Za-z0-9_-]{32}$/u);
+  assert.equal(JSON.stringify(getBody).includes('secret-local-approval-a'), false);
+  assert.equal(JSON.stringify(getBody).includes('secret-thread'), false);
+
+  const approval = getBody.pendingApprovals[0].approvalId;
+  const approvalPending = facade.codexJobTool(acct.account_id, 'codex_respond_approval', {
+    workspaceId, jobId: startResult.jobId, approvalId: approval, decision: 'approve',
+  });
+  await answerNext(core, a, async (payload) => {
+    assert.equal(payload.params.name, 'codex_respond_approval');
+    assert.equal(payload.params.arguments.approvalId, 'secret-local-approval-a');
+    assert.equal(payload.params.arguments.jobId, 'secret-local-job-a');
+    return mcpResult({ jobId: 'secret-local-job-a', state: 'running' });
+  }, approvalPending);
+  await assert.rejects(facade.codexJobTool(acct.account_id, 'codex_respond_approval', {
+    workspaceId, jobId: startResult.jobId, approvalId: approval, decision: 'approve',
+  }), (error) => error?.code === 'CODEX_APPROVAL_NOT_FOUND');
+
+  const contArgs = { workspaceId, jobId: startResult.jobId, instruction: 'finish tests', operationKey: 'continue-unique-001' };
+  const contPending = facade.codexJobTool(acct.account_id, 'codex_continue', contArgs);
+  const continued = await answerNext(core, a, async (payload) => {
+    assert.equal(payload.params.name, 'codex_continue');
+    assert.equal(payload.params.arguments.jobId, 'secret-local-job-a');
+    return mcpResult({ jobId: 'secret-local-job-a', turnId: 'secret-new-turn', state: 'running' });
+  }, contPending);
+  assert.equal(textJson(continued).state, 'running');
+  assert.equal(textJson(await facade.codexJobTool(acct.account_id, 'codex_continue', contArgs)).state, 'submitted');
+  await assert.rejects(facade.codexJobTool(acct.account_id, 'codex_continue', { ...contArgs, instruction: 'change to new goal' }),
+    (error) => error?.code === 'CODEX_OPERATION_KEY_CONFLICT');
+
+  core.connectAgent({ deviceId: a.deviceId, credential: a.credential, runtimeId: 'runtime-a-new', executorReady: true, protocolVersion: '1' });
+  await assert.rejects(facade.codexJobTool(acct.account_id, 'codex_get', { workspaceId, jobId: startResult.jobId }),
+    (error) => error?.code === 'STALE_WORKSPACE_HANDLE');
+
+  // Identical display names are not device identities.
+  assert.equal(a.deviceId === b.deviceId, false);
+  assert.equal(store.codexJobAffinity(acct.account_id, startResult.jobId).invalidated_at != null, true);
+});
+
+test('Codex dispatch unknown result remains non-replayable and forces durable semantic recovery', async (t) => {
+  const { core, facade } = harness(t);
+  const a = await pair(core, 'acct-a', 'Device A', 'runtime-1');
+  const account = await core.accountForBearer('acct-a');
+  const pending = facade.workspaceOpen(account.account_id, { deviceId: a.deviceId, path: '/one' });
+  const opened = await answerNext(core, a, async () => mcpResult({ workspaceId: 'local-one' }), pending);
+  const workspaceId = textJson(opened).workspaceId;
+  const args = { workspaceId, prompt: 'a task', accessMode: 'workspace_write', operationKey: 'lost-response-001' };
+  const first = facade.codexStart(account.account_id, args);
+  await answerNext(core, a, async () => mcpResult({ ok: true, status: 'safe_to_start' }), Promise.resolve());
+  await answerNext(core, a, async (payload) => {
+    assert.equal(payload.params.name, 'codex_start');
+    return mcpResult({ error: { code: 'LOCAL_UNAVAILABLE' } }, true);
+  }, Promise.resolve());
+  await assert.rejects(first, (error) => error?.code === 'CODEX_LOCAL_REJECTED');
+  await assert.rejects(facade.codexStart(account.account_id, args), (error) => error?.code === 'CODEX_RECOVERY_REQUIRED');
+});
+
+
+test('Codex recovery is single-device and does not mint a second live handle for the same job', async (t) => {
+  const { core, store, facade } = harness(t);
+  const device = await pair(core, 'acct-a', 'Device A', 'runtime-a');
+  const account = await core.accountForBearer('acct-a');
+  const pending = facade.workspaceOpen(account.account_id, { deviceId: device.deviceId, path: '/codex' });
+  const opened = await answerNext(core, device, async () => mcpResult({ workspaceId: 'local-ws-codex' }), pending);
+  const workspaceId = textJson(opened).workspaceId;
+  const existing = store.createCodexJobAffinity({
+    accountId: account.account_id, deviceId: device.deviceId, runtimeId: 'runtime-a',
+    relayWorkspaceId: workspaceId, localJobId: 'local-known-job', now: core.now(),
+  });
+  const recoverPending = facade.codexRecover(account.account_id, { workspaceId, identity: 'my-task' });
+  const recovered = await answerNext(core, device, async (payload) => {
+    assert.equal(payload.params.name, 'codex_recover');
+    assert.equal(payload.params.arguments.workspaceId, 'local-ws-codex');
+    assert.equal(payload.params.arguments.identity, 'my-task');
+    return mcpResult({ jobId: 'local-known-job', threadId: 'secret-thread', state: 'completed', result: 'tests passed' });
+  }, recoverPending);
+  assert.equal(textJson(recovered).jobId, existing.relay_job_id);
+  assert.equal(JSON.stringify(textJson(recovered)).includes('secret-thread'), false);
+
+  await core.revokeDevice({ bearerToken: 'acct-a', deviceId: device.deviceId });
+  await assert.rejects(facade.codexRecover(account.account_id, { workspaceId, identity: 'my-task' }),
+    (err) => err?.code === 'STALE_WORKSPACE_HANDLE');
+  await assert.rejects(facade.codexJobTool(account.account_id, 'codex_get', { workspaceId, jobId: existing.relay_job_id }),
+    (err) => err?.code === 'STALE_WORKSPACE_HANDLE');
+});
+
+test('Codex preflight recover-existing never starts a second turn and errors leave the intent fenced', async (t) => {
+  const { core, facade } = harness(t);
+  const device = await pair(core, 'acct-a', 'Device A', 'runtime-a');
+  const account = await core.accountForBearer('acct-a');
+  const pending = facade.workspaceOpen(account.account_id, { deviceId: device.deviceId, path: '/codex' });
+  const opened = await answerNext(core, device, async () => mcpResult({ workspaceId: 'local-ws-a' }), pending);
+  const workspaceId = textJson(opened).workspaceId;
+  const args = { workspaceId, prompt: 'same task', accessMode: 'workspace_write', operationKey: 'existing-job-001' };
+  const attempted = facade.codexStart(account.account_id, args);
+  await answerNext(core, device, async (payload) => {
+    assert.equal(payload.params.name, 'codex_recovery_preflight');
+    return mcpResult({ ok: true, status: 'recover_existing', nextAction: 'codex_recover' });
+  }, Promise.resolve());
+  await assert.rejects(attempted, (error) => error?.code === 'CODEX_RECOVERY_REQUIRED');
+  await assert.rejects(facade.codexStart(account.account_id, args), (error) => error?.code === 'CODEX_RECOVERY_REQUIRED');
+  const envelope = await core.pollAgent({
+    deviceId: device.deviceId, credential: device.credential,
+    runtimeId: device.runtimeId, connectionEpoch: device.session.connectionEpoch,
+    executorReady: true, protocolVersion: '1', holdMs: 0,
+  });
+  assert.equal(envelope, null, 'preflight says recover, not new turn/start');
+});
+
+test('Codex continue lost response and approval cross-job spoof fail closed without second dispatch', async (t) => {
+  const { core, store, facade } = harness(t);
+  const device = await pair(core, 'acct-a', 'Device A', 'runtime-a');
+  const account = await core.accountForBearer('acct-a');
+  const pending = facade.workspaceOpen(account.account_id, { deviceId: device.deviceId, path: '/codex' });
+  const opened = await answerNext(core, device, async () => mcpResult({ workspaceId: 'local-ws-a' }), pending);
+  const workspaceId = textJson(opened).workspaceId;
+  const mkJob = (localJobId) => store.createCodexJobAffinity({
+    accountId: account.account_id, deviceId: device.deviceId, runtimeId: 'runtime-a',
+    relayWorkspaceId: workspaceId, localJobId, now: core.now(),
+  });
+  const first = mkJob('local-job-1');
+  const second = mkJob('local-job-2');
+  const alias = store.createCodexApprovalAffinity(first.relay_job_id, 'local-approval-1', core.now()).relay_approval_id;
+  await assert.rejects(facade.codexJobTool(account.account_id, 'codex_respond_approval', {
+    workspaceId, jobId: second.relay_job_id, approvalId: alias, decision: 'approve',
+  }), (error) => error?.code === 'CODEX_APPROVAL_NOT_FOUND');
+  const args = { workspaceId, jobId: first.relay_job_id, operationKey: 'continue-lost-001', instruction: 'one next turn only' };
+  const attempted = facade.codexJobTool(account.account_id, 'codex_continue', args);
+  await answerNext(core, device, async (payload) => {
+    assert.equal(payload.params.name, 'codex_continue');
+    assert.equal(payload.params.arguments.jobId, 'local-job-1');
+    return mcpResult({ error: { code: 'DEVICE_RESPONSE_LOST' } }, true);
+  }, Promise.resolve());
+  await assert.rejects(attempted, (error) => error?.code === 'CODEX_LOCAL_REJECTED');
+  await assert.rejects(facade.codexJobTool(account.account_id, 'codex_continue', args),
+    (error) => error?.code === 'CODEX_RECOVERY_REQUIRED');
 });

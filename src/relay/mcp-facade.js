@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import { RelayError } from './core.js';
@@ -169,6 +170,133 @@ export class RelayMcpFacade {
     return { ...workspace, process };
   }
 
+
+  resolveCodexJob(accountId, relayWorkspaceId, relayJobId) {
+    const workspace = this.resolveWorkspace(accountId, relayWorkspaceId);
+    const job = this.store.codexJobAffinity(accountId, relayJobId);
+    if (!job) relayFail('CODEX_JOB_NOT_FOUND', 'Codex handle is invalid for this account', 404);
+    if (job.invalidated_at) relayFail('STALE_CODEX_JOB', 'Codex handle has been invalidated', 409);
+    if (job.relay_workspace_id !== relayWorkspaceId ||
+        job.device_id !== workspace.affinity.device_id ||
+        job.runtime_id !== workspace.affinity.runtime_id) {
+      relayFail('CODEX_JOB_SCOPE_MISMATCH', 'Codex handle does not match the workspace/device/runtime', 409);
+    }
+    return { ...workspace, job };
+  }
+
+  async dispatchCodex(accountId, workspace, method, localArgs) {
+    const response = await this.core.dispatchForAccount({
+      accountId, deviceId: workspace.affinity.device_id,
+      payload: { method: 'tools/call', params: { name: method, arguments: localArgs } },
+    });
+    // Do not echo arbitrary local diagnostics, raw IDs, credentials or paths.
+    if (!response || response.isError) relayFail('CODEX_LOCAL_REJECTED', 'device-local Codex declined the operation', 409);
+    const body = parsedResult(response);
+    if (!body || typeof body !== 'object') relayFail('CODEX_RESPONSE_UNREADABLE', 'device returned no structured Codex result', 502);
+    return body;
+  }
+
+  projectCodexJob(accountId, relayWorkspaceId, relayJobId, body) {
+    const result = { workspaceId: relayWorkspaceId, jobId: relayJobId };
+    // Deliberately no raw local job/thread/turn/mutation-unit IDs or workspace roots.
+    for (const field of ['state', 'status', 'live', 'recoveryRequired', 'nextAction', 'accessMode', 'threadStatus', 'result', 'assistantText', 'reconciled', 'resolution', 'ownershipReleased', 'mutationUnitState']) {
+      if (Object.hasOwn(body, field)) result[field] = body[field];
+    }
+    if (Array.isArray(body.pendingApprovals)) {
+      result.pendingApprovals = body.pendingApprovals.map((entry) => {
+        if (!entry || typeof entry.approvalId !== 'string' || !entry.approvalId) {
+          relayFail('CODEX_APPROVAL_INVALID', 'device returned a malformed approval handle', 502);
+        }
+        const affinity = this.store.createCodexApprovalAffinity(relayJobId, entry.approvalId, this.core.now());
+        return { approvalId: affinity.relay_approval_id, kind: entry.kind || 'unknown', method: entry.method || null };
+      });
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  }
+
+  async codexStart(accountId, args) {
+    const { workspaceId, prompt, accessMode, operationKey, networkAccess = false, taskId, stepId, identity } = args;
+    const workspace = this.resolveWorkspace(accountId, workspaceId);
+    if (!workspace.device.ready) relayFail(workspace.device.online ? 'DEVICE_NOT_READY' : 'DEVICE_OFFLINE', 'selected Codex device is not Ready', 409);
+    const binding = identity || 'relay-' + operationKey;
+    const localArgs = {
+      workspaceId: workspace.affinity.local_workspace_id, prompt, accessMode,
+      networkAccess, ...(taskId ? { taskId } : {}), ...(stepId ? { stepId } : {}), identity: binding,
+    };
+    const payloadDigest = createHash('sha256').update(JSON.stringify(localArgs)).digest('hex');
+    const claim = this.store.claimCodexIntent({
+      accountId, relayWorkspaceId: workspaceId, kind: 'start', operationKey, payloadDigest, now: this.core.now(),
+    });
+    if (!claim.fresh) {
+      if (!claim.intent.completed_at || !claim.intent.relay_job_id) {
+        relayFail('CODEX_RECOVERY_REQUIRED', 'ambiguous Codex start; use codex_recover by the original semantic binding', 409);
+      }
+      const known = this.resolveCodexJob(accountId, workspaceId, claim.intent.relay_job_id);
+      return this.projectCodexJob(accountId, workspaceId, known.job.relay_job_id, { state: 'submitted' });
+    }
+    // Read-only device-local preflight. A missing/unreadable response cannot
+    // authorize a new turn; the reserved intent remains non-replayable.
+    const preflight = await this.dispatchCodex(accountId, workspace, 'codex_recovery_preflight', {
+      workspaceId: workspace.affinity.local_workspace_id,
+      ...(taskId ? { taskId } : {}), ...(stepId ? { stepId } : {}), identity: binding,
+    });
+    if (preflight.ok !== true || preflight.status !== 'safe_to_start') relayFail('CODEX_RECOVERY_REQUIRED', 'device-local preflight did not clear the Codex scope', 409);
+    const body = await this.dispatchCodex(accountId, workspace, 'codex_start', localArgs);
+    if (typeof body.jobId !== 'string' || !body.jobId) relayFail('CODEX_RECOVERY_REQUIRED', 'start acknowledgement has no job identity; reconcile before retry', 409);
+    const job = this.store.createCodexJobAffinity({
+      accountId, deviceId: workspace.affinity.device_id, runtimeId: workspace.affinity.runtime_id,
+      relayWorkspaceId: workspaceId, localJobId: body.jobId, now: this.core.now(),
+    });
+    this.store.finishCodexIntent({ accountId, relayWorkspaceId: workspaceId, kind: 'start', operationKey, relayJobId: job.relay_job_id, now: this.core.now() });
+    return this.projectCodexJob(accountId, workspaceId, job.relay_job_id, body);
+  }
+
+  async codexJobTool(accountId, method, args) {
+    const { workspaceId, jobId, operationKey, approvalId, decision, instruction, taskId, stepId, identity } = args;
+    const resolved = this.resolveCodexJob(accountId, workspaceId, jobId);
+    if (!resolved.device.ready) relayFail(resolved.device.online ? 'DEVICE_NOT_READY' : 'DEVICE_OFFLINE', 'selected Codex device is not Ready', 409);
+    const localArgs = { workspaceId: resolved.affinity.local_workspace_id, jobId: resolved.job.local_job_id };
+
+    if (method === 'codex_continue') {
+      Object.assign(localArgs, { instruction, ...(taskId ? { taskId } : {}), ...(stepId ? { stepId } : {}), ...(identity ? { identity } : {}) });
+      const digest = createHash('sha256').update(JSON.stringify(localArgs)).digest('hex');
+      const claim = this.store.claimCodexIntent({ accountId, relayWorkspaceId: workspaceId, kind: 'continue', operationKey, payloadDigest: digest, relayJobId: jobId, now: this.core.now() });
+      if (!claim.fresh) {
+        if (!claim.intent.completed_at) relayFail('CODEX_RECOVERY_REQUIRED', 'ambiguous Codex continue; reconcile before any next turn', 409);
+        return this.projectCodexJob(accountId, workspaceId, jobId, { state: 'submitted' });
+      }
+    } else if (method === 'codex_respond_approval') {
+      const mapped = this.store.codexApprovalAffinity(jobId, approvalId);
+      if (!mapped) relayFail('CODEX_APPROVAL_NOT_FOUND', 'approval handle is not pending for this Codex job', 404);
+      // Consume before dispatch, so a lost response cannot cause an approval replay.
+      this.store.consumeCodexApproval(approvalId, this.core.now());
+      Object.assign(localArgs, { approvalId: mapped.local_approval_id, decision });
+    }
+    const body = await this.dispatchCodex(accountId, resolved, method, localArgs);
+    if (method === 'codex_continue') {
+      this.store.finishCodexIntent({ accountId, relayWorkspaceId: workspaceId, kind: 'continue', operationKey, relayJobId: jobId, now: this.core.now() });
+    }
+    this.store.touchCodexJobAffinity(jobId, this.core.now());
+    return this.projectCodexJob(accountId, workspaceId, jobId, body);
+  }
+
+  async codexRecover(accountId, args) {
+    const { workspaceId, taskId, stepId, identity } = args;
+    if (!taskId && !stepId && !identity) relayFail('CODEX_BINDING_REQUIRED', 'provide a durable Codex task/step/identity binding');
+    const workspace = this.resolveWorkspace(accountId, workspaceId);
+    if (!workspace.device.ready) relayFail('DEVICE_OFFLINE', 'device is not Ready', 409);
+    const body = await this.dispatchCodex(accountId, workspace, 'codex_recover', {
+      workspaceId: workspace.affinity.local_workspace_id,
+      ...(taskId ? { taskId } : {}), ...(stepId ? { stepId } : {}), ...(identity ? { identity } : {}),
+    });
+    if (typeof body.jobId !== 'string' || !body.jobId) relayFail('CODEX_RECOVERY_REQUIRED', 'recovered job identity was not confirmed', 409);
+    const job = this.store.createCodexJobAffinity({
+      accountId, deviceId: workspace.affinity.device_id, runtimeId: workspace.affinity.runtime_id,
+      relayWorkspaceId: workspaceId, localJobId: body.jobId, now: this.core.now(),
+    });
+    return this.projectCodexJob(accountId, workspaceId, job.relay_job_id, body);
+  }
+
   async workspaceTool(accountId, name, args) {
     const relayWorkspaceId = args?.workspaceId;
     const resolved = this.resolveWorkspace(accountId, relayWorkspaceId);
@@ -240,6 +368,49 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
   }, (args) => facade.workspaceOpen(accountId, args));
 
   const route = (name) => (args) => facade.workspaceTool(accountId, name, args);
+
+  // Codex lives on the exact device's existing Local MCP. Relay only owns
+  // opaque job routing, not Codex/Governance execution state.
+  const operationKey = z.string().regex(/^[A-Za-z0-9_-]{8,96}$/u);
+  const codexJob = z.string().regex(/^job_[A-Za-z0-9_-]{32}$/u);
+  register(server, facade, accountId, 'codex_start', {
+    description: 'Delegate an authorized Codex task to the exact device that owns this relay workspace. Supply an operationKey stable across retries; ambiguous dispatch requires semantic recovery, never duplicate start.',
+    annotations: M,
+    inputSchema: z.object({
+      workspaceId: workspaceIdSchema, prompt: z.string().min(1).max(120000),
+      accessMode: z.enum(['read_only','workspace_write']), operationKey,
+      networkAccess: z.boolean().optional(), taskId: z.string().optional(),
+      stepId: z.string().optional(), identity: z.string().optional(),
+    }).strict(),
+  }, (args) => facade.codexStart(accountId, args));
+  register(server, facade, accountId, 'codex_get', {
+    description: 'Read a scoped Codex task with opaque public job/approval handles; raw local thread/turn IDs never escape Relay.',
+    annotations: R,
+    inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: codexJob }).strict(),
+  }, (args) => facade.codexJobTool(accountId, 'codex_get', args));
+  register(server, facade, accountId, 'codex_continue', {
+    description: 'Continue the same Codex job. A stable operationKey prevents a lost answer from replaying a second turn.',
+    annotations: M,
+    inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: codexJob, operationKey, instruction: z.string().min(1).max(120000), taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }).strict(),
+  }, (args) => facade.codexJobTool(accountId, 'codex_continue', args));
+  for (const [name, annotations] of [['codex_interrupt', M], ['codex_reconcile', M]]) {
+    register(server, facade, accountId, name, {
+      description: 'Device-local Codex control, limited to an opaque account/device/runtime/workspace job.',
+      annotations, inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: codexJob }).strict(),
+    }, (args) => facade.codexJobTool(accountId, name, args));
+  }
+  register(server, facade, accountId, 'codex_respond_approval', {
+    description: 'Respond only to a pending opaque approval for the same exact authorized job; replay is refused.',
+    annotations: M,
+    inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: codexJob, approvalId: z.string().regex(/^approval_[A-Za-z0-9_-]{32}$/u), decision: z.enum(['approve','deny']) }).strict(),
+  }, (args) => facade.codexJobTool(accountId, 'codex_respond_approval', args));
+  register(server, facade, accountId, 'codex_recover', {
+    description: 'Recover one explicitly bound Codex job on the exact device/workspace after authoritative device-local reconciliation. Does not pick a recent job.',
+    annotations: M,
+    inputSchema: z.object({ workspaceId: workspaceIdSchema, taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }).strict(),
+  }, (args) => facade.codexRecover(accountId, args));
+
+
 
   register(server, facade, accountId, 'process_start', {
     description: 'Start one bounded command on the device bound to relay workspaceId. Returns a relay-owned opaque processHandle.',
