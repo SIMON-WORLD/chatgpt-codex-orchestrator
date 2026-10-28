@@ -240,7 +240,7 @@ export class RelayMcpFacade {
       workspaceId: workspace.affinity.local_workspace_id,
       ...(taskId ? { taskId } : {}), ...(stepId ? { stepId } : {}), identity: binding,
     });
-    if (preflight.ok !== true) relayFail('CODEX_RECOVERY_REQUIRED', 'device-local preflight did not clear the Codex scope', 409);
+    if (preflight.ok !== true || preflight.status !== 'safe_to_start') relayFail('CODEX_RECOVERY_REQUIRED', 'device-local preflight did not clear the Codex scope', 409);
     const body = await this.dispatchCodex(accountId, workspace, 'codex_start', localArgs);
     if (typeof body.jobId !== 'string' || !body.jobId) relayFail('CODEX_RECOVERY_REQUIRED', 'start acknowledgement has no job identity; reconcile before retry', 409);
     const job = this.store.createCodexJobAffinity({
