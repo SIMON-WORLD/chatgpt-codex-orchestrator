@@ -99,6 +99,7 @@ export class RelayStore {
       // durable mutation intents only, never thread/turn or execution payloads.
       'CREATE TABLE IF NOT EXISTS codex_job_affinity (relay_job_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE, device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE, runtime_id TEXT NOT NULL, relay_workspace_id TEXT NOT NULL REFERENCES workspace_affinity(relay_workspace_id) ON DELETE CASCADE, local_job_id TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, invalidated_at INTEGER);',
       'CREATE INDEX IF NOT EXISTS codex_job_affinity_device_idx ON codex_job_affinity(device_id);',
+      'CREATE UNIQUE INDEX IF NOT EXISTS codex_job_live_unique ON codex_job_affinity(account_id,device_id,runtime_id,relay_workspace_id,local_job_id) WHERE invalidated_at IS NULL;',
       'CREATE TABLE IF NOT EXISTS codex_approval_affinity (relay_approval_id TEXT PRIMARY KEY, relay_job_id TEXT NOT NULL REFERENCES codex_job_affinity(relay_job_id) ON DELETE CASCADE, local_approval_id TEXT NOT NULL, created_at INTEGER NOT NULL, consumed_at INTEGER, UNIQUE(relay_job_id,local_approval_id));',
       'CREATE TABLE IF NOT EXISTS codex_intents (account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE, relay_workspace_id TEXT NOT NULL REFERENCES workspace_affinity(relay_workspace_id) ON DELETE CASCADE, kind TEXT NOT NULL, operation_key TEXT NOT NULL, payload_sha256 TEXT NOT NULL, relay_job_id TEXT REFERENCES codex_job_affinity(relay_job_id), completed_at INTEGER, created_at INTEGER NOT NULL, PRIMARY KEY(account_id,relay_workspace_id,kind,operation_key));',
     ].join('\n'));
@@ -226,11 +227,13 @@ export class RelayStore {
 
 
   createCodexJobAffinity({ accountId, deviceId, runtimeId, relayWorkspaceId, localJobId, now }) {
+    const found = this.db.prepare('SELECT * FROM codex_job_affinity WHERE account_id = ? AND device_id = ? AND runtime_id = ? AND relay_workspace_id = ? AND local_job_id = ? AND invalidated_at IS NULL').get(accountId, deviceId, runtimeId, relayWorkspaceId, localJobId);
+    if (found) return found;
     const relayJobId = 'job_' + randomBytes(24).toString('base64url');
-    this.db.prepare('INSERT INTO codex_job_affinity (relay_job_id,account_id,device_id,runtime_id,relay_workspace_id,local_job_id,created_at,last_used_at,invalidated_at) VALUES (?,?,?,?,?,?,?,?,NULL)').run(
+    this.db.prepare('INSERT OR IGNORE INTO codex_job_affinity (relay_job_id,account_id,device_id,runtime_id,relay_workspace_id,local_job_id,created_at,last_used_at,invalidated_at) VALUES (?,?,?,?,?,?,?,?,NULL)').run(
       relayJobId, accountId, deviceId, runtimeId, relayWorkspaceId, localJobId, now, now
     );
-    return this.codexJobAffinity(accountId, relayJobId);
+    return this.db.prepare('SELECT * FROM codex_job_affinity WHERE account_id = ? AND device_id = ? AND runtime_id = ? AND relay_workspace_id = ? AND local_job_id = ? AND invalidated_at IS NULL').get(accountId, deviceId, runtimeId, relayWorkspaceId, localJobId);
   }
 
   codexJobAffinity(accountId, relayJobId) {
