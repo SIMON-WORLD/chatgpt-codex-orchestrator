@@ -549,3 +549,84 @@ test('Codex dispatch unknown result remains non-replayable and forces durable se
   await assert.rejects(first, (error) => error?.code === 'CODEX_LOCAL_REJECTED');
   await assert.rejects(facade.codexStart(account.account_id, args), (error) => error?.code === 'CODEX_RECOVERY_REQUIRED');
 });
+
+
+test('Codex recovery is single-device and does not mint a second live handle for the same job', async (t) => {
+  const { core, store, facade } = harness(t);
+  const device = await pair(core, 'acct-a', 'Device A', 'runtime-a');
+  const account = await core.accountForBearer('acct-a');
+  const pending = facade.workspaceOpen(account.account_id, { deviceId: device.deviceId, path: '/codex' });
+  const opened = await answerNext(core, device, async () => mcpResult({ workspaceId: 'local-ws-codex' }), pending);
+  const workspaceId = textJson(opened).workspaceId;
+  const existing = store.createCodexJobAffinity({
+    accountId: account.account_id, deviceId: device.deviceId, runtimeId: 'runtime-a',
+    relayWorkspaceId: workspaceId, localJobId: 'local-known-job', now: core.now(),
+  });
+  const recoverPending = facade.codexRecover(account.account_id, { workspaceId, identity: 'my-task' });
+  const recovered = await answerNext(core, device, async (payload) => {
+    assert.equal(payload.params.name, 'codex_recover');
+    assert.equal(payload.params.arguments.workspaceId, 'local-ws-codex');
+    assert.equal(payload.params.arguments.identity, 'my-task');
+    return mcpResult({ jobId: 'local-known-job', threadId: 'secret-thread', state: 'completed', result: 'tests passed' });
+  }, recoverPending);
+  assert.equal(textJson(recovered).jobId, existing.relay_job_id);
+  assert.equal(JSON.stringify(textJson(recovered)).includes('secret-thread'), false);
+
+  await core.revokeDevice({ bearerToken: 'acct-a', deviceId: device.deviceId });
+  await assert.rejects(facade.codexRecover(account.account_id, { workspaceId, identity: 'my-task' }),
+    (err) => err?.code === 'STALE_WORKSPACE_HANDLE');
+  await assert.rejects(facade.codexJobTool(account.account_id, 'codex_get', { workspaceId, jobId: existing.relay_job_id }),
+    (err) => err?.code === 'STALE_WORKSPACE_HANDLE');
+});
+
+test('Codex preflight recover-existing never starts a second turn and errors leave the intent fenced', async (t) => {
+  const { core, facade } = harness(t);
+  const device = await pair(core, 'acct-a', 'Device A', 'runtime-a');
+  const account = await core.accountForBearer('acct-a');
+  const pending = facade.workspaceOpen(account.account_id, { deviceId: device.deviceId, path: '/codex' });
+  const opened = await answerNext(core, device, async () => mcpResult({ workspaceId: 'local-ws-a' }), pending);
+  const workspaceId = textJson(opened).workspaceId;
+  const args = { workspaceId, prompt: 'same task', accessMode: 'workspace_write', operationKey: 'existing-job-001' };
+  const attempted = facade.codexStart(account.account_id, args);
+  await answerNext(core, device, async (payload) => {
+    assert.equal(payload.params.name, 'codex_recovery_preflight');
+    return mcpResult({ ok: true, status: 'recover_existing', nextAction: 'codex_recover' });
+  }, Promise.resolve());
+  await assert.rejects(attempted, (error) => error?.code === 'CODEX_RECOVERY_REQUIRED');
+  await assert.rejects(facade.codexStart(account.account_id, args), (error) => error?.code === 'CODEX_RECOVERY_REQUIRED');
+  const envelope = await core.pollAgent({
+    deviceId: device.deviceId, credential: device.credential,
+    runtimeId: device.runtimeId, connectionEpoch: device.session.connectionEpoch,
+    executorReady: true, protocolVersion: '1', holdMs: 0,
+  });
+  assert.equal(envelope, null, 'preflight says recover, not new turn/start');
+});
+
+test('Codex continue lost response and approval cross-job spoof fail closed without second dispatch', async (t) => {
+  const { core, store, facade } = harness(t);
+  const device = await pair(core, 'acct-a', 'Device A', 'runtime-a');
+  const account = await core.accountForBearer('acct-a');
+  const pending = facade.workspaceOpen(account.account_id, { deviceId: device.deviceId, path: '/codex' });
+  const opened = await answerNext(core, device, async () => mcpResult({ workspaceId: 'local-ws-a' }), pending);
+  const workspaceId = textJson(opened).workspaceId;
+  const mkJob = (localJobId) => store.createCodexJobAffinity({
+    accountId: account.account_id, deviceId: device.deviceId, runtimeId: 'runtime-a',
+    relayWorkspaceId: workspaceId, localJobId, now: core.now(),
+  });
+  const first = mkJob('local-job-1');
+  const second = mkJob('local-job-2');
+  const alias = store.createCodexApprovalAffinity(first.relay_job_id, 'local-approval-1', core.now()).relay_approval_id;
+  await assert.rejects(facade.codexJobTool(account.account_id, 'codex_respond_approval', {
+    workspaceId, jobId: second.relay_job_id, approvalId: alias, decision: 'approve',
+  }), (error) => error?.code === 'CODEX_APPROVAL_NOT_FOUND');
+  const args = { workspaceId, jobId: first.relay_job_id, operationKey: 'continue-lost-001', instruction: 'one next turn only' };
+  const attempted = facade.codexJobTool(account.account_id, 'codex_continue', args);
+  await answerNext(core, device, async (payload) => {
+    assert.equal(payload.params.name, 'codex_continue');
+    assert.equal(payload.params.arguments.jobId, 'local-job-1');
+    return mcpResult({ error: { code: 'DEVICE_RESPONSE_LOST' } }, true);
+  }, Promise.resolve());
+  await assert.rejects(attempted, (error) => error?.code === 'CODEX_LOCAL_REJECTED');
+  await assert.rejects(facade.codexJobTool(account.account_id, 'codex_continue', args),
+    (error) => error?.code === 'CODEX_RECOVERY_REQUIRED');
+});
