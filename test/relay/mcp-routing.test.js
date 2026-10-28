@@ -456,7 +456,7 @@ test('Codex relay exact-job affinity masks local IDs, binds approvals, and refus
     assert.equal(payload.params.name, 'codex_recovery_preflight');
     assert.equal(payload.params.arguments.workspaceId, 'secret-local-workspace-a');
     assert.equal(payload.params.arguments.identity, 'relay-start-unique-001');
-    return mcpResult({ ok: true, risk: 'clear' });
+    return mcpResult({ ok: true, status: 'safe_to_start', dangerousCandidateCount: 0 });
   }, Promise.resolve());
   const started = await answerNext(core, a, async (payload) => {
     assert.equal(payload.params.name, 'codex_start');
@@ -541,7 +541,7 @@ test('Codex dispatch unknown result remains non-replayable and forces durable se
   const workspaceId = textJson(opened).workspaceId;
   const args = { workspaceId, prompt: 'a task', accessMode: 'workspace_write', operationKey: 'lost-response-001' };
   const first = facade.codexStart(account.account_id, args);
-  await answerNext(core, a, async () => mcpResult({ ok: true }), Promise.resolve());
+  await answerNext(core, a, async () => mcpResult({ ok: true, status: 'safe_to_start' }), Promise.resolve());
   await answerNext(core, a, async (payload) => {
     assert.equal(payload.params.name, 'codex_start');
     return mcpResult({ error: { code: 'LOCAL_UNAVAILABLE' } }, true);
