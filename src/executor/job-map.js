@@ -188,7 +188,29 @@ export class JobMap {
   // the caller must provide semantic scope, terminal history is ignored, timestamps are
   // never used for selection, ambiguity discloses only a count, and only one uniquely
   // dangerous execution may expose the exact internal recovery identity needed by Brain.
-  recoveryPreflight({ workspaceId = null, workspaceRoot = null, taskId = null, stepId = null, identity = null } = {}) {
+  recoveryPreflight({ workspaceId = null, workspaceRoot = null, taskId = null, stepId = null, identity = null, rejectTerminalIdentity = false } = {}) {
+    // The Relay start contract must find any previous job with this stable
+    // identity, even if other binding fields changed or the Relay DB was lost.
+    // Ordinary existing callers retain the original nonterminal-only semantics.
+    if (rejectTerminalIdentity) {
+      if (workspaceId == null && workspaceRoot == null) {
+        return { ok: false, error: 'bad_request', reason: 'recovery preflight requires a workspace' };
+      }
+      if (typeof identity !== 'string' || !identity.trim()) {
+        return { ok: false, error: 'bad_request', reason: 'terminal identity check requires a stable identity' };
+      }
+      const scan = this._scanStrict();
+      if (scan.corruptCount > 0) {
+        return { ok: false, error: 'corrupt', reason: 'durable Codex job state is unreadable; refusing to infer absence' };
+      }
+      if (scan.jobs.some((job) => job.identity === identity)) {
+        return { ok: true, status: 'recover_existing', nextAction: 'codex_recover', terminalIdentityChecked: true };
+      }
+      return {
+        ...this.recoveryPreflight({ workspaceId, workspaceRoot, taskId, stepId, identity }),
+        terminalIdentityChecked: true,
+      };
+    }
     const selected = this.recoveryPreflightCandidates({ workspaceId, workspaceRoot, taskId, stepId, identity });
     if (!selected.ok) return selected;
     const { dangerous } = selected;

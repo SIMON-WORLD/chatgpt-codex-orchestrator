@@ -94,13 +94,19 @@ export class AppServerClient {
     this._rl = createInterface({ input: this.child.stdout, crlfDelay: Infinity });
     this._rl.on('line', (line) => this._onLine(line));
     this.child.stdout.on('error', () => {});
+    // A closed stdin must reject a pending notification instead of crashing the host.
+    this.child.stdin.on('error', () => {});
     this.child.stderr.on('data', (d) => { this._stderr += String(d); });
-    this.child.on('close', (code, signal) => {
+    const spawnedChild = this.child;
+    spawnedChild.on('close', (code, signal) => {
+      // A replaced child may close after the new child's handshake has begun.
+      if (this.child !== spawnedChild) return;
       this.exited = true;
       this._failAllPending(`app-server exited (code=${code}, signal=${signal})`);
       this._emitLifecycle({ type: 'exit', code, signal });
     });
-    this.child.on('error', (err) => {
+    spawnedChild.on('error', (err) => {
+      if (this.child !== spawnedChild) return;
       this.exited = true;
       this._failAllPending('app-server spawn error: ' + err.message);
       this._emitLifecycle({ type: 'error', reason: err.message });
@@ -141,9 +147,13 @@ export class AppServerClient {
     this.pending.clear();
   }
 
-  _send(obj) {
+  _send(obj, { confirmWrite = false } = {}) {
     if (this.exited || !this.child || this.child.exitCode !== null) throw new Error('app-server is not running');
-    this.child.stdin.write(JSON.stringify(obj) + '\n');
+    const payload = JSON.stringify(obj) + '\n';
+    if (!confirmWrite) return this.child.stdin.write(payload);
+    return new Promise((resolve, reject) => {
+      this.child.stdin.write(payload, (error) => error ? reject(error) : resolve());
+    });
   }
 
   request(method, params = {}, { timeoutMs = 120000 } = {}) {
@@ -167,11 +177,15 @@ export class AppServerClient {
   // Restart-safe connect: a died/closed child is replaced on the SAME instance.
   async connect() {
     if (this._connected && this.isRunning) return this;
+    this._connected = false;
     this._spawn();
     const init = await this.request('initialize', {
       clientInfo: { name: this.name, title: 'chatgpt-codex-orchestrator', version: this.version },
       capabilities: { experimentalApi: true, requestAttestation: false },
     }, { timeoutMs: 60000 });
+    // v0.165.0 expects a parameterless client notification after initialize.
+    // Keep effective-permission verification's experimental settings seam enabled.
+    await this._send({ method: 'initialized' }, { confirmWrite: true });
     this.codexHome = typeof init?.codexHome === 'string' ? init.codexHome : null;
     this._connected = true;
     return init;

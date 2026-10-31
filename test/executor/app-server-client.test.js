@@ -115,3 +115,64 @@ test('restartable: close then reconnect same instance works', async (t) => {
   assert.equal(client.isRunning, true);
   t.after(() => client.close());
 });
+
+test('initialize notification precedes requests on first connection and reconnect', async (t) => {
+  const client = makeClient({ env: { ...process.env, FAKE_APP_SERVER_REQUIRE_INITIALIZED: '1' } });
+  t.after(() => client.close());
+  await client.connect();
+  assert.ok((await client.request('thread/start', {})).thread.id);
+  await client.close();
+  await client.connect();
+  assert.ok((await client.request('thread/start', {})).thread.id);
+});
+
+test('failed initialized notification never marks the child ready', async (t) => {
+  const client = makeClient();
+  t.after(() => client.close());
+  const originalSend = client._send.bind(client);
+  client._send = (message) => {
+    if (message.method === 'initialized') throw new Error('simulated notification write failure');
+    return originalSend(message);
+  };
+  await assert.rejects(client.connect(), /simulated notification write failure/);
+  assert.equal(client._connected, false);
+  assert.equal(client.codexHome, null);
+});
+
+test('asynchronous initialized write failure leaves the child unready', async (t) => {
+  const client = makeClient();
+  t.after(() => client.close());
+  const originalSend = client._send.bind(client);
+  client._send = (message, options) => {
+    if (message.method === 'initialized') return Promise.reject(new Error('asynchronous write failure'));
+    return originalSend(message, options);
+  };
+  await assert.rejects(client.connect(), /asynchronous write failure/);
+  assert.equal(client._connected, false);
+  assert.equal(client.codexHome, null);
+});
+
+test('late exit from a replaced child does not break a new initialized handshake', async (t) => {
+  const client = makeClient({ env: { ...process.env, FAKE_APP_SERVER_REQUIRE_INITIALIZED: '1' } });
+  t.after(() => client.close());
+  const send = client._send.bind(client);
+  let rejectFirstNotification = true;
+  client._send = (message, options) => {
+    if (message.method === 'initialized' && rejectFirstNotification) {
+      rejectFirstNotification = false;
+      throw new Error('first initialized write failed');
+    }
+    return send(message, options);
+  };
+  await assert.rejects(client.connect(), /first initialized write failed/);
+  const oldChild = client.child;
+  const spawn = client._spawn.bind(client);
+  client._spawn = () => {
+    spawn();
+    // Simulate the old child's delayed close after the replacement was installed.
+    oldChild.emit('close', null, 'SIGTERM');
+  };
+  await client.connect();
+  assert.equal(client.isRunning, true);
+  assert.ok((await client.request('thread/start', {})).thread.id);
+});
