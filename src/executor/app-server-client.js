@@ -97,12 +97,16 @@ export class AppServerClient {
     // A closed stdin must reject a pending notification instead of crashing the host.
     this.child.stdin.on('error', () => {});
     this.child.stderr.on('data', (d) => { this._stderr += String(d); });
-    this.child.on('close', (code, signal) => {
+    const spawnedChild = this.child;
+    spawnedChild.on('close', (code, signal) => {
+      // A replaced child may close after the new child's handshake has begun.
+      if (this.child !== spawnedChild) return;
       this.exited = true;
       this._failAllPending(`app-server exited (code=${code}, signal=${signal})`);
       this._emitLifecycle({ type: 'exit', code, signal });
     });
-    this.child.on('error', (err) => {
+    spawnedChild.on('error', (err) => {
+      if (this.child !== spawnedChild) return;
       this.exited = true;
       this._failAllPending('app-server spawn error: ' + err.message);
       this._emitLifecycle({ type: 'error', reason: err.message });

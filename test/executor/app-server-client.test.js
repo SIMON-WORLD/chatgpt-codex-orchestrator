@@ -151,3 +151,28 @@ test('asynchronous initialized write failure leaves the child unready', async (t
   assert.equal(client._connected, false);
   assert.equal(client.codexHome, null);
 });
+
+test('late exit from a replaced child does not break a new initialized handshake', async (t) => {
+  const client = makeClient({ env: { ...process.env, FAKE_APP_SERVER_REQUIRE_INITIALIZED: '1' } });
+  t.after(() => client.close());
+  const send = client._send.bind(client);
+  let rejectFirstNotification = true;
+  client._send = (message, options) => {
+    if (message.method === 'initialized' && rejectFirstNotification) {
+      rejectFirstNotification = false;
+      throw new Error('first initialized write failed');
+    }
+    return send(message, options);
+  };
+  await assert.rejects(client.connect(), /first initialized write failed/);
+  const oldChild = client.child;
+  const spawn = client._spawn.bind(client);
+  client._spawn = () => {
+    spawn();
+    // Simulate the old child's delayed close after the replacement was installed.
+    oldChild.emit('close', null, 'SIGTERM');
+  };
+  await client.connect();
+  assert.equal(client.isRunning, true);
+  assert.ok((await client.request('thread/start', {})).thread.id);
+});
