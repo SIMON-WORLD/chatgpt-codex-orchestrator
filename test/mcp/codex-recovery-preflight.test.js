@@ -75,6 +75,13 @@ test('MCP recovery preflight reports safe_to_start with only terminal history', 
   const unrelated = await callPreflight(x.client, { workspaceId: x.workspaceId, identity: 'different-logical-task', rejectTerminalIdentity: true });
   assert.equal(JSON.parse(textOf(unrelated)).status, 'safe_to_start');
   assert.equal(JSON.parse(textOf(unrelated)).terminalIdentityChecked, true);
+
+  // Same logical identity must not become startable because task/step changed.
+  x.executor.jobMap.update(old.jobId, { state: 'running', taskId: 'old-task', stepId: 'old-step' });
+  const rebound = await callPreflight(x.client, { workspaceId: x.workspaceId, identity: CURRENT_IDENTITY,
+    taskId: 'new-task', stepId: 'new-step', rejectTerminalIdentity: true });
+  assert.equal(JSON.parse(textOf(rebound)).status, 'recover_existing');
+  assert.equal(JSON.parse(textOf(rebound)).terminalIdentityChecked, true);
 });
 
 test('MCP recovery preflight returns one unique unbound risk candidate without becoming a job list', async (t) => {

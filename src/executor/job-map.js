@@ -189,8 +189,8 @@ export class JobMap {
   // never used for selection, ambiguity discloses only a count, and only one uniquely
   // dangerous execution may expose the exact internal recovery identity needed by Brain.
   recoveryPreflight({ workspaceId = null, workspaceRoot = null, taskId = null, stepId = null, identity = null, rejectTerminalIdentity = false } = {}) {
-    // The Relay start contract needs evidence that *any* terminal job with
-    // this stable identity has not already run, even if the Relay DB was lost.
+    // The Relay start contract must find any previous job with this stable
+    // identity, even if other binding fields changed or the Relay DB was lost.
     // Ordinary existing callers retain the original nonterminal-only semantics.
     if (rejectTerminalIdentity) {
       if (workspaceId == null && workspaceRoot == null) {
@@ -203,7 +203,7 @@ export class JobMap {
       if (scan.corruptCount > 0) {
         return { ok: false, error: 'corrupt', reason: 'durable Codex job state is unreadable; refusing to infer absence' };
       }
-      if (scan.jobs.some((job) => job.identity === identity && TERMINAL_JOB_STATES.has(job.state))) {
+      if (scan.jobs.some((job) => job.identity === identity)) {
         return { ok: true, status: 'recover_existing', nextAction: 'codex_recover', terminalIdentityChecked: true };
       }
       return {

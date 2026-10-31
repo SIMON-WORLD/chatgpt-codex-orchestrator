@@ -113,16 +113,22 @@ test('lost completed continue acknowledgement cannot be replayed with a new key'
     accountId: h.accountId, deviceId: h.device.deviceId, runtimeId: 'runtime-1',
     relayWorkspaceId: h.workspaceId, localJobId: 'local-job', now: h.core.now(),
   });
+  const jobs = new JobMap({ dataRoot: h.dir });
+  jobs.save('local-job', { jobId: 'local-job', workspaceId: 'local-workspace', identity: 'logical-task', state: 'completed' });
   let turns = 0;
   h.core.dispatchForAccount = async ({ payload }) => {
     assert.equal(payload.params.name, 'codex_continue');
     turns++;
+    // Persist the terminal device-local turn before simulating the lost response.
+    jobs.update('local-job', { state: 'completed', stepId: payload.params.arguments.stepId });
     if (turns === 1) return result({ error: { code: 'LOST_ACK_AFTER_TERMINAL_TURN' } }, true);
     return result({ state: 'completed' });
   };
   const args = { workspaceId: h.workspaceId, jobId: job.relay_job_id,
     operationKey: 'continue-key-001', stepId: 'semantic-step-1', instruction: 'same step' };
   await assert.rejects(h.facade.codexJobTool(h.accountId, 'codex_continue', args), (e) => e?.code === 'CODEX_LOCAL_REJECTED');
+  assert.equal(jobs.load('local-job').state, 'completed');
+  assert.equal(jobs.load('local-job').stepId, 'semantic-step-1');
   await assert.rejects(h.facade.codexJobTool(h.accountId, 'codex_continue', {
     ...args, operationKey: 'continue-key-002',
   }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
