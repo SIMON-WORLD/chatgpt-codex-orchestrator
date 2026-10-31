@@ -102,6 +102,7 @@ export class RelayStore {
       'CREATE UNIQUE INDEX IF NOT EXISTS codex_job_live_unique ON codex_job_affinity(account_id,device_id,runtime_id,relay_workspace_id,local_job_id) WHERE invalidated_at IS NULL;',
       'CREATE TABLE IF NOT EXISTS codex_approval_affinity (relay_approval_id TEXT PRIMARY KEY, relay_job_id TEXT NOT NULL REFERENCES codex_job_affinity(relay_job_id) ON DELETE CASCADE, local_approval_id TEXT NOT NULL, created_at INTEGER NOT NULL, consumed_at INTEGER, UNIQUE(relay_job_id,local_approval_id));',
       'CREATE TABLE IF NOT EXISTS codex_intents (account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE, relay_workspace_id TEXT NOT NULL REFERENCES workspace_affinity(relay_workspace_id) ON DELETE CASCADE, kind TEXT NOT NULL, operation_key TEXT NOT NULL, payload_sha256 TEXT NOT NULL, relay_job_id TEXT REFERENCES codex_job_affinity(relay_job_id), completed_at INTEGER, created_at INTEGER NOT NULL, PRIMARY KEY(account_id,relay_workspace_id,kind,operation_key));',
+      'CREATE TABLE IF NOT EXISTS codex_semantic_intents (account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE, device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE, kind TEXT NOT NULL, semantic_sha256 TEXT NOT NULL, relay_workspace_id TEXT NOT NULL REFERENCES workspace_affinity(relay_workspace_id) ON DELETE CASCADE, operation_key TEXT NOT NULL, payload_sha256 TEXT NOT NULL, relay_job_id TEXT REFERENCES codex_job_affinity(relay_job_id), completed_at INTEGER, created_at INTEGER NOT NULL, PRIMARY KEY(account_id,device_id,kind,semantic_sha256), UNIQUE(account_id,relay_workspace_id,kind,operation_key));',
     ].join('\n'));
   }
 
@@ -262,25 +263,56 @@ export class RelayStore {
     if (!row) fail('STALE_CODEX_APPROVAL', 'approval already used or unknown', 409);
   }
 
-  // The intent is persisted BEFORE dispatch. A lost answer is ambiguous:
-  // no caller may turn a second operation key into a silent replay.
-  claimCodexIntent({ accountId, relayWorkspaceId, kind, operationKey, payloadDigest, relayJobId = null, now }) {
+  // Transport and logical identities are independent. Both records commit
+  // atomically before dispatch; only hashes of payload and identity are stored.
+  claimCodexIntent({ accountId, deviceId, relayWorkspaceId, kind, operationKey, semanticKey, payloadDigest, relayJobId = null, now }) {
+    const semanticDigest = sha256(semanticKey);
     return this.transaction(() => {
-      const statement = 'INSERT OR IGNORE INTO codex_intents (account_id,relay_workspace_id,kind,operation_key,payload_sha256,relay_job_id,completed_at,created_at) VALUES (?,?,?,?,?,?,NULL,?)';
-      const inserted = this.db.prepare(statement).run(accountId, relayWorkspaceId, kind, operationKey, payloadDigest, relayJobId, now);
-      const intent = this.db.prepare('SELECT * FROM codex_intents WHERE account_id = ? AND relay_workspace_id = ? AND kind = ? AND operation_key = ?').get(accountId, relayWorkspaceId, kind, operationKey);
-      if (intent.payload_sha256 !== payloadDigest || (relayJobId && intent.relay_job_id !== relayJobId)) {
+      const existingKey = this.db.prepare('SELECT * FROM codex_intents WHERE account_id = ? AND relay_workspace_id = ? AND kind = ? AND operation_key = ?')
+        .get(accountId, relayWorkspaceId, kind, operationKey);
+      if (existingKey && (existingKey.payload_sha256 !== payloadDigest ||
+          (relayJobId && existingKey.relay_job_id !== relayJobId))) {
         fail('CODEX_OPERATION_KEY_CONFLICT', 'operation key reused with another payload/job', 409);
       }
-      return { fresh: Number(inserted.changes) === 1, intent };
+
+      const existingSemantic = this.db.prepare('SELECT * FROM codex_semantic_intents WHERE account_id = ? AND device_id = ? AND kind = ? AND semantic_sha256 = ?')
+        .get(accountId, deviceId, kind, semanticDigest);
+      if (existingSemantic) {
+        if (existingSemantic.completed_at != null && existingSemantic.relay_workspace_id === relayWorkspaceId &&
+            (existingSemantic.payload_sha256 !== payloadDigest ||
+             (relayJobId && existingSemantic.relay_job_id !== relayJobId))) {
+          fail('CODEX_SEMANTIC_CONFLICT', 'logical operation reused with another payload/job', 409);
+        }
+        return { fresh: false, intent: existingSemantic, recoveryRequired: existingSemantic.operation_key !== operationKey };
+      }
+
+      // Earlier candidate schemas recorded only delivery keys, so their logical
+      // binding cannot safely authorize another start or continuation.
+      const legacy = this.db.prepare(
+        'SELECT 1 FROM codex_intents i JOIN workspace_affinity w ON w.relay_workspace_id = i.relay_workspace_id ' +
+        'LEFT JOIN codex_semantic_intents s ON s.account_id = i.account_id AND s.relay_workspace_id = i.relay_workspace_id AND s.kind = i.kind AND s.operation_key = i.operation_key ' +
+        'WHERE i.account_id = ? AND w.device_id = ? AND i.kind = ? AND s.semantic_sha256 IS NULL LIMIT 1'
+      ).get(accountId, deviceId, kind);
+      if (existingKey || legacy) fail('CODEX_RECOVERY_REQUIRED', 'legacy Codex intent has no verified logical binding', 409);
+
+      this.db.prepare('INSERT INTO codex_intents (account_id,relay_workspace_id,kind,operation_key,payload_sha256,relay_job_id,completed_at,created_at) VALUES (?,?,?,?,?,?,NULL,?)')
+        .run(accountId, relayWorkspaceId, kind, operationKey, payloadDigest, relayJobId, now);
+      this.db.prepare('INSERT INTO codex_semantic_intents (account_id,device_id,kind,semantic_sha256,relay_workspace_id,operation_key,payload_sha256,relay_job_id,completed_at,created_at) VALUES (?,?,?,?,?,?,?,?,NULL,?)')
+        .run(accountId, deviceId, kind, semanticDigest, relayWorkspaceId, operationKey, payloadDigest, relayJobId, now);
+      return { fresh: true };
     });
   }
 
-  finishCodexIntent({ accountId, relayWorkspaceId, kind, operationKey, relayJobId, now }) {
-    const changed = this.db.prepare('UPDATE codex_intents SET relay_job_id = ?, completed_at = ? WHERE account_id = ? AND relay_workspace_id = ? AND kind = ? AND operation_key = ? AND completed_at IS NULL').run(
-      relayJobId, now, accountId, relayWorkspaceId, kind, operationKey
-    );
-    if (Number(changed.changes) !== 1) fail('CODEX_INTENT_CONFLICT', 'Codex intent was not uniquely pending', 409);
+  finishCodexIntent({ accountId, deviceId, relayWorkspaceId, kind, operationKey, semanticKey, relayJobId, now }) {
+    return this.transaction(() => {
+      const changed = this.db.prepare('UPDATE codex_intents SET relay_job_id = ?, completed_at = ? WHERE account_id = ? AND relay_workspace_id = ? AND kind = ? AND operation_key = ? AND completed_at IS NULL')
+        .run(relayJobId, now, accountId, relayWorkspaceId, kind, operationKey);
+      const semantic = this.db.prepare('UPDATE codex_semantic_intents SET relay_job_id = ?, completed_at = ? WHERE account_id = ? AND device_id = ? AND kind = ? AND semantic_sha256 = ? AND relay_workspace_id = ? AND operation_key = ? AND completed_at IS NULL')
+        .run(relayJobId, now, accountId, deviceId, kind, sha256(semanticKey), relayWorkspaceId, operationKey);
+      if (Number(changed.changes) !== 1 || Number(semantic.changes) !== 1) {
+        fail('CODEX_INTENT_CONFLICT', 'Codex intent was not uniquely pending', 409);
+      }
+    });
   }
 
   invalidateDeviceAffinities(deviceId, now) {

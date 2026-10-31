@@ -138,3 +138,16 @@ test('failed initialized notification never marks the child ready', async (t) =>
   assert.equal(client._connected, false);
   assert.equal(client.codexHome, null);
 });
+
+test('asynchronous initialized write failure leaves the child unready', async (t) => {
+  const client = makeClient();
+  t.after(() => client.close());
+  const originalSend = client._send.bind(client);
+  client._send = (message, options) => {
+    if (message.method === 'initialized') return Promise.reject(new Error('asynchronous write failure'));
+    return originalSend(message, options);
+  };
+  await assert.rejects(client.connect(), /asynchronous write failure/);
+  assert.equal(client._connected, false);
+  assert.equal(client.codexHome, null);
+});

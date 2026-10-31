@@ -655,13 +655,13 @@ export function createToolsServer({ workspaceRegistry, appServerExecutor = null,
   // ---- Codex Delegate ------------------------------------------------------
   if (appServerExecutor) {
     server.registerTool('codex_recovery_preflight', {
-      description: 'Read-only duplicate-execution risk preflight for one workspace and semantic task scope. Considers only recovery-risk/non-terminal jobs that are unbound or exactly match taskId/stepId/identity; ignores terminal history; never lists jobs, selects most-recent, resumes, reconciles, starts, interrupts, or force-unlocks anything.',
+      description: 'Read-only duplicate-execution risk preflight for one workspace and semantic task scope. By default considers only recovery-risk/non-terminal jobs that are unbound or exactly match taskId/stepId/identity; rejectTerminalIdentity also rejects matching terminal history. Never lists jobs, selects most-recent, resumes, reconciles, starts, interrupts, or force-unlocks anything.',
       annotations: R,
-      inputSchema: z.object({ workspaceId: workspaceIdSchema, taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }),
-    }, async ({ workspaceId, taskId, stepId, identity }) => {
+      inputSchema: z.object({ workspaceId: workspaceIdSchema, taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional(), rejectTerminalIdentity: z.boolean().optional() }),
+    }, async ({ workspaceId, taskId, stepId, identity, rejectTerminalIdentity = false }) => {
       try {
         const root = assertSameWorkspace(workspaceRegistry, workspaceId, null);
-        const result = appServerExecutor.jobMap.recoveryPreflight({ workspaceId, workspaceRoot: root, taskId, stepId, identity });
+        const result = appServerExecutor.jobMap.recoveryPreflight({ workspaceId, workspaceRoot: root, taskId, stepId, identity, rejectTerminalIdentity });
         if (!result.ok) return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: true };
         return text(result);
       } catch (e) {

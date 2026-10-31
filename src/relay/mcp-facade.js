@@ -219,17 +219,22 @@ export class RelayMcpFacade {
     const { workspaceId, prompt, accessMode, operationKey, networkAccess = false, taskId, stepId, identity } = args;
     const workspace = this.resolveWorkspace(accountId, workspaceId);
     if (!workspace.device.ready) relayFail(workspace.device.online ? 'DEVICE_NOT_READY' : 'DEVICE_OFFLINE', 'selected Codex device is not Ready', 409);
-    const binding = identity || 'relay-' + operationKey;
+    if (typeof identity !== 'string' || !identity.trim() || identity.length > 256) {
+      relayFail('CODEX_BINDING_REQUIRED', 'start requires a stable logical identity', 400);
+    }
+    const binding = identity;
+    const semanticKey = JSON.stringify(['start', binding]);
     const localArgs = {
       workspaceId: workspace.affinity.local_workspace_id, prompt, accessMode,
       networkAccess, ...(taskId ? { taskId } : {}), ...(stepId ? { stepId } : {}), identity: binding,
     };
     const payloadDigest = createHash('sha256').update(JSON.stringify(localArgs)).digest('hex');
     const claim = this.store.claimCodexIntent({
-      accountId, relayWorkspaceId: workspaceId, kind: 'start', operationKey, payloadDigest, now: this.core.now(),
+      accountId, deviceId: workspace.affinity.device_id, relayWorkspaceId: workspaceId,
+      kind: 'start', operationKey, semanticKey, payloadDigest, now: this.core.now(),
     });
     if (!claim.fresh) {
-      if (!claim.intent.completed_at || !claim.intent.relay_job_id) {
+      if (claim.recoveryRequired || claim.intent.completed_at == null || !claim.intent.relay_job_id || claim.intent.relay_workspace_id !== workspaceId) {
         relayFail('CODEX_RECOVERY_REQUIRED', 'ambiguous Codex start; use codex_recover by the original semantic binding', 409);
       }
       const known = this.resolveCodexJob(accountId, workspaceId, claim.intent.relay_job_id);
@@ -240,15 +245,16 @@ export class RelayMcpFacade {
     const preflight = await this.dispatchCodex(accountId, workspace, 'codex_recovery_preflight', {
       workspaceId: workspace.affinity.local_workspace_id,
       ...(taskId ? { taskId } : {}), ...(stepId ? { stepId } : {}), identity: binding,
+      rejectTerminalIdentity: true,
     });
-    if (preflight.ok !== true || preflight.status !== 'safe_to_start') relayFail('CODEX_RECOVERY_REQUIRED', 'device-local preflight did not clear the Codex scope', 409);
+    if (preflight.ok !== true || preflight.terminalIdentityChecked !== true || preflight.status !== 'safe_to_start') relayFail('CODEX_RECOVERY_REQUIRED', 'device-local preflight did not clear the Codex scope', 409);
     const body = await this.dispatchCodex(accountId, workspace, 'codex_start', localArgs);
     if (typeof body.jobId !== 'string' || !body.jobId) relayFail('CODEX_RECOVERY_REQUIRED', 'start acknowledgement has no job identity; reconcile before retry', 409);
     const job = this.store.createCodexJobAffinity({
       accountId, deviceId: workspace.affinity.device_id, runtimeId: workspace.affinity.runtime_id,
       relayWorkspaceId: workspaceId, localJobId: body.jobId, now: this.core.now(),
     });
-    this.store.finishCodexIntent({ accountId, relayWorkspaceId: workspaceId, kind: 'start', operationKey, relayJobId: job.relay_job_id, now: this.core.now() });
+    this.store.finishCodexIntent({ accountId, deviceId: workspace.affinity.device_id, relayWorkspaceId: workspaceId, kind: 'start', operationKey, semanticKey, relayJobId: job.relay_job_id, now: this.core.now() });
     return this.projectCodexJob(accountId, workspaceId, job.relay_job_id, body);
   }
 
@@ -258,12 +264,18 @@ export class RelayMcpFacade {
     if (!resolved.device.ready) relayFail(resolved.device.online ? 'DEVICE_NOT_READY' : 'DEVICE_OFFLINE', 'selected Codex device is not Ready', 409);
     const localArgs = { workspaceId: resolved.affinity.local_workspace_id, jobId: resolved.job.local_job_id };
 
+    let semanticKey = null;
     if (method === 'codex_continue') {
-      Object.assign(localArgs, { instruction, ...(taskId ? { taskId } : {}), ...(stepId ? { stepId } : {}), ...(identity ? { identity } : {}) });
+      if (typeof stepId !== 'string' || !stepId.trim() || stepId.length > 256) {
+        relayFail('CODEX_BINDING_REQUIRED', 'continue requires a stable logical stepId', 400);
+      }
+      if (identity != null) relayFail('CODEX_BINDING_IMMUTABLE', 'continue cannot rebind a job identity', 400);
+      semanticKey = JSON.stringify(['continue', resolved.job.local_job_id, stepId]);
+      Object.assign(localArgs, { instruction, ...(taskId ? { taskId } : {}), stepId });
       const digest = createHash('sha256').update(JSON.stringify(localArgs)).digest('hex');
-      const claim = this.store.claimCodexIntent({ accountId, relayWorkspaceId: workspaceId, kind: 'continue', operationKey, payloadDigest: digest, relayJobId: jobId, now: this.core.now() });
+      const claim = this.store.claimCodexIntent({ accountId, deviceId: resolved.affinity.device_id, relayWorkspaceId: workspaceId, kind: 'continue', operationKey, semanticKey, payloadDigest: digest, relayJobId: jobId, now: this.core.now() });
       if (!claim.fresh) {
-        if (!claim.intent.completed_at) relayFail('CODEX_RECOVERY_REQUIRED', 'ambiguous Codex continue; reconcile before any next turn', 409);
+        if (claim.recoveryRequired || !claim.intent.completed_at || claim.intent.relay_workspace_id !== workspaceId || claim.intent.relay_job_id !== jobId) relayFail('CODEX_RECOVERY_REQUIRED', 'ambiguous Codex continue; reconcile before any next turn', 409);
         return this.projectCodexJob(accountId, workspaceId, jobId, { state: 'submitted' });
       }
     } else if (method === 'codex_respond_approval') {
@@ -275,7 +287,7 @@ export class RelayMcpFacade {
     }
     const body = await this.dispatchCodex(accountId, resolved, method, localArgs);
     if (method === 'codex_continue') {
-      this.store.finishCodexIntent({ accountId, relayWorkspaceId: workspaceId, kind: 'continue', operationKey, relayJobId: jobId, now: this.core.now() });
+      this.store.finishCodexIntent({ accountId, deviceId: resolved.affinity.device_id, relayWorkspaceId: workspaceId, kind: 'continue', operationKey, semanticKey, relayJobId: jobId, now: this.core.now() });
     }
     this.store.touchCodexJobAffinity(jobId, this.core.now());
     return this.projectCodexJob(accountId, workspaceId, jobId, body);
@@ -375,13 +387,13 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
   const operationKey = z.string().regex(/^[A-Za-z0-9_-]{8,96}$/u);
   const codexJob = z.string().regex(/^job_[A-Za-z0-9_-]{32}$/u);
   register(server, facade, accountId, 'codex_start', {
-    description: 'Delegate an authorized Codex task to the exact device that owns this relay workspace. Supply an operationKey stable across retries; ambiguous dispatch requires semantic recovery, never duplicate start.',
+    description: 'Delegate an authorized Codex task to the exact device. Keep identity stable for this logical task across retries; operationKey identifies delivery only. Ambiguous dispatch requires recovery.',
     annotations: M,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema, prompt: z.string().min(1).max(120000),
       accessMode: z.enum(['read_only','workspace_write']), operationKey,
       networkAccess: z.boolean().optional(), taskId: z.string().optional(),
-      stepId: z.string().optional(), identity: z.string().optional(),
+      stepId: z.string().optional(), identity: z.string().min(1).max(256),
     }).strict(),
   }, (args) => facade.codexStart(accountId, args));
   register(server, facade, accountId, 'codex_get', {
@@ -390,9 +402,9 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
     inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: codexJob }).strict(),
   }, (args) => facade.codexJobTool(accountId, 'codex_get', args));
   register(server, facade, accountId, 'codex_continue', {
-    description: 'Continue the same Codex job. A stable operationKey prevents a lost answer from replaying a second turn.',
+    description: 'Continue the exact Codex job. Keep stepId stable for this logical continuation across retries; a distinct step requires a distinct stepId.',
     annotations: M,
-    inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: codexJob, operationKey, instruction: z.string().min(1).max(120000), taskId: z.string().optional(), stepId: z.string().optional(), identity: z.string().optional() }).strict(),
+    inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: codexJob, operationKey, instruction: z.string().min(1).max(120000), taskId: z.string().optional(), stepId: z.string().min(1).max(256) }).strict(),
   }, (args) => facade.codexJobTool(accountId, 'codex_continue', args));
   for (const [name, annotations] of [['codex_interrupt', M], ['codex_reconcile', M]]) {
     register(server, facade, accountId, name, {

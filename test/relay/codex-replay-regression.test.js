@@ -33,14 +33,16 @@ async function setup(t) {
     accountId: account.account_id, deviceId: device.deviceId, runtimeId: 'runtime-1',
     localWorkspaceId: 'local-workspace', now: core.now(),
   });
-  t.after(() => { core.close(); store.close(); });
-  return { dir, store, core, facade, accountId: account.account_id, device, session, workspaceId: workspace.relay_workspace_id };
+  let closed = false;
+  const close = () => { if (!closed) { closed = true; core.close(); store.close(); } };
+  t.after(close);
+  return { dir, store, core, facade, accountId: account.account_id, device, session, workspaceId: workspace.relay_workspace_id, close };
 }
 
 test('start requires a stable semantic identity before any device dispatch', async (t) => {
   const h = await setup(t);
   let sent = 0;
-  h.core.dispatchForAccount = async () => { sent++; return result({ ok: true, status: 'safe_to_start' }); };
+  h.core.dispatchForAccount = async () => { sent++; return result({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true }); };
   await assert.rejects(h.facade.codexStart(h.accountId, {
     workspaceId: h.workspaceId, prompt: 'change code', accessMode: 'workspace_write',
     operationKey: 'delivery-key-001',
@@ -55,7 +57,7 @@ test('lost start acknowledgement and a new key cannot replay a terminal logical 
   h.core.dispatchForAccount = async ({ payload }) => {
     const { name, arguments: args } = payload.params;
     if (name === 'codex_recovery_preflight') {
-      return result(jobs.recoveryPreflight({ workspaceId: args.workspaceId, identity: args.identity }));
+      return result(jobs.recoveryPreflight({ workspaceId: args.workspaceId, identity: args.identity, rejectTerminalIdentity: args.rejectTerminalIdentity }));
     }
     assert.equal(name, 'codex_start');
     starts++;
@@ -92,7 +94,7 @@ test('a new workspace handle cannot defeat an ambiguous logical start', async (t
   }).relay_workspace_id;
   let starts = 0;
   h.core.dispatchForAccount = async ({ payload }) => {
-    if (payload.params.name === 'codex_recovery_preflight') return result({ ok: true, status: 'safe_to_start' });
+    if (payload.params.name === 'codex_recovery_preflight') return result({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true });
     starts++;
     return result({ error: { code: 'LOST_ACK' } }, true);
   };
@@ -147,16 +149,18 @@ test('runtime rollover between preflight and start sends no mutation to the new 
   h.core.respondAgent({
     deviceId: h.device.deviceId, credential: h.device.credential, runtimeId: 'runtime-1',
     connectionEpoch: h.session.connectionEpoch, requestId: preflight.requestId,
-    response: result({ ok: true, status: 'safe_to_start' }),
+    response: result({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true }),
   });
   const next = h.core.connectAgent({
     deviceId: h.device.deviceId, credential: h.device.credential,
     runtimeId: 'runtime-2', executorReady: true, protocolVersion: '1',
   });
+  // The relay intentionally unrefs its poll timer; keep this test alive until it settles.
+  const keepAlive = setTimeout(() => {}, 1000);
   const envelope = await h.core.pollAgent({
     deviceId: h.device.deviceId, credential: h.device.credential, runtimeId: 'runtime-2',
     connectionEpoch: next.connectionEpoch, executorReady: true, protocolVersion: '1', holdMs: 50,
-  });
+  }).finally(() => clearTimeout(keepAlive));
   if (envelope) h.core.respondAgent({
     deviceId: h.device.deviceId, credential: h.device.credential, runtimeId: 'runtime-2',
     connectionEpoch: next.connectionEpoch, requestId: envelope.requestId,
@@ -164,4 +168,148 @@ test('runtime rollover between preflight and start sends no mutation to the new 
   });
   await assert.rejects(promise, (e) => ['STALE_WORKSPACE_HANDLE', 'DEVICE_RUNTIME_CHANGED'].includes(e?.code));
   assert.equal(envelope, null, 'the new runtime must receive zero mutating starts');
+});
+
+test('continue requires a stable logical step before any device dispatch', async (t) => {
+  const h = await setup(t);
+  const job = h.store.createCodexJobAffinity({
+    accountId: h.accountId, deviceId: h.device.deviceId, runtimeId: 'runtime-1',
+    relayWorkspaceId: h.workspaceId, localJobId: 'local-job', now: h.core.now(),
+  });
+  let sent = 0;
+  h.core.dispatchForAccount = async () => { sent++; return result({ state: 'running' }); };
+  await assert.rejects(h.facade.codexJobTool(h.accountId, 'codex_continue', {
+    workspaceId: h.workspaceId, jobId: job.relay_job_id,
+    operationKey: 'continue-key-001', instruction: 'continue',
+  }), (e) => e?.code === 'CODEX_BINDING_REQUIRED');
+  assert.equal(sent, 0);
+});
+
+test('ambiguous logical start remains fenced after reopening the relay store', async (t) => {
+  const h = await setup(t);
+  let firstStarts = 0;
+  h.core.dispatchForAccount = async ({ payload }) => {
+    if (payload.params.name === 'codex_recovery_preflight') return result({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true });
+    firstStarts++;
+    return result({ error: { code: 'LOST_ACK' } }, true);
+  };
+  const args = { workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
+    identity: 'persisted-task', operationKey: 'delivery-key-001' };
+  await assert.rejects(h.facade.codexStart(h.accountId, args), (e) => e?.code === 'CODEX_LOCAL_REJECTED');
+  assert.equal(firstStarts, 1);
+  h.close();
+
+  const store = new RelayStore(path.join(h.dir, 'relay.sqlite'));
+  const core = new RelayCore({
+    store, verifyBearer: async () => ({ issuer: 'https://issuer.example/', subject: 'user-a' }),
+    presenceWindowMs: 60000,
+  });
+  t.after(() => { core.close(); store.close(); });
+  core.connectAgent({ deviceId: h.device.deviceId, credential: h.device.credential,
+    runtimeId: 'runtime-1', executorReady: true, protocolVersion: '1' });
+  const facade = new RelayMcpFacade({ core });
+  let redispatches = 0;
+  core.dispatchForAccount = async () => { redispatches++; return result({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true }); };
+  await assert.rejects(facade.codexStart(h.accountId, {
+    ...args, operationKey: 'delivery-key-002',
+  }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
+  assert.equal(redispatches, 0);
+});
+
+test('an older unbound delivery intent cannot authorize a new logical start', async (t) => {
+  const h = await setup(t);
+  h.store.db.prepare('INSERT INTO codex_intents (account_id, relay_workspace_id, kind, operation_key, payload_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(h.accountId, h.workspaceId, 'start', 'legacy-key-001', 'a'.repeat(64), h.core.now());
+  let sent = 0;
+  h.core.dispatchForAccount = async () => { sent++; return result({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true }); };
+  await assert.rejects(h.facade.codexStart(h.accountId, {
+    workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
+    identity: 'new-logical-task', operationKey: 'delivery-key-001',
+  }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
+  assert.equal(sent, 0);
+});
+
+test('simultaneous deliveries of one logical start dispatch only once', async (t) => {
+  const h = await setup(t);
+  let starts = 0;
+  let releaseFirst;
+  let signalFirst;
+  const firstEntered = new Promise((resolve) => { signalFirst = resolve; });
+  h.core.dispatchForAccount = async ({ payload }) => {
+    if (payload.params.name === 'codex_recovery_preflight') return result({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true });
+    starts++;
+    if (starts === 1) {
+      signalFirst();
+      return await new Promise((resolve) => { releaseFirst = resolve; });
+    }
+    return result({ jobId: 'duplicate-job', state: 'running' });
+  };
+  const args = { workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
+    identity: 'concurrent-task', operationKey: 'delivery-key-001' };
+  const first = h.facade.codexStart(h.accountId, args);
+  first.catch(() => {});
+  await firstEntered;
+  try {
+    await assert.rejects(h.facade.codexStart(h.accountId, {
+      ...args, operationKey: 'delivery-key-002',
+    }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
+    assert.equal(starts, 1);
+  } finally {
+    releaseFirst(result({ jobId: 'first-job', state: 'running' }));
+    await first;
+  }
+});
+
+test('a terminal device-local identity blocks start even without relay history', async (t) => {
+  const h = await setup(t);
+  const jobs = new JobMap({ dataRoot: h.dir });
+  jobs.save('previous-job', {
+    jobId: 'previous-job', workspaceId: 'local-workspace',
+    identity: 'already-completed', state: 'completed',
+  });
+  let starts = 0;
+  h.core.dispatchForAccount = async ({ payload }) => {
+    const { name, arguments: args } = payload.params;
+    if (name === 'codex_recovery_preflight') {
+      return result(jobs.recoveryPreflight({ workspaceId: args.workspaceId, identity: args.identity,
+        rejectTerminalIdentity: args.rejectTerminalIdentity }));
+    }
+    starts++;
+    return result({ jobId: 'duplicate', state: 'running' });
+  };
+  await assert.rejects(h.facade.codexStart(h.accountId, {
+    workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
+    identity: 'already-completed', operationKey: 'new-relay-001',
+  }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
+  assert.equal(starts, 0);
+});
+
+test('a device that does not attest terminal identity checking cannot start', async (t) => {
+  const h = await setup(t);
+  let starts = 0;
+  h.core.dispatchForAccount = async ({ payload }) => {
+    if (payload.params.name === 'codex_recovery_preflight') return result({ ok: true, status: 'safe_to_start' });
+    starts++;
+    return result({ jobId: 'should-not-start', state: 'running' });
+  };
+  await assert.rejects(h.facade.codexStart(h.accountId, {
+    workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
+    identity: 'legacy-device-task', operationKey: 'legacy-device-001',
+  }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
+  assert.equal(starts, 0);
+});
+
+test('continuation cannot silently rebind the recovered job identity', async (t) => {
+  const h = await setup(t);
+  const job = h.store.createCodexJobAffinity({
+    accountId: h.accountId, deviceId: h.device.deviceId, runtimeId: 'runtime-1',
+    relayWorkspaceId: h.workspaceId, localJobId: 'local-job', now: h.core.now(),
+  });
+  let sent = 0;
+  h.core.dispatchForAccount = async () => { sent++; return result({ state: 'running' }); };
+  await assert.rejects(h.facade.codexJobTool(h.accountId, 'codex_continue', {
+    workspaceId: h.workspaceId, jobId: job.relay_job_id, instruction: 'task',
+    operationKey: 'continue-key-001', stepId: 'step-1', identity: 'different-job-identity',
+  }), (e) => e?.code === 'CODEX_BINDING_IMMUTABLE');
+  assert.equal(sent, 0);
 });
