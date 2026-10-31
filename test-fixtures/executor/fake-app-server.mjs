@@ -118,8 +118,18 @@ function maybeReEmitApproval(threadId, turnId) {
   process.stdout.write(JSON.stringify({ id: 'req-approval-1', method, params }) + '\n');
 }
 
+let clientInitialized = false;
 function handle(msg) {
   const { id, method, params } = msg;
+  if (method === 'initialized') {
+    // In the 0.165.0 protocol this is a notification without id or params.
+    clientInitialized = id === undefined && !Object.hasOwn(msg, 'params');
+    return;
+  }
+  if (process.env.FAKE_APP_SERVER_REQUIRE_INITIALIZED === '1' &&
+      method !== 'initialize' && !clientInitialized) {
+    return respondError(id, { code: -32002, message: 'initialized notification required' });
+  }
 
   if (id != null && (msg.result !== undefined || msg.error !== undefined)) {
     const sr = serverRequests.get(String(id));

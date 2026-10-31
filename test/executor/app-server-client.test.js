@@ -115,3 +115,26 @@ test('restartable: close then reconnect same instance works', async (t) => {
   assert.equal(client.isRunning, true);
   t.after(() => client.close());
 });
+
+test('initialize notification precedes requests on first connection and reconnect', async (t) => {
+  const client = makeClient({ env: { ...process.env, FAKE_APP_SERVER_REQUIRE_INITIALIZED: '1' } });
+  t.after(() => client.close());
+  await client.connect();
+  assert.ok((await client.request('thread/start', {})).thread.id);
+  await client.close();
+  await client.connect();
+  assert.ok((await client.request('thread/start', {})).thread.id);
+});
+
+test('failed initialized notification never marks the child ready', async (t) => {
+  const client = makeClient();
+  t.after(() => client.close());
+  const originalSend = client._send.bind(client);
+  client._send = (message) => {
+    if (message.method === 'initialized') throw new Error('simulated notification write failure');
+    return originalSend(message);
+  };
+  await assert.rejects(client.connect(), /simulated notification write failure/);
+  assert.equal(client._connected, false);
+  assert.equal(client.codexHome, null);
+});

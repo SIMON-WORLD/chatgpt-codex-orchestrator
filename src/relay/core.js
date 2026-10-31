@@ -540,7 +540,7 @@ export class RelayCore {
     return this.dispatchForAccount({ accountId: account.account_id, deviceId, payload, deadlineMs });
   }
 
-  async dispatchForAccount({ accountId, deviceId, payload, deadlineMs = 30_000 }) {
+  async dispatchForAccount({ accountId, deviceId, payload, deadlineMs = 30_000, expectedRuntimeId = null }) {
     const row = this.store.deviceForAccount(accountId, deviceId);
     if (!row) fail('DEVICE_NOT_FOUND', 'device not found', 404);
     const state = this.summary(row);
@@ -548,6 +548,11 @@ export class RelayCore {
     if (!state.online) fail('DEVICE_OFFLINE', 'device offline', 409);
     if (!state.ready) fail('DEVICE_NOT_READY', 'device not ready', 409);
     const session = this.activeSessions.get(deviceId);
+    // Validate the affinity at admission, in the same synchronous segment as queueing.
+    // A same-runtime reconnect remains valid; a new runtime cannot receive old handles.
+    if (expectedRuntimeId !== null && (!session || session.runtimeId !== expectedRuntimeId || row.last_runtime_id !== expectedRuntimeId)) {
+      fail('DEVICE_RUNTIME_CHANGED', 'device runtime changed before dispatch', 409);
+    }
     this.#admitDispatch(accountId, deviceId);
     const requestId = randomUUID();
     const deadline = this.now() + Math.max(1, Math.min(Number(deadlineMs) || 30_000, 120_000));

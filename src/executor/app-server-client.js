@@ -167,11 +167,15 @@ export class AppServerClient {
   // Restart-safe connect: a died/closed child is replaced on the SAME instance.
   async connect() {
     if (this._connected && this.isRunning) return this;
+    this._connected = false;
     this._spawn();
     const init = await this.request('initialize', {
       clientInfo: { name: this.name, title: 'chatgpt-codex-orchestrator', version: this.version },
       capabilities: { experimentalApi: true, requestAttestation: false },
     }, { timeoutMs: 60000 });
+    // v0.165.0 expects a parameterless client notification after initialize.
+    // Keep effective-permission verification's experimental settings seam enabled.
+    this._send({ method: 'initialized' });
     this.codexHome = typeof init?.codexHome === 'string' ? init.codexHome : null;
     this._connected = true;
     return init;

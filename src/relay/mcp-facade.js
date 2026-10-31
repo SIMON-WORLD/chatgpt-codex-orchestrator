@@ -187,6 +187,7 @@ export class RelayMcpFacade {
   async dispatchCodex(accountId, workspace, method, localArgs) {
     const response = await this.core.dispatchForAccount({
       accountId, deviceId: workspace.affinity.device_id,
+      expectedRuntimeId: workspace.affinity.runtime_id,
       payload: { method: 'tools/call', params: { name: method, arguments: localArgs } },
     });
     // Do not echo arbitrary local diagnostics, raw IDs, credentials or paths.
