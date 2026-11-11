@@ -2,6 +2,7 @@
 # No elevation, policy override, volume handle, task data or credentials.
 param([Parameter(Mandatory = $true)][string]$Directory)
 $ErrorActionPreference = 'Stop'
+[Console]::Error.WriteLine('governance-flush:validate')
 $full = [IO.Path]::GetFullPath($Directory)
 $root = [IO.Path]::GetPathRoot($full)
 if ($root -notmatch '^[A-Za-z]:\\$') { throw 'Local drive path required.' }
@@ -18,6 +19,7 @@ for ($current = [IO.DirectoryInfo]::new($full); $null -ne $current; $current = $
   }
 }
 
+[Console]::Error.WriteLine('governance-flush:compile')
 Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
@@ -47,5 +49,6 @@ public static class GovernanceDirectoryFlush {
 }
 '@
 
+[Console]::Error.WriteLine('governance-flush:flush')
 [GovernanceDirectoryFlush]::Flush($full)
 Write-Output 'directory-flush-ok'

@@ -129,15 +129,27 @@ function syncAdmissionDirectory(dir) {
     }
     const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     const helper = fileURLToPath(new URL('./windows-directory-flush.ps1', import.meta.url));
+    // Keep only the OS locations needed by Windows PowerShell and its .NET compiler.
+    // Avoid inheriting application or connector credentials into the helper.
+    const env = {
+      SystemRoot: systemRoot, WINDIR: systemRoot, TEMP: os.tmpdir(), TMP: os.tmpdir(),
+      Path: path.join(systemRoot, 'System32'),
+    };
+    for (const key of ['SystemDrive', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData']) {
+      if (process.env[key]) env[key] = process.env[key];
+    }
     let output;
     try {
       output = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-File', helper, '-Directory', dir], {
         windowsHide: true, timeout: 15000, maxBuffer: 65536,
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-        env: { SystemRoot: systemRoot, WINDIR: systemRoot, TEMP: os.tmpdir(), TMP: os.tmpdir() },
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env,
       });
-    } catch {
-      throw new GovernanceStoreError('Windows checked directory flush failed', { code: 'admission_storage_unverified' });
+    } catch (error) {
+      const phase = /^governance-flush:(validate|compile|flush)\r?$/gm;
+      const lastPhase = Array.from(String(error.stderr ?? '').matchAll(phase)).at(-1)?.[1] ?? 'launch';
+      const reason = error.code === 'ETIMEDOUT' ? 'timed out' : 'failed';
+      throw new GovernanceStoreError(`Windows checked directory flush ${reason} (${lastPhase})`,
+        { code: 'admission_storage_unverified' });
     }
     if (output.trim() !== 'directory-flush-ok') {
       throw new GovernanceStoreError('Windows directory flush was not confirmed', { code: 'admission_storage_unverified' });
