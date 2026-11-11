@@ -12,6 +12,9 @@
 //   - known older schema              -> explicit deterministic migration
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { runtimePaths } from '../runtime-paths.js';
 
 export const GOVERNANCE_SCHEMA_VERSION = 2;
@@ -117,6 +120,30 @@ export function atomicWriteJsonWithBackup(file, obj, { rename = fs.renameSync } 
 }
 
 function syncAdmissionDirectory(dir) {
+  if (process.platform === 'win32') {
+    // libuv's read-only directory descriptor returns EPERM for fsync on NTFS.
+    // Use a write-capable native directory handle, never a volume flush or skip.
+    const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+    if (!path.isAbsolute(systemRoot)) {
+      throw new GovernanceStoreError('Windows system root is not absolute', { code: 'admission_storage_unverified' });
+    }
+    const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const helper = fileURLToPath(new URL('./windows-directory-flush.ps1', import.meta.url));
+    let output;
+    try {
+      output = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-File', helper, '-Directory', dir], {
+        windowsHide: true, timeout: 15000, maxBuffer: 65536,
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+        env: { SystemRoot: systemRoot, WINDIR: systemRoot, TEMP: os.tmpdir(), TMP: os.tmpdir() },
+      });
+    } catch {
+      throw new GovernanceStoreError('Windows checked directory flush failed', { code: 'admission_storage_unverified' });
+    }
+    if (output.trim() !== 'directory-flush-ok') {
+      throw new GovernanceStoreError('Windows directory flush was not confirmed', { code: 'admission_storage_unverified' });
+    }
+    return;
+  }
   const fd = fs.openSync(dir, 'r');
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }

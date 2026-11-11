@@ -1,13 +1,13 @@
-name: Windows Governance durability probe
+name: Windows Governance durability
 on:
   push:
     branches: [feat/235-windows-durability-g01-5038b751]
 permissions:
   contents: read
 jobs:
-  windows-probe:
+  windows-durability:
     runs-on: windows-2025
-    timeout-minutes: 8
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -22,3 +22,6 @@ jobs:
       - name: Probe file and directory durability APIs
         shell: pwsh
         run: ./test-fixtures/governance/windows-directory-flush-probe.ps1
+      - name: Test checked Windows admission storage and restart
+        shell: pwsh
+        run: node --test test/governance/windows-admission-durability.test.js
