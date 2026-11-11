@@ -455,6 +455,8 @@ test('Codex relay exact-job affinity masks local IDs, binds approvals, and refus
   const startArgs = { workspaceId, prompt: 'bounded code fix', accessMode: 'workspace_write', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'start-unique-001', identity: 'logical-task-001' };
   await assert.rejects(facade.codexStart(acct.account_id, { ...startArgs, admission: undefined }),
     (error) => error?.code === 'CODEX_ADMISSION_REQUIRED');
+  await assert.rejects(facade.codexStart(other.account_id, startArgs),
+    (error) => error?.code === 'WORKSPACE_HANDLE_NOT_FOUND');
   const startPending = facade.codexStart(acct.account_id, startArgs);
   await answerNext(core, a, async (payload) => {
     assert.equal(payload.params.name, 'codex_recovery_preflight');

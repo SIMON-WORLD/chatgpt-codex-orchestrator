@@ -901,6 +901,11 @@ export class AppServerExecutor {
     // effective settings evidence), fail closed.
     let verified;
     try {
+      // thread/start is asynchronous. Do not apply even thread settings under
+      // a permit or child identity that changed while awaiting its response.
+      if (relayAdmission && this._checkAdmissionChild(relayAdmission) !== admissionChild) {
+        throw new Error('Relay admission App Server child changed');
+      }
       verified = await this._bootstrapVerifyPermission({ jobId, threadId, accessMode, sandboxPolicy, approvalPolicy, workspaceRoot, networkAccess });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', effectiveVerified: false, verificationError: String(e.message || e).slice(0, 200), updatedAt: Date.now() });

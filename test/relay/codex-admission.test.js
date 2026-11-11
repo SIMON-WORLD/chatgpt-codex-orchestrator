@@ -140,6 +140,10 @@ test('changed payload, access, network, identity, task, workspace or credential 
   ]) {
     assert.equal((await h.send(admission, { ...h.start, ...change })).ok, false);
   }
+  const device = h.agent.deviceId;
+  h.agent.deviceId = 'other-device';
+  assert.equal((await h.send(admission)).ok, false);
+  h.agent.deviceId = device;
   assert.equal(h.client.threads, 0);
   assert.equal(h.client.turns, 0);
   assert.equal((await h.send(admission)).ok, true);
@@ -337,5 +341,21 @@ test('failure to prove directory flush leaves the prior revision intact and emit
   assert.equal(h.store.loadTask(h.taskId).authorizationRevision, before);
   assert.throws(() => h.issue(), /admission storage/);
   assert.equal(h.client.threads, 0);
+  assert.equal(h.client.turns, 0);
+});
+
+test('control change while thread/start is pending prevents settings and turn dispatch', async (t) => {
+  const h = fixture(t);
+  const request = h.client.request.bind(h.client);
+  let settings = 0;
+  h.client.request = async (method, p) => {
+    const value = await request(method, p);
+    if (method === 'thread/start') h.transition('REVISE');
+    if (method === 'thread/settings/update') settings++;
+    return value;
+  };
+  assert.equal((await h.send(h.issue())).ok, false);
+  assert.equal(h.client.threads, 1);
+  assert.equal(settings, 0);
   assert.equal(h.client.turns, 0);
 });
