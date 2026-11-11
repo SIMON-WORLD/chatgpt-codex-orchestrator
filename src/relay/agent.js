@@ -1,5 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { RELAY_PROTOCOL_VERSION, RelayError } from './core.js';
+
+const admissionContexts = new WeakSet();
+export function isRelayAdmissionContext(context) { return admissionContexts.has(context); }
 
 export async function readExecutorReadiness({ readyzUrl, fetchFn = fetch, signal = undefined }) {
   let response;
@@ -174,6 +177,19 @@ export class DeviceRelayAgent {
     return { envelope, terminal };
   }
 
+  admissionContext(deadline = Infinity) {
+    const epoch = this.connectionEpoch;
+    if (epoch === null) return null;
+    const runtimeId = this.runtimeId;
+    const context = Object.freeze({
+      deviceId: this.deviceId, runtimeId, connectionEpoch: epoch,
+      pairingFingerprint: createHash('sha256').update(this.credential).digest('hex'),
+      isCurrent: () => this.runtimeId === runtimeId && this.connectionEpoch === epoch && this.now() < deadline,
+    });
+    admissionContexts.add(context);
+    return context;
+  }
+
   async handleEnvelope(envelope) {
     if (envelope?.deviceId !== this.deviceId) throw new RelayError('DEVICE_ID_MISMATCH', 'request targeted another device', 409);
     if (envelope?.runtimeId !== this.runtimeId) throw new RelayError('DEVICE_RUNTIME_CHANGED', 'request belongs to another runtime', 409);
@@ -189,7 +205,7 @@ export class DeviceRelayAgent {
 
     let terminal;
     try {
-      terminal = { ok: true, value: await this.execute(envelope.payload) };
+      terminal = { ok: true, value: await this.execute(envelope.payload, this.admissionContext(Number(envelope.deadline))) };
     } catch (error) {
       terminal = {
         ok: false,

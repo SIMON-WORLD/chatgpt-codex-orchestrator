@@ -8,6 +8,8 @@ import { RelayCore, RelayError, RelayStore } from '../../src/relay/core.js';
 import { RelayMcpFacade } from '../../src/relay/mcp-facade.js';
 import { startRelayMcpServer } from '../../src/relay/mcp-server.js';
 
+const TEST_ADMISSION = 'a'.repeat(43);
+
 async function verifyBearer(token) {
   if (token === 'acct-a') return { issuer: 'https://issuer.example/', subject: 'user-a' };
   if (token === 'acct-b') return { issuer: 'https://issuer.example/', subject: 'user-b' };
@@ -450,7 +452,9 @@ test('Codex relay exact-job affinity masks local IDs, binds approvals, and refus
   const otherOpened = await answerNext(core, b, async () => mcpResult({ workspaceId: 'secret-local-workspace-b' }), otherPending);
   const otherWs = textJson(otherOpened).workspaceId;
 
-  const startArgs = { workspaceId, prompt: 'bounded code fix', accessMode: 'workspace_write', operationKey: 'start-unique-001', identity: 'logical-task-001' };
+  const startArgs = { workspaceId, prompt: 'bounded code fix', accessMode: 'workspace_write', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'start-unique-001', identity: 'logical-task-001' };
+  await assert.rejects(facade.codexStart(acct.account_id, { ...startArgs, admission: undefined }),
+    (error) => error?.code === 'CODEX_ADMISSION_REQUIRED');
   const startPending = facade.codexStart(acct.account_id, startArgs);
   await answerNext(core, a, async (payload) => {
     assert.equal(payload.params.name, 'codex_recovery_preflight');
@@ -459,6 +463,8 @@ test('Codex relay exact-job affinity masks local IDs, binds approvals, and refus
     return mcpResult({ ok: true, status: 'safe_to_start', dangerousCandidateCount: 0, terminalIdentityChecked: true });
   }, Promise.resolve());
   const started = await answerNext(core, a, async (payload) => {
+    assert.equal(payload.method, 'codex/admitted-turn/v1');
+    assert.equal(payload.params.arguments.admission, TEST_ADMISSION);
     assert.equal(payload.params.name, 'codex_start');
     assert.equal(payload.params.arguments.accessMode, 'workspace_write');
     assert.equal(payload.params.arguments.identity, 'logical-task-001');
@@ -511,7 +517,7 @@ test('Codex relay exact-job affinity masks local IDs, binds approvals, and refus
     workspaceId, jobId: startResult.jobId, approvalId: approval, decision: 'approve',
   }), (error) => error?.code === 'CODEX_APPROVAL_NOT_FOUND');
 
-  const contArgs = { workspaceId, jobId: startResult.jobId, instruction: 'finish tests', operationKey: 'continue-unique-001', stepId: 'continue-step-001' };
+  const contArgs = { workspaceId, jobId: startResult.jobId, instruction: 'finish tests', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'continue-unique-001', stepId: 'continue-step-001' };
   const contPending = facade.codexJobTool(acct.account_id, 'codex_continue', contArgs);
   const continued = await answerNext(core, a, async (payload) => {
     assert.equal(payload.params.name, 'codex_continue');
@@ -539,7 +545,7 @@ test('Codex dispatch unknown result remains non-replayable and forces durable se
   const pending = facade.workspaceOpen(account.account_id, { deviceId: a.deviceId, path: '/one' });
   const opened = await answerNext(core, a, async () => mcpResult({ workspaceId: 'local-one' }), pending);
   const workspaceId = textJson(opened).workspaceId;
-  const args = { workspaceId, prompt: 'a task', accessMode: 'workspace_write', operationKey: 'lost-response-001', identity: 'logical-lost-001' };
+  const args = { workspaceId, prompt: 'a task', accessMode: 'workspace_write', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'lost-response-001', identity: 'logical-lost-001' };
   const first = facade.codexStart(account.account_id, args);
   await answerNext(core, a, async () => mcpResult({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true }), Promise.resolve());
   await answerNext(core, a, async (payload) => {
@@ -586,7 +592,7 @@ test('Codex preflight recover-existing never starts a second turn and errors lea
   const pending = facade.workspaceOpen(account.account_id, { deviceId: device.deviceId, path: '/codex' });
   const opened = await answerNext(core, device, async () => mcpResult({ workspaceId: 'local-ws-a' }), pending);
   const workspaceId = textJson(opened).workspaceId;
-  const args = { workspaceId, prompt: 'same task', accessMode: 'workspace_write', operationKey: 'existing-job-001', identity: 'logical-existing-001' };
+  const args = { workspaceId, prompt: 'same task', accessMode: 'workspace_write', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'existing-job-001', identity: 'logical-existing-001' };
   const attempted = facade.codexStart(account.account_id, args);
   await answerNext(core, device, async (payload) => {
     assert.equal(payload.params.name, 'codex_recovery_preflight');
@@ -619,7 +625,7 @@ test('Codex continue lost response and approval cross-job spoof fail closed with
   await assert.rejects(facade.codexJobTool(account.account_id, 'codex_respond_approval', {
     workspaceId, jobId: second.relay_job_id, approvalId: alias, decision: 'approve',
   }), (error) => error?.code === 'CODEX_APPROVAL_NOT_FOUND');
-  const args = { workspaceId, jobId: first.relay_job_id, operationKey: 'continue-lost-001', stepId: 'continue-lost-step', instruction: 'one next turn only' };
+  const args = { workspaceId, jobId: first.relay_job_id, taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'continue-lost-001', stepId: 'continue-lost-step', instruction: 'one next turn only' };
   const attempted = facade.codexJobTool(account.account_id, 'codex_continue', args);
   await answerNext(core, device, async (payload) => {
     assert.equal(payload.params.name, 'codex_continue');

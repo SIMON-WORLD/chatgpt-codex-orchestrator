@@ -7,6 +7,8 @@ import { RelayCore, RelayStore } from '../../src/relay/core.js';
 import { RelayMcpFacade } from '../../src/relay/mcp-facade.js';
 import { JobMap } from '../../src/executor/job-map.js';
 
+const TEST_ADMISSION = 'a'.repeat(43);
+
 const result = (value, isError = false) => ({
   content: [{ type: 'text', text: JSON.stringify(value) }],
   ...(isError ? { isError: true } : {}),
@@ -45,7 +47,7 @@ test('start requires a stable semantic identity before any device dispatch', asy
   h.core.dispatchForAccount = async () => { sent++; return result({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true }); };
   await assert.rejects(h.facade.codexStart(h.accountId, {
     workspaceId: h.workspaceId, prompt: 'change code', accessMode: 'workspace_write',
-    operationKey: 'delivery-key-001',
+    taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-001',
   }), (e) => e?.code === 'CODEX_BINDING_REQUIRED');
   assert.equal(sent, 0);
 });
@@ -70,17 +72,17 @@ test('lost start acknowledgement and a new key cannot replay a terminal logical 
   };
   const args = {
     workspaceId: h.workspaceId, prompt: 'same requested work', accessMode: 'workspace_write',
-    identity: 'logical-task-1', operationKey: 'delivery-key-001',
+    identity: 'logical-task-1', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-001',
   };
   await assert.rejects(h.facade.codexStart(h.accountId, args), (e) => e?.code === 'CODEX_LOCAL_REJECTED');
   assert.equal(jobs.recoveryPreflight({ workspaceId: 'local-workspace', identity: 'logical-task-1' }).status, 'safe_to_start');
   await assert.rejects(
-    h.facade.codexStart(h.accountId, { ...args, operationKey: 'delivery-key-002' }),
+    h.facade.codexStart(h.accountId, { ...args, taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-002' }),
     (e) => e?.code === 'CODEX_RECOVERY_REQUIRED',
   );
   assert.equal(starts, 1, 'terminal history ignored by preflight must not authorize replay');
   const distinct = await h.facade.codexStart(h.accountId, {
-    ...args, identity: 'logical-task-2', operationKey: 'delivery-key-003',
+    ...args, identity: 'logical-task-2', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-003',
   });
   assert.equal(body(distinct).state, 'completed');
   assert.equal(starts, 2, 'an explicitly distinct logical task remains possible');
@@ -99,10 +101,10 @@ test('a new workspace handle cannot defeat an ambiguous logical start', async (t
     return result({ error: { code: 'LOST_ACK' } }, true);
   };
   const args = { workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
-    identity: 'logical-start', operationKey: 'delivery-key-001' };
+    identity: 'logical-start', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-001' };
   await assert.rejects(h.facade.codexStart(h.accountId, args), (e) => e?.code === 'CODEX_LOCAL_REJECTED');
   await assert.rejects(h.facade.codexStart(h.accountId, {
-    ...args, workspaceId: another, operationKey: 'delivery-key-002',
+    ...args, workspaceId: another, taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-002',
   }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
   assert.equal(starts, 1);
 });
@@ -125,16 +127,16 @@ test('lost completed continue acknowledgement cannot be replayed with a new key'
     return result({ state: 'completed' });
   };
   const args = { workspaceId: h.workspaceId, jobId: job.relay_job_id,
-    operationKey: 'continue-key-001', stepId: 'semantic-step-1', instruction: 'same step' };
+    taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'continue-key-001', stepId: 'semantic-step-1', instruction: 'same step' };
   await assert.rejects(h.facade.codexJobTool(h.accountId, 'codex_continue', args), (e) => e?.code === 'CODEX_LOCAL_REJECTED');
   assert.equal(jobs.load('local-job').state, 'completed');
   assert.equal(jobs.load('local-job').stepId, 'semantic-step-1');
   await assert.rejects(h.facade.codexJobTool(h.accountId, 'codex_continue', {
-    ...args, operationKey: 'continue-key-002',
+    ...args, taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'continue-key-002',
   }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
   assert.equal(turns, 1);
   const next = await h.facade.codexJobTool(h.accountId, 'codex_continue', {
-    ...args, stepId: 'semantic-step-2', operationKey: 'continue-key-003',
+    ...args, stepId: 'semantic-step-2', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'continue-key-003',
   });
   assert.equal(body(next).state, 'completed');
   assert.equal(turns, 2, 'an explicitly distinct step remains possible');
@@ -144,7 +146,7 @@ test('runtime rollover between preflight and start sends no mutation to the new 
   const h = await setup(t);
   const promise = h.facade.codexStart(h.accountId, {
     workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
-    identity: 'runtime-race-task', operationKey: 'runtime-race-001',
+    identity: 'runtime-race-task', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'runtime-race-001',
   });
   promise.catch(() => {});
   const preflight = await h.core.pollAgent({
@@ -186,7 +188,7 @@ test('continue requires a stable logical step before any device dispatch', async
   h.core.dispatchForAccount = async () => { sent++; return result({ state: 'running' }); };
   await assert.rejects(h.facade.codexJobTool(h.accountId, 'codex_continue', {
     workspaceId: h.workspaceId, jobId: job.relay_job_id,
-    operationKey: 'continue-key-001', instruction: 'continue',
+    taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'continue-key-001', instruction: 'continue',
   }), (e) => e?.code === 'CODEX_BINDING_REQUIRED');
   assert.equal(sent, 0);
 });
@@ -200,7 +202,7 @@ test('ambiguous logical start remains fenced after reopening the relay store', a
     return result({ error: { code: 'LOST_ACK' } }, true);
   };
   const args = { workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
-    identity: 'persisted-task', operationKey: 'delivery-key-001' };
+    identity: 'persisted-task', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-001' };
   await assert.rejects(h.facade.codexStart(h.accountId, args), (e) => e?.code === 'CODEX_LOCAL_REJECTED');
   assert.equal(firstStarts, 1);
   h.close();
@@ -217,7 +219,7 @@ test('ambiguous logical start remains fenced after reopening the relay store', a
   let redispatches = 0;
   core.dispatchForAccount = async () => { redispatches++; return result({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true }); };
   await assert.rejects(facade.codexStart(h.accountId, {
-    ...args, operationKey: 'delivery-key-002',
+    ...args, taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-002',
   }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
   assert.equal(redispatches, 0);
 });
@@ -230,7 +232,7 @@ test('an older unbound delivery intent cannot authorize a new logical start', as
   h.core.dispatchForAccount = async () => { sent++; return result({ ok: true, status: 'safe_to_start', terminalIdentityChecked: true }); };
   await assert.rejects(h.facade.codexStart(h.accountId, {
     workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
-    identity: 'new-logical-task', operationKey: 'delivery-key-001',
+    identity: 'new-logical-task', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-001',
   }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
   assert.equal(sent, 0);
 });
@@ -251,13 +253,13 @@ test('simultaneous deliveries of one logical start dispatch only once', async (t
     return result({ jobId: 'duplicate-job', state: 'running' });
   };
   const args = { workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
-    identity: 'concurrent-task', operationKey: 'delivery-key-001' };
+    identity: 'concurrent-task', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-001' };
   const first = h.facade.codexStart(h.accountId, args);
   first.catch(() => {});
   await firstEntered;
   try {
     await assert.rejects(h.facade.codexStart(h.accountId, {
-      ...args, operationKey: 'delivery-key-002',
+      ...args, taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'delivery-key-002',
     }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
     assert.equal(starts, 1);
   } finally {
@@ -285,7 +287,7 @@ test('a terminal device-local identity blocks start even without relay history',
   };
   await assert.rejects(h.facade.codexStart(h.accountId, {
     workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
-    identity: 'already-completed', operationKey: 'new-relay-001',
+    identity: 'already-completed', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'new-relay-001',
   }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
   assert.equal(starts, 0);
 });
@@ -300,7 +302,7 @@ test('a device that does not attest terminal identity checking cannot start', as
   };
   await assert.rejects(h.facade.codexStart(h.accountId, {
     workspaceId: h.workspaceId, prompt: 'task', accessMode: 'workspace_write',
-    identity: 'legacy-device-task', operationKey: 'legacy-device-001',
+    identity: 'legacy-device-task', taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'legacy-device-001',
   }), (e) => e?.code === 'CODEX_RECOVERY_REQUIRED');
   assert.equal(starts, 0);
 });
@@ -315,7 +317,7 @@ test('continuation cannot silently rebind the recovered job identity', async (t)
   h.core.dispatchForAccount = async () => { sent++; return result({ state: 'running' }); };
   await assert.rejects(h.facade.codexJobTool(h.accountId, 'codex_continue', {
     workspaceId: h.workspaceId, jobId: job.relay_job_id, instruction: 'task',
-    operationKey: 'continue-key-001', stepId: 'step-1', identity: 'different-job-identity',
+    taskId: 'fixture-task', admission: TEST_ADMISSION, operationKey: 'continue-key-001', stepId: 'step-1', identity: 'different-job-identity',
   }), (e) => e?.code === 'CODEX_BINDING_IMMUTABLE');
   assert.equal(sent, 0);
 });

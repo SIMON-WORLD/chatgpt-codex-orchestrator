@@ -1,3 +1,4 @@
+import { ADMITTED_CODEX_METHOD } from './codex-admission.js';
 import { createHash } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
@@ -92,6 +93,13 @@ function errorResult(error) {
   };
 }
 
+const relayAdmissionSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u);
+const relayTaskSchema = z.string().min(1).max(256).refine((s) => s.trim().length > 0);
+function requireAdmission(value, taskId) {
+  if (!relayAdmissionSchema.safeParse(value).success) relayFail('CODEX_ADMISSION_REQUIRED', 'one-operation Codex admission is required', 403);
+  if (!relayTaskSchema.safeParse(taskId).success) relayFail('CODEX_BINDING_REQUIRED', 'exact Governance task is required', 400);
+}
+
 export class RelayMcpFacade {
   constructor({ core } = {}) {
     if (!core?.store) throw new TypeError('RelayMcpFacade requires RelayCore');
@@ -184,11 +192,12 @@ export class RelayMcpFacade {
     return { ...workspace, job };
   }
 
-  async dispatchCodex(accountId, workspace, method, localArgs) {
+  async dispatchCodex(accountId, workspace, method, localArgs, admission = null) {
     const response = await this.core.dispatchForAccount({
       accountId, deviceId: workspace.affinity.device_id,
       expectedRuntimeId: workspace.affinity.runtime_id,
-      payload: { method: 'tools/call', params: { name: method, arguments: localArgs } },
+      payload: { method: admission === null ? 'tools/call' : ADMITTED_CODEX_METHOD,
+        params: { name: method, arguments: admission === null ? localArgs : { ...localArgs, admission } } },
     });
     // Do not echo arbitrary local diagnostics, raw IDs, credentials or paths.
     if (!response || response.isError) relayFail('CODEX_LOCAL_REJECTED', 'device-local Codex declined the operation', 409);
@@ -222,6 +231,7 @@ export class RelayMcpFacade {
     if (typeof identity !== 'string' || !identity.trim() || identity.length > 256) {
       relayFail('CODEX_BINDING_REQUIRED', 'start requires a stable logical identity', 400);
     }
+    requireAdmission(args.admission, taskId);
     const binding = identity;
     const semanticKey = JSON.stringify(['start', binding]);
     const localArgs = {
@@ -248,7 +258,7 @@ export class RelayMcpFacade {
       rejectTerminalIdentity: true,
     });
     if (preflight.ok !== true || preflight.terminalIdentityChecked !== true || preflight.status !== 'safe_to_start') relayFail('CODEX_RECOVERY_REQUIRED', 'device-local preflight did not clear the Codex scope', 409);
-    const body = await this.dispatchCodex(accountId, workspace, 'codex_start', localArgs);
+    const body = await this.dispatchCodex(accountId, workspace, 'codex_start', localArgs, args.admission);
     if (typeof body.jobId !== 'string' || !body.jobId) relayFail('CODEX_RECOVERY_REQUIRED', 'start acknowledgement has no job identity; reconcile before retry', 409);
     const job = this.store.createCodexJobAffinity({
       accountId, deviceId: workspace.affinity.device_id, runtimeId: workspace.affinity.runtime_id,
@@ -270,6 +280,7 @@ export class RelayMcpFacade {
         relayFail('CODEX_BINDING_REQUIRED', 'continue requires a stable logical stepId', 400);
       }
       if (identity != null) relayFail('CODEX_BINDING_IMMUTABLE', 'continue cannot rebind a job identity', 400);
+      requireAdmission(args.admission, taskId);
       semanticKey = JSON.stringify(['continue', resolved.job.local_job_id, stepId]);
       Object.assign(localArgs, { instruction, ...(taskId ? { taskId } : {}), stepId });
       const digest = createHash('sha256').update(JSON.stringify(localArgs)).digest('hex');
@@ -285,7 +296,8 @@ export class RelayMcpFacade {
       this.store.consumeCodexApproval(approvalId, this.core.now());
       Object.assign(localArgs, { approvalId: mapped.local_approval_id, decision });
     }
-    const body = await this.dispatchCodex(accountId, resolved, method, localArgs);
+    const body = await this.dispatchCodex(accountId, resolved, method, localArgs,
+      method === 'codex_continue' ? args.admission : null);
     if (method === 'codex_continue') {
       this.store.finishCodexIntent({ accountId, deviceId: resolved.affinity.device_id, relayWorkspaceId: workspaceId, kind: 'continue', operationKey, semanticKey, relayJobId: jobId, now: this.core.now() });
     }
@@ -387,12 +399,12 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
   const operationKey = z.string().regex(/^[A-Za-z0-9_-]{8,96}$/u);
   const codexJob = z.string().regex(/^job_[A-Za-z0-9_-]{32}$/u);
   register(server, facade, accountId, 'codex_start', {
-    description: 'Delegate an authorized Codex task to the exact device. Keep identity stable for this logical task across retries; operationKey identifies delivery only. Ambiguous dispatch requires recovery.',
+    description: 'Delegate one authorized Codex operation to the exact device using its one-shot admission. Keep identity stable for this logical task across retries; operationKey identifies delivery only. Ambiguous dispatch requires recovery.',
     annotations: M,
     inputSchema: z.object({
       workspaceId: workspaceIdSchema, prompt: z.string().min(1).max(120000),
-      accessMode: z.enum(['read_only','workspace_write']), operationKey,
-      networkAccess: z.boolean().optional(), taskId: z.string().optional(),
+      accessMode: z.enum(['read_only','workspace_write']), operationKey, admission: relayAdmissionSchema,
+      networkAccess: z.boolean().optional(), taskId: relayTaskSchema,
       stepId: z.string().optional(), identity: z.string().min(1).max(256),
     }).strict(),
   }, (args) => facade.codexStart(accountId, args));
@@ -402,9 +414,9 @@ export function createRelayToolsServer({ facade, accountId } = {}) {
     inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: codexJob }).strict(),
   }, (args) => facade.codexJobTool(accountId, 'codex_get', args));
   register(server, facade, accountId, 'codex_continue', {
-    description: 'Continue the exact Codex job. Keep stepId stable for this logical continuation across retries; a distinct step requires a distinct stepId.',
+    description: 'Continue the exact Codex job using its one-shot admission. Keep stepId stable for this logical continuation across retries; a distinct step requires a distinct stepId.',
     annotations: M,
-    inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: codexJob, operationKey, instruction: z.string().min(1).max(120000), taskId: z.string().optional(), stepId: z.string().min(1).max(256) }).strict(),
+    inputSchema: z.object({ workspaceId: workspaceIdSchema, jobId: codexJob, operationKey, admission: relayAdmissionSchema, instruction: z.string().min(1).max(120000), taskId: relayTaskSchema, stepId: z.string().min(1).max(256) }).strict(),
   }, (args) => facade.codexJobTool(accountId, 'codex_continue', args));
   for (const [name, annotations] of [['codex_interrupt', M], ['codex_reconcile', M]]) {
     register(server, facade, accountId, name, {
