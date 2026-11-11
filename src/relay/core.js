@@ -94,6 +94,15 @@ export class RelayStore {
       'CREATE TABLE IF NOT EXISTS process_affinity (relay_process_handle TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE, device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE, runtime_id TEXT NOT NULL, relay_workspace_id TEXT NOT NULL REFERENCES workspace_affinity(relay_workspace_id) ON DELETE CASCADE, local_process_handle TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, invalidated_at INTEGER);',
       'CREATE INDEX IF NOT EXISTS process_affinity_account_idx ON process_affinity(account_id);',
       'CREATE INDEX IF NOT EXISTS process_affinity_device_idx ON process_affinity(device_id);',
+
+      // Codex state stays device-local. Relay stores opaque routing handles and
+      // durable mutation intents only, never thread/turn or execution payloads.
+      'CREATE TABLE IF NOT EXISTS codex_job_affinity (relay_job_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE, device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE, runtime_id TEXT NOT NULL, relay_workspace_id TEXT NOT NULL REFERENCES workspace_affinity(relay_workspace_id) ON DELETE CASCADE, local_job_id TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, invalidated_at INTEGER);',
+      'CREATE INDEX IF NOT EXISTS codex_job_affinity_device_idx ON codex_job_affinity(device_id);',
+      'CREATE UNIQUE INDEX IF NOT EXISTS codex_job_live_unique ON codex_job_affinity(account_id,device_id,runtime_id,relay_workspace_id,local_job_id) WHERE invalidated_at IS NULL;',
+      'CREATE TABLE IF NOT EXISTS codex_approval_affinity (relay_approval_id TEXT PRIMARY KEY, relay_job_id TEXT NOT NULL REFERENCES codex_job_affinity(relay_job_id) ON DELETE CASCADE, local_approval_id TEXT NOT NULL, created_at INTEGER NOT NULL, consumed_at INTEGER, UNIQUE(relay_job_id,local_approval_id));',
+      'CREATE TABLE IF NOT EXISTS codex_intents (account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE, relay_workspace_id TEXT NOT NULL REFERENCES workspace_affinity(relay_workspace_id) ON DELETE CASCADE, kind TEXT NOT NULL, operation_key TEXT NOT NULL, payload_sha256 TEXT NOT NULL, relay_job_id TEXT REFERENCES codex_job_affinity(relay_job_id), completed_at INTEGER, created_at INTEGER NOT NULL, PRIMARY KEY(account_id,relay_workspace_id,kind,operation_key));',
+      'CREATE TABLE IF NOT EXISTS codex_semantic_intents (account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE, device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE, kind TEXT NOT NULL, semantic_sha256 TEXT NOT NULL, relay_workspace_id TEXT NOT NULL REFERENCES workspace_affinity(relay_workspace_id) ON DELETE CASCADE, operation_key TEXT NOT NULL, payload_sha256 TEXT NOT NULL, relay_job_id TEXT REFERENCES codex_job_affinity(relay_job_id), completed_at INTEGER, created_at INTEGER NOT NULL, PRIMARY KEY(account_id,device_id,kind,semantic_sha256), UNIQUE(account_id,relay_workspace_id,kind,operation_key));',
     ].join('\n'));
   }
 
@@ -217,9 +226,99 @@ export class RelayStore {
     this.db.prepare('UPDATE process_affinity SET last_used_at = ? WHERE relay_process_handle = ?').run(now, relayProcessHandle);
   }
 
+
+  createCodexJobAffinity({ accountId, deviceId, runtimeId, relayWorkspaceId, localJobId, now }) {
+    const found = this.db.prepare('SELECT * FROM codex_job_affinity WHERE account_id = ? AND device_id = ? AND runtime_id = ? AND relay_workspace_id = ? AND local_job_id = ? AND invalidated_at IS NULL').get(accountId, deviceId, runtimeId, relayWorkspaceId, localJobId);
+    if (found) return found;
+    const relayJobId = 'job_' + randomBytes(24).toString('base64url');
+    this.db.prepare('INSERT OR IGNORE INTO codex_job_affinity (relay_job_id,account_id,device_id,runtime_id,relay_workspace_id,local_job_id,created_at,last_used_at,invalidated_at) VALUES (?,?,?,?,?,?,?,?,NULL)').run(
+      relayJobId, accountId, deviceId, runtimeId, relayWorkspaceId, localJobId, now, now
+    );
+    return this.db.prepare('SELECT * FROM codex_job_affinity WHERE account_id = ? AND device_id = ? AND runtime_id = ? AND relay_workspace_id = ? AND local_job_id = ? AND invalidated_at IS NULL').get(accountId, deviceId, runtimeId, relayWorkspaceId, localJobId);
+  }
+
+  codexJobAffinity(accountId, relayJobId) {
+    return this.db.prepare('SELECT * FROM codex_job_affinity WHERE relay_job_id = ? AND account_id = ?').get(relayJobId, accountId) || null;
+  }
+
+  touchCodexJobAffinity(relayJobId, now) {
+    this.db.prepare('UPDATE codex_job_affinity SET last_used_at = ? WHERE relay_job_id = ?').run(now, relayJobId);
+  }
+
+  codexApprovalAffinity(relayJobId, relayApprovalId) {
+    return this.db.prepare('SELECT * FROM codex_approval_affinity WHERE relay_approval_id = ? AND relay_job_id = ? AND consumed_at IS NULL').get(relayApprovalId, relayJobId) || null;
+  }
+
+  createCodexApprovalAffinity(relayJobId, localApprovalId, now) {
+    const known = this.db.prepare('SELECT * FROM codex_approval_affinity WHERE relay_job_id = ? AND local_approval_id = ?').get(relayJobId, localApprovalId);
+    if (known && !known.consumed_at) return known;
+    if (known) fail('STALE_CODEX_APPROVAL', 'approval already consumed', 409);
+    const relayApprovalId = 'approval_' + randomBytes(24).toString('base64url');
+    this.db.prepare('INSERT INTO codex_approval_affinity (relay_approval_id,relay_job_id,local_approval_id,created_at,consumed_at) VALUES (?,?,?,?,NULL)').run(relayApprovalId, relayJobId, localApprovalId, now);
+    return this.codexApprovalAffinity(relayJobId, relayApprovalId);
+  }
+
+  consumeCodexApproval(relayApprovalId, now) {
+    const row = this.db.prepare('UPDATE codex_approval_affinity SET consumed_at = ? WHERE relay_approval_id = ? AND consumed_at IS NULL RETURNING relay_approval_id').get(now, relayApprovalId);
+    if (!row) fail('STALE_CODEX_APPROVAL', 'approval already used or unknown', 409);
+  }
+
+  // Transport and logical identities are independent. Both records commit
+  // atomically before dispatch; only hashes of payload and identity are stored.
+  claimCodexIntent({ accountId, deviceId, relayWorkspaceId, kind, operationKey, semanticKey, payloadDigest, relayJobId = null, now }) {
+    const semanticDigest = sha256(semanticKey);
+    return this.transaction(() => {
+      const existingKey = this.db.prepare('SELECT * FROM codex_intents WHERE account_id = ? AND relay_workspace_id = ? AND kind = ? AND operation_key = ?')
+        .get(accountId, relayWorkspaceId, kind, operationKey);
+      if (existingKey && (existingKey.payload_sha256 !== payloadDigest ||
+          (relayJobId && existingKey.relay_job_id !== relayJobId))) {
+        fail('CODEX_OPERATION_KEY_CONFLICT', 'operation key reused with another payload/job', 409);
+      }
+
+      const existingSemantic = this.db.prepare('SELECT * FROM codex_semantic_intents WHERE account_id = ? AND device_id = ? AND kind = ? AND semantic_sha256 = ?')
+        .get(accountId, deviceId, kind, semanticDigest);
+      if (existingSemantic) {
+        if (existingSemantic.completed_at != null && existingSemantic.relay_workspace_id === relayWorkspaceId &&
+            (existingSemantic.payload_sha256 !== payloadDigest ||
+             (relayJobId && existingSemantic.relay_job_id !== relayJobId))) {
+          fail('CODEX_SEMANTIC_CONFLICT', 'logical operation reused with another payload/job', 409);
+        }
+        return { fresh: false, intent: existingSemantic, recoveryRequired: existingSemantic.operation_key !== operationKey };
+      }
+
+      // Earlier candidate schemas recorded only delivery keys, so their logical
+      // binding cannot safely authorize another start or continuation.
+      const legacy = this.db.prepare(
+        'SELECT 1 FROM codex_intents i JOIN workspace_affinity w ON w.relay_workspace_id = i.relay_workspace_id ' +
+        'LEFT JOIN codex_semantic_intents s ON s.account_id = i.account_id AND s.relay_workspace_id = i.relay_workspace_id AND s.kind = i.kind AND s.operation_key = i.operation_key ' +
+        'WHERE i.account_id = ? AND w.device_id = ? AND i.kind = ? AND s.semantic_sha256 IS NULL LIMIT 1'
+      ).get(accountId, deviceId, kind);
+      if (existingKey || legacy) fail('CODEX_RECOVERY_REQUIRED', 'legacy Codex intent has no verified logical binding', 409);
+
+      this.db.prepare('INSERT INTO codex_intents (account_id,relay_workspace_id,kind,operation_key,payload_sha256,relay_job_id,completed_at,created_at) VALUES (?,?,?,?,?,?,NULL,?)')
+        .run(accountId, relayWorkspaceId, kind, operationKey, payloadDigest, relayJobId, now);
+      this.db.prepare('INSERT INTO codex_semantic_intents (account_id,device_id,kind,semantic_sha256,relay_workspace_id,operation_key,payload_sha256,relay_job_id,completed_at,created_at) VALUES (?,?,?,?,?,?,?,?,NULL,?)')
+        .run(accountId, deviceId, kind, semanticDigest, relayWorkspaceId, operationKey, payloadDigest, relayJobId, now);
+      return { fresh: true };
+    });
+  }
+
+  finishCodexIntent({ accountId, deviceId, relayWorkspaceId, kind, operationKey, semanticKey, relayJobId, now }) {
+    return this.transaction(() => {
+      const changed = this.db.prepare('UPDATE codex_intents SET relay_job_id = ?, completed_at = ? WHERE account_id = ? AND relay_workspace_id = ? AND kind = ? AND operation_key = ? AND completed_at IS NULL')
+        .run(relayJobId, now, accountId, relayWorkspaceId, kind, operationKey);
+      const semantic = this.db.prepare('UPDATE codex_semantic_intents SET relay_job_id = ?, completed_at = ? WHERE account_id = ? AND device_id = ? AND kind = ? AND semantic_sha256 = ? AND relay_workspace_id = ? AND operation_key = ? AND completed_at IS NULL')
+        .run(relayJobId, now, accountId, deviceId, kind, sha256(semanticKey), relayWorkspaceId, operationKey);
+      if (Number(changed.changes) !== 1 || Number(semantic.changes) !== 1) {
+        fail('CODEX_INTENT_CONFLICT', 'Codex intent was not uniquely pending', 409);
+      }
+    });
+  }
+
   invalidateDeviceAffinities(deviceId, now) {
     this.db.prepare('UPDATE workspace_affinity SET invalidated_at = COALESCE(invalidated_at, ?) WHERE device_id = ?').run(now, deviceId);
     this.db.prepare('UPDATE process_affinity SET invalidated_at = COALESCE(invalidated_at, ?) WHERE device_id = ?').run(now, deviceId);
+    this.db.prepare('UPDATE codex_job_affinity SET invalidated_at = COALESCE(invalidated_at, ?) WHERE device_id = ?').run(now, deviceId);
   }
 
   renameDevice(accountId, deviceId, displayName) {
@@ -473,7 +572,7 @@ export class RelayCore {
     return this.dispatchForAccount({ accountId: account.account_id, deviceId, payload, deadlineMs });
   }
 
-  async dispatchForAccount({ accountId, deviceId, payload, deadlineMs = 30_000 }) {
+  async dispatchForAccount({ accountId, deviceId, payload, deadlineMs = 30_000, expectedRuntimeId = null }) {
     const row = this.store.deviceForAccount(accountId, deviceId);
     if (!row) fail('DEVICE_NOT_FOUND', 'device not found', 404);
     const state = this.summary(row);
@@ -481,6 +580,11 @@ export class RelayCore {
     if (!state.online) fail('DEVICE_OFFLINE', 'device offline', 409);
     if (!state.ready) fail('DEVICE_NOT_READY', 'device not ready', 409);
     const session = this.activeSessions.get(deviceId);
+    // Validate the affinity at admission, in the same synchronous segment as queueing.
+    // A same-runtime reconnect remains valid; a new runtime cannot receive old handles.
+    if (expectedRuntimeId !== null && (!session || session.runtimeId !== expectedRuntimeId || row.last_runtime_id !== expectedRuntimeId)) {
+      fail('DEVICE_RUNTIME_CHANGED', 'device runtime changed before dispatch', 409);
+    }
     this.#admitDispatch(accountId, deviceId);
     const requestId = randomUUID();
     const deadline = this.now() + Math.max(1, Math.min(Number(deadlineMs) || 30_000, 120_000));

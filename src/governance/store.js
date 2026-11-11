@@ -12,9 +12,12 @@
 //   - known older schema              -> explicit deterministic migration
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { runtimePaths } from '../runtime-paths.js';
 
-export const GOVERNANCE_SCHEMA_VERSION = 1;
+export const GOVERNANCE_SCHEMA_VERSION = 2;
 export const GOVERNANCE_STATE_KIND = 'brain-continuity.governance-task';
 
 export class GovernanceStoreError extends Error {
@@ -116,6 +119,65 @@ export function atomicWriteJsonWithBackup(file, obj, { rename = fs.renameSync } 
   try { fs.copyFileSync(file, file + '.bak'); } catch {}
 }
 
+function syncAdmissionDirectory(dir) {
+  if (process.platform === 'win32') {
+    // libuv's read-only directory descriptor returns EPERM for fsync on NTFS.
+    // Use a write-capable native directory handle, never a volume flush or skip.
+    const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
+    const programFiles = process.env.ProgramFiles;
+    const localDrivePath = /^[A-Za-z]:[\\/]/;
+    if (!localDrivePath.test(systemRoot) || !localDrivePath.test(programFiles ?? '')) {
+      throw new GovernanceStoreError('Windows system and Program Files paths are not local',
+        { code: 'admission_storage_unverified' });
+    }
+    // PowerShell 7 compiles this small interop type in-process. Windows PowerShell
+    // 5.1's separate compiler timed out on real Windows runners.
+    const powershell = path.join(programFiles, 'PowerShell', '7', 'pwsh.exe');
+    const helper = fileURLToPath(new URL('./windows-directory-flush.ps1', import.meta.url));
+    // Keep only the OS locations needed by PowerShell and its .NET compiler.
+    // Avoid inheriting application or connector credentials into the helper.
+    const env = {
+      SystemRoot: systemRoot, WINDIR: systemRoot, TEMP: os.tmpdir(), TMP: os.tmpdir(),
+      Path: path.join(systemRoot, 'System32'), PSModulePath: '', ProgramFiles: programFiles,
+      POWERSHELL_TELEMETRY_OPTOUT: '1', POWERSHELL_UPDATECHECK: 'Off',
+    };
+    for (const key of ['SystemDrive', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData']) {
+      if (process.env[key]) env[key] = process.env[key];
+    }
+    let output;
+    try {
+      output = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-File', helper, '-Directory', dir], {
+        windowsHide: true, timeout: 15000, maxBuffer: 65536,
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env,
+      });
+    } catch (error) {
+      const phase = /^governance-flush:(validate|compile|flush)\r?$/gm;
+      const lastPhase = Array.from(String(error.stderr ?? '').matchAll(phase)).at(-1)?.[1] ?? 'launch';
+      const reason = error.code === 'ETIMEDOUT' ? 'timed out' : 'failed';
+      throw new GovernanceStoreError(`Windows checked directory flush ${reason} (${lastPhase})`,
+        { code: 'admission_storage_unverified' });
+    }
+    if (output.trim() !== 'directory-flush-ok') {
+      throw new GovernanceStoreError('Windows directory flush was not confirmed', { code: 'admission_storage_unverified' });
+    }
+    return;
+  }
+  const fd = fs.openSync(dir, 'r');
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+}
+
+function writeFlushedJson(file, value) {
+  const tmp = file + '.admission.tmp';
+  const fd = fs.openSync(tmp, 'wx');
+  try {
+    fs.writeFileSync(fd, JSON.stringify(value, null, 2), 'utf8');
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, file);
+}
+
 function tryReadEnvelope(file) {
   if (!fs.existsSync(file)) return null;
   const text = fs.readFileSync(file, 'utf8');
@@ -140,6 +202,7 @@ const MIGRATIONS = {
     projectKey: env.projectKey ?? null,
     identity: env.identity ?? null,
   }),
+  1: (env) => ({ ...env, schemaVersion: 2, authorizationRevision: 0, relayCodex: null }),
 };
 
 function migrateEnvelope(env) {
@@ -181,14 +244,37 @@ function validateEnvelope(obj, { taskId = null } = {}) {
   if (obj.state.taskId !== obj.taskId) {
     throw new GovernanceStoreError('invalid governance envelope: state.taskId does not match envelope taskId', { code: 'corrupt', taskId });
   }
+  if (obj.schemaVersion === 2 && (!Number.isSafeInteger(obj.authorizationRevision) ||
+      obj.authorizationRevision < 0 || !validRelayCodexLedger(obj.relayCodex, obj.authorizationRevision))) {
+    throw new GovernanceStoreError('invalid authorization revision or admission ledger', { code: 'corrupt', taskId });
+  }
   return obj;
+}
+
+const digest = (s) => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s);
+function validRelayCodexLedger(ledger, revision) {
+  if (ledger === null) return true;
+  if (!ledger || typeof ledger.blocked !== 'boolean' || !Array.isArray(ledger.records) ||
+      ledger.records.length > 4096 || (!ledger.blocked && !digest(ledger.bootId))) return false;
+  const keys = new Set(), permits = new Set();
+  for (const r of ledger.records) {
+    if (!r || ![r.key, r.tokenHash, r.operationDigest, r.authorityHash, r.contextDigest, r.bootId].every(digest) ||
+        !Number.isSafeInteger(r.revision) || r.revision < 1 || r.revision > revision ||
+        !Number.isSafeInteger(r.parentGeneration) || r.parentGeneration < 0 ||
+        !Number.isFinite(r.expiresAt) || typeof r.governanceStep !== 'string' || !r.governanceStep ||
+        !['issued','revoked','reserved','dispatched','acknowledged'].includes(r.state) ||
+        keys.has(r.key) || permits.has(r.tokenHash)) return false;
+    keys.add(r.key);
+    permits.add(r.tokenHash);
+  }
+  return true;
 }
 
 function defaultAuthorityMeta() {
   return { generation: 0, token: null, createdAt: null, lastTakeoverAt: null };
 }
 
-export function makeGovernanceEnvelope({ state, projectKey = null, identity = null, authority = null, taskId = null, workspaceRoot = null, savedAt = null }) {
+export function makeGovernanceEnvelope({ state, projectKey = null, identity = null, authority = null, taskId = null, workspaceRoot = null, savedAt = null, authorizationRevision = 0, relayCodex = null }) {
   const tid = taskId || (state && state.taskId) || null;
   if (!tid) throw new GovernanceStoreError('cannot persist governance state without a taskId', { code: 'bad_request' });
   return {
@@ -199,17 +285,20 @@ export function makeGovernanceEnvelope({ state, projectKey = null, identity = nu
     identity: identity ?? null,
     workspaceRoot: workspaceRoot ?? null,
     authority: authority && typeof authority === 'object' ? { ...defaultAuthorityMeta(), ...authority } : null,
+    authorizationRevision,
+    relayCodex,
     state,
     savedAt: savedAt || new Date().toISOString(),
   };
 }
 
 export class GovernanceStore {
-  constructor({ dataRoot, namespace = 'default' } = {}) {
+  constructor({ dataRoot, namespace = 'default', syncDirectory = syncAdmissionDirectory } = {}) {
     if (!dataRoot) throw new GovernanceStoreError('GovernanceStore requires a dataRoot', { code: 'bad_request' });
     this.dataRoot = path.resolve(dataRoot);
     this.namespace = String(namespace);
     this.dir = governanceNamespaceDir(this.dataRoot, this.namespace);
+    this.syncDirectory = syncDirectory;
     fs.mkdirSync(this.dir, { recursive: true });
   }
 
@@ -220,9 +309,66 @@ export class GovernanceStore {
     return fs.existsSync(file) || fs.existsSync(file + '.bak');
   }
 
-  saveTask(taskId, envelope) {
-    const env = makeGovernanceEnvelope({ ...envelope, taskId });
-    atomicWriteJsonWithBackup(this._taskFile(taskId), env);
+  _matchingSnapshot(taskId) {
+    const file = this._taskFile(taskId);
+    const primary = fs.readFileSync(file, 'utf8');
+    if (primary !== fs.readFileSync(file + '.bak', 'utf8')) {
+      throw new GovernanceStoreError('task primary/backup do not match', { code: 'admission_storage_unverified', taskId });
+    }
+    return migrateEnvelope(validateEnvelope(JSON.parse(primary), { taskId }));
+  }
+
+  loadAdmissionTask(taskId) {
+    const env = this._matchingSnapshot(taskId);
+    if (env.relayCodex?.blocked) {
+      throw new GovernanceStoreError('admission history is quarantined', { code: 'admission_storage_unverified', taskId });
+    }
+    return env;
+  }
+
+  saveTask(taskId, envelope, { expectedRevision, updateAdmission = null } = {}) {
+    const file = this._taskFile(taskId);
+    const prior = this.hasTask(taskId) ? this.loadTask(taskId) : null;
+    const revision = prior?.authorizationRevision ?? 0;
+    if ((expectedRevision !== undefined && revision !== expectedRevision) || revision === Number.MAX_SAFE_INTEGER) {
+      throw new GovernanceStoreError('task authorization revision conflict', { code: 'authorization_revision_conflict', taskId });
+    }
+    let relayCodex = prior?.relayCodex ?? null;
+    const strict = !!updateAdmission || (!!relayCodex && !relayCodex.blocked);
+    if (strict) {
+      if (!prior || this.loadAdmissionTask(taskId).authorizationRevision !== revision) {
+        throw new GovernanceStoreError('admission has no verified predecessor', { code: 'admission_storage_unverified', taskId });
+      }
+      if (updateAdmission) relayCodex = updateAdmission(structuredClone(relayCodex), revision + 1);
+    } else if (prior && !relayCodex) {
+      // Ordinary recovery is not proof that an admission never dispatched.
+      try { this._matchingSnapshot(taskId); }
+      catch { relayCodex = { blocked: true, bootId: null, records: [] }; }
+    }
+    const env = validateEnvelope(makeGovernanceEnvelope({
+      ...envelope, taskId, authorizationRevision: revision + 1, relayCodex,
+    }), { taskId });
+    if (strict) {
+      // Probe before altering a verified snapshot. An unavailable flush fails closed.
+      // The task/namespace directories may have been created by the first PLAN.
+      // Flush the ancestor entries too before issuing authority from this history.
+      if (!prior.relayCodex) {
+        for (let dir = path.dirname(this.dir); ; dir = path.dirname(dir)) {
+          this.syncDirectory(dir);
+          if (path.dirname(dir) === dir) break;
+        }
+      }
+      this.syncDirectory(this.dir);
+      writeFlushedJson(file, env);
+      this.syncDirectory(this.dir);
+      writeFlushedJson(file + '.bak', env);
+      this.syncDirectory(this.dir);
+      if (JSON.stringify(this.loadAdmissionTask(taskId)) !== JSON.stringify(env)) {
+        throw new GovernanceStoreError('admission commit readback mismatch', { code: 'admission_storage_unverified', taskId });
+      }
+    } else {
+      atomicWriteJsonWithBackup(file, env);
+    }
     return env;
   }
 

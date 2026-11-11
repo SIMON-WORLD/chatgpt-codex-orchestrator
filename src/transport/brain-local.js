@@ -31,6 +31,8 @@ import { resolveCodexAppServer } from './codex.js';
 import { WorktreeService } from '../local/worktree.js';
 import { LocalMcpToolExecutor, StableRuntimeRelayAgentMode } from '../relay/runtime-mode.js';
 
+import { ADMITTED_CODEX_METHOD, createRelayCodexAdmission } from '../relay/codex-admission.js';
+
 const RUNTIME_MODES = new Set(['serving', 'activation-preflight']);
 
 export class BrainLocalRuntime {
@@ -38,6 +40,7 @@ export class BrainLocalRuntime {
     config = loadV02Config(),
     mode = 'serving',
     relayExecute = null,
+    privateRelayCodexParent = null,
     relayAgentModeFactory = null,
     relayEnv = process.env,
     relayFetch = fetch,
@@ -71,6 +74,7 @@ export class BrainLocalRuntime {
     this.mcp = null;
     this.tunnelProcess = null;
     this.relayExecute = relayExecute;
+    this.privateRelayCodexParent = privateRelayCodexParent;
     this.relayAgentModeFactory = relayAgentModeFactory;
     const relayCredentialEnv = config.relayAgent?.enabled === true ? String(config.relayAgent.credentialEnv || '').trim() : '';
     this.relayEnv = { ...(relayEnv || {}) };
@@ -161,10 +165,21 @@ export class BrainLocalRuntime {
 
   _startRelayAgentMode() {
     const c = this.config.relayAgent;
-    const execute = this.relayExecute || ((payload) => {
+    const admitted = createRelayCodexAdmission({
+      governance: this.governanceService, registry: this.registry, executor: this.appServerExecutor,
+      currentContext: () => this.relayAgentMode?.admissionContext?.(),
+      privateParentTransport: this.privateRelayCodexParent,
+    });
+    const execute = (payload, context) => {
+      if (payload?.method === ADMITTED_CODEX_METHOD) return admitted(payload, context);
+      const name = payload?.params?.name ?? payload?.tool;
+      if (typeof name === 'string' && (name.startsWith('governance_') || name === 'codex_start' || name === 'codex_continue')) {
+        throw new Error('Relay cannot forward local authority controls');
+      }
+      if (this.relayExecute) return this.relayExecute(payload);
       if (!this.relayLocalExecutor) this.relayLocalExecutor = new LocalMcpToolExecutor({ mcpUrl: this._mcpUrl() });
       return this.relayLocalExecutor.execute(payload);
-    });
+    };
     const options = {
       config: c,
       readyzUrl: this._readyzUrl(),

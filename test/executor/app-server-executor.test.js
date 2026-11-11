@@ -212,11 +212,21 @@ test('owner=none -> continue actually acquires codex ownership', async (t) => {
   const exec = makeExecutor({ dataRoot: root });
   t.after(() => exec.shutdown());
   const r = await startExecutor(exec);
-  await waitFor(() => exec.load(r.jobId).state === 'completed');
-  // M7 contract: on authoritative terminal the execution owner is auto-released to none.
+  assert.equal(await waitFor(() => exec.load(r.jobId).state === 'completed'), true);
+  // Observe acquisition synchronously: the fake may complete and release the
+  // turn before the async continue response reaches this test under CI load.
   assert.equal(exec.owner.owner, 'none');
+  let acquired = false;
+  const acquire = exec.owner.acquire.bind(exec.owner);
+  exec.owner.acquire = (...args) => {
+    const result = acquire(...args);
+    assert.equal(args[0], 'codex');
+    assert.equal(exec.owner.owner, 'codex');
+    acquired = true;
+    return result;
+  };
   const c = await exec.continue({ jobId: r.jobId, instruction: 'continue' });
-  assert.equal(exec.owner.owner, 'codex'); // continue acquired ownership
+  assert.equal(acquired, true);
   assert.ok(c.turnId);
 });
 

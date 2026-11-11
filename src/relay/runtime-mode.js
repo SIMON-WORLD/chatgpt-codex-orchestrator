@@ -64,6 +64,9 @@ export class LocalMcpToolExecutor {
     if (method !== 'tools/call' || !params || typeof params.name !== 'string' || !params.name) {
       throw new RelayError('INVALID_LOCAL_RELAY_REQUEST', 'relay local execution accepts only internal tools/call payloads', 400);
     }
+    if (params.name.startsWith('governance_') || ['codex_start','codex_continue'].includes(params.name)) {
+      throw new RelayError('INVALID_LOCAL_RELAY_REQUEST', 'Relay cannot forward local authority controls', 403);
+    }
     const client = await this.#client();
     return client.callTool({ name: params.name, arguments: params.arguments || {} });
   }
@@ -137,6 +140,10 @@ export class StableRuntimeRelayAgentMode {
       if (this.state !== 'revoked' && this.state !== 'failed') this.state = 'stopped';
     });
     return this;
+  }
+
+  admissionContext() {
+    return this.state === 'connected' && !this.delayState.stopping ? this.agent?.admissionContext() : null;
   }
 
   status() {

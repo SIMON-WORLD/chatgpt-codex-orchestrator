@@ -48,6 +48,8 @@ function executionClaimGeneration(authority) {
   return claim && Number.isInteger(claim.generation) && claim.generation >= 0 ? claim.generation : 0;
 }
 
+const admissionHash = (value) => crypto.createHash('sha256').update(value).digest('hex');
+
 function fenceExecutionClaimValue(authority, now) {
   const claim = authority && authority.executionClaim;
   if (!claim) return null;
@@ -96,7 +98,7 @@ function eqRoots(a, b) {
 }
 
 export class DurableGovernanceService {
-  constructor({ dataRoot, namespace = 'default', writerId = null, proofLedger = null, metrics = null, allowPublish = true, now = null, heartbeatMs = 5 * 60 * 1000, pidAlive = null, autoWriter = true, store = null } = {}) {
+  constructor({ dataRoot, namespace = 'default', writerId = null, proofLedger = null, metrics = null, allowPublish = true, now = null, heartbeatMs = 5 * 60 * 1000, pidAlive = null, autoWriter = true, store = null, admissionNow = () => performance.now() } = {}) {
     if (!dataRoot) throw new GovernanceError('durable governance requires a dataRoot');
     const clock = now || (() => Date.now());
     this.dataRoot = path.resolve(dataRoot);
@@ -113,6 +115,9 @@ export class DurableGovernanceService {
     this._clock = clock;
     this._meta = null; // { taskId, projectKey, identity, authority, workspaceRoot }
     this._closed = false;
+    this._admissionBootId = crypto.randomBytes(32).toString('hex');
+    this._admissionUnavailable = false;
+    this._admissionNow = admissionNow;
     this._recoveryRequired = false; // set when a persistence failure left no known committed snapshot in memory
     if (autoWriter) this.guard.acquire();
   }
@@ -148,6 +153,7 @@ export class DurableGovernanceService {
       this.svc.state = structuredClone(env.state);
       this._meta = {
         taskId: env.taskId,
+        authorizationRevision: env.authorizationRevision,
         projectKey: env.projectKey ?? null,
         identity: env.identity ?? null,
         workspaceRoot: env.workspaceRoot ?? null,
@@ -167,6 +173,7 @@ export class DurableGovernanceService {
     this.svc.state = structuredClone(env.state);
     this._meta = {
       taskId: env.taskId,
+      authorizationRevision: env.authorizationRevision,
       projectKey: env.projectKey ?? null,
       identity: env.identity ?? null,
       workspaceRoot: env.workspaceRoot ?? null,
@@ -186,6 +193,7 @@ export class DurableGovernanceService {
       const env = this.store.loadTask(activeTaskId);
       return {
         taskId: env.taskId,
+        authorizationRevision: env.authorizationRevision,
         projectKey: env.projectKey ?? null,
         identity: env.identity ?? null,
         workspaceRoot: env.workspaceRoot ?? null,
@@ -205,26 +213,29 @@ export class DurableGovernanceService {
   // writer's slot was reclaimed/ousted, the mutation throws writer_conflict and no
   // state is written. refresh() re-asserts ownership after the write and is never
   // swallowed, so a concurrently lost slot surfaces as an error on the mutation.
-  _persist(taskId, meta) {
-    this.guard.assertOwned();
+  _persist(taskId, meta, updateAdmission = null) {
     try {
-      this.store.saveTask(taskId, {
+      this.guard.assertOwned();
+      const saved = this.store.saveTask(taskId, {
         state: this.svc.state,
         projectKey: meta ? meta.projectKey : null,
         identity: meta ? meta.identity : null,
         workspaceRoot: meta ? (meta.workspaceRoot ?? null) : null,
         authority: meta && meta.authority ? structuredClone(meta.authority) : null,
-      });
+      }, { expectedRevision: meta?.authorizationRevision ?? 0, updateAdmission });
+      if (meta) meta.authorizationRevision = saved.authorizationRevision;
     } catch (e) {
       // The write did not commit: roll the in-memory lifecycle back to the last
       // committed durable snapshot so an uncommitted transition is never canonical.
+      this._admissionUnavailable = true;
       this._restoreCommitted(taskId);
       throw e;
     }
     // refresh() re-asserts ownership after the commit and is never swallowed. If it
     // throws, the snapshot is already committed (authoritative) - do NOT roll back a
     // write that may have atomically committed.
-    this.guard.refresh();
+    try { this.guard.refresh(); }
+    catch (e) { this._admissionUnavailable = true; throw e; }
   }
 
   _authorityPublic(meta) {
@@ -474,6 +485,7 @@ export class DurableGovernanceService {
     return {
       ok: true,
       taskId: env.taskId,
+      authorizationRevision: env.authorizationRevision,
       projectKey: env.projectKey ?? null,
       identity: env.identity ?? null,
       control: env.state ? env.state.control : null,
@@ -515,6 +527,7 @@ export class DurableGovernanceService {
     this.svc.state = structuredClone(env.state);
     this._meta = {
       taskId: env.taskId,
+      authorizationRevision: env.authorizationRevision,
       projectKey: env.projectKey ?? null,
       identity: env.identity ?? null,
       workspaceRoot: canonicalRoot || env.workspaceRoot || null,
@@ -565,6 +578,7 @@ export class DurableGovernanceService {
     this.svc.state = structuredClone(env.state);
     this._meta = {
       taskId: env.taskId,
+      authorizationRevision: env.authorizationRevision,
       projectKey: env.projectKey ?? null,
       identity: env.identity ?? null,
       workspaceRoot: env.workspaceRoot,
@@ -648,6 +662,130 @@ export class DurableGovernanceService {
       throw governanceError(`workspace_mismatch: mutation workspace ${root || '(none)'} does not match task ${meta.taskId} canonical workspace ${meta.workspaceRoot}`, 'workspace_mismatch');
     }
     return { ok: true, taskId: meta.taskId, workspaceRoot: meta.workspaceRoot, authority: { generation: meta.authority.generation } };
+  }
+
+  // Private device-local calls only. The in-process transport adapter supplies
+  // canonical request/context digests; no MCP descriptor exposes these methods.
+  _relayAdmissionSnapshot(taskId) {
+    this._ensureOpen();
+    this._ensureRecoverable();
+    if (this._admissionUnavailable) throw governanceError('Relay Codex admission storage is unavailable', 'admission_storage_unverified');
+    if (!taskId || this._meta?.taskId !== taskId || this.svc.state.taskId !== taskId) {
+      throw governanceError('Relay Codex admission requires the active task', 'task_mismatch');
+    }
+    try {
+      this.guard.assertOwned();
+      const env = this.store.loadAdmissionTask(taskId);
+      if (env.authorizationRevision !== this._meta.authorizationRevision) {
+        throw new Error('admission predecessor changed');
+      }
+      return env;
+    } catch {
+      this._admissionUnavailable = true;
+      throw governanceError('Relay Codex admission storage is unverified', 'admission_storage_unverified');
+    }
+  }
+
+  _checkRelayAdmissionScope(env, scope) {
+    const step = env.state.steps?.[scope.governanceStep];
+    const route = env.state.route === 'HYBRID' ? env.state.localRoute : env.state.route;
+    if (!env.authority?.token || route !== 'CODEX_DELEGATE' ||
+        !['TASK','REVISE'].includes(env.state.control) || env.state.awaitingUser ||
+        env.state.currentStepId !== scope.governanceStep ||
+        step?.executorStatus !== 'unknown' || step?.machineGate !== 'pending' ||
+        !eqRoots(env.workspaceRoot, scope.workspaceRoot) ||
+        !env.projectKey || env.projectKey.toLowerCase() !== scope.projectKey) {
+      throw governanceError('Relay Codex task, step, route or workspace is not authorized', 'admission_scope_mismatch');
+    }
+  }
+
+  issueRelayCodexAdmission(scope, authorityToken) {
+    this.authorizeMutation({ taskId: scope.taskId, workspaceRoot: scope.workspaceRoot, authorityToken });
+    let env = this._relayAdmissionSnapshot(scope.taskId);
+    this._checkRelayAdmissionScope(env, scope);
+    if (env.authority.token !== authorityToken) throw governanceError('stale Parent authority', 'stale_authority');
+    const existing = env.relayCodex?.records ?? [];
+    if (existing.some((r) => ['reserved','dispatched'].includes(r.state))) {
+      throw governanceError('a prior operation requires authoritative reconciliation', 'admission_recovery_required');
+    }
+    if (existing.some((r) => r.key === scope.key && !['issued','revoked'].includes(r.state))) {
+      throw governanceError('operation was already admitted', 'admission_replay');
+    }
+    if (existing.some((r) => r.state === 'issued' && r.revision === env.authorizationRevision &&
+        r.bootId === this._admissionBootId && r.expiresAt > this._admissionNow())) {
+      throw governanceError('one unspent admission already exists', 'admission_conflict');
+    }
+    if (env.relayCodex?.bootId !== this._admissionBootId) {
+      this._persist(scope.taskId, this._meta, (ledger) => ({
+        blocked: false, bootId: this._admissionBootId,
+        records: (ledger?.records ?? []).map((r) => r.state === 'issued' ? { ...r, state: 'revoked' } : r),
+      }));
+      env = this._relayAdmissionSnapshot(scope.taskId);
+    }
+    const token = crypto.randomBytes(32).toString('base64url');
+    const expiresAt = this._admissionNow() + 300_000;
+    this._persist(scope.taskId, this._meta, (ledger, revision) => {
+      ledger.records = ledger.records.filter((r) => r.key !== scope.key);
+      ledger.records.push({
+        key: scope.key, tokenHash: admissionHash(token), operationDigest: scope.operationDigest,
+        contextDigest: scope.contextDigest, governanceStep: scope.governanceStep,
+        authorityHash: admissionHash(env.authority.token), parentGeneration: env.authority.generation,
+        bootId: this._admissionBootId, expiresAt, revision, state: 'issued',
+      });
+      return ledger;
+    });
+    return { admission: token, expiresInMs: 300_000 };
+  }
+
+  revokeRelayCodexAdmission({ taskId, workspaceRoot, admission }, authorityToken) {
+    this.authorizeMutation({ taskId, workspaceRoot, authorityToken });
+    const env = this._relayAdmissionSnapshot(taskId);
+    if (env.authority?.token !== authorityToken) throw governanceError('stale Parent authority', 'stale_authority');
+    const tokenHash = admissionHash(admission);
+    if (!env.relayCodex?.records.some((r) => r.tokenHash === tokenHash && r.state === 'issued')) {
+      throw governanceError('no unspent admission to revoke', 'admission_not_found');
+    }
+    this._persist(taskId, this._meta, (ledger) => {
+      ledger.records.find((r) => r.tokenHash === tokenHash).state = 'revoked';
+      return ledger;
+    });
+    return { revoked: true };
+  }
+
+  reserveRelayCodexAdmission(scope, admission) {
+    const tokenHash = admissionHash(admission);
+    const check = (expectedState) => {
+      const env = this._relayAdmissionSnapshot(scope.taskId);
+      const r = env.relayCodex?.records.find((row) => row.tokenHash === tokenHash);
+      if (!r || r.state !== expectedState || r.bootId !== this._admissionBootId ||
+          r.revision !== env.authorizationRevision || r.expiresAt <= this._admissionNow() ||
+          r.key !== scope.key || r.operationDigest !== scope.operationDigest ||
+          r.contextDigest !== scope.contextDigest || r.parentGeneration !== env.authority?.generation ||
+          r.authorityHash !== admissionHash(env.authority?.token ?? '')) {
+        throw governanceError('Relay Codex admission is absent, stale or mismatched', 'admission_denied');
+      }
+      this._checkRelayAdmissionScope(env, { ...scope, governanceStep: r.governanceStep });
+      return r;
+    };
+    const save = (state) => this._persist(scope.taskId, this._meta, (ledger, revision) => {
+      const r = ledger.records.find((row) => row.tokenHash === tokenHash);
+      Object.assign(r, { state, revision });
+      return ledger;
+    });
+    check('issued');
+    save('reserved');
+    return Object.freeze({
+      checkReserved: () => { check('reserved'); },
+      checkDispatched: () => { check('dispatched'); },
+      commitDispatch: () => { check('reserved'); save('dispatched'); },
+      acknowledge: () => {
+        // Outcome accounting cannot create authority or dispatch another turn.
+        const env = this._relayAdmissionSnapshot(scope.taskId);
+        if (env.relayCodex?.records.some((r) => r.tokenHash === tokenHash && r.state === 'dispatched')) {
+          save('acknowledged');
+        }
+      },
+    });
   }
 
   // ---- Durable new-task admission gate (Issue #29) -----------------------------

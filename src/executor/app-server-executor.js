@@ -849,8 +849,22 @@ export class AppServerExecutor {
     };
   }
 
-  async start({ prompt, cwd = null, accessMode = null, workspaceRoot = null, workspaceId = null, networkAccess = false, taskId = null, stepId = null, identity = null } = {}) {
+  _checkAdmissionChild(admission) {
+    if (!admission) return null;
+    if (!this.client.isRunning || !this.client.child || this.client._connected !== true) throw new Error('Relay admission requires an exact live App Server child');
+    admission.check();
+    return this.client.child;
+  }
+
+  _commitRelayAdmission(admission, child, unit) {
+    if (!admission) return;
+    if (!this.client.isRunning || this.client.child !== child || this.client._connected !== true) throw new Error('Relay admission App Server child changed');
+    admission.commitDispatch(unit);
+  }
+
+  async start({ prompt, cwd = null, accessMode = null, workspaceRoot = null, workspaceId = null, networkAccess = false, taskId = null, stepId = null, identity = null, relayAdmission = null } = {}) {
     await this._ensureConnected();
+    const admissionChild = this._checkAdmissionChild(relayAdmission);
     if (!ACCESS_MODES.includes(accessMode)) {
       throw new Error(`codex start requires an explicit accessMode (one of: ${ACCESS_MODES.join(', ')}); refusing to default to read-only`);
     }
@@ -887,6 +901,11 @@ export class AppServerExecutor {
     // effective settings evidence), fail closed.
     let verified;
     try {
+      // thread/start is asynchronous. Do not apply even thread settings under
+      // a permit or child identity that changed while awaiting its response.
+      if (relayAdmission && this._checkAdmissionChild(relayAdmission) !== admissionChild) {
+        throw new Error('Relay admission App Server child changed');
+      }
       verified = await this._bootstrapVerifyPermission({ jobId, threadId, accessMode, sandboxPolicy, approvalPolicy, workspaceRoot, networkAccess });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', effectiveVerified: false, verificationError: String(e.message || e).slice(0, 200), updatedAt: Date.now() });
@@ -917,13 +936,16 @@ export class AppServerExecutor {
     this.jobMap.update(jobId, { state: 'starting', startupPhase: isWriter ? CODEX_START_PHASES.WRITER_RESERVED_TURN_START_PENDING : CODEX_START_PHASES.PERMISSION_VERIFIED, turnStartDispatched: false, updatedAt: Date.now() });
 
     // Persist dispatch intent only after effective permission verification and exact writer acquisition.
-    this.jobMap.update(jobId, { turnStartDispatched: true, updatedAt: Date.now() });
     let turnRes;
     try {
+      this._commitRelayAdmission(relayAdmission, admissionChild, { mutationUnitId, isWriter });
+      this.jobMap.update(jobId, { turnStartDispatched: true, updatedAt: Date.now() });
+      relayAdmission?.assertDispatched();
       turnRes = await this.client.request('turn/start', { threadId, input: [{ type: 'text', text: prompt, text_elements: [] }], ...(cwd ? { cwd } : {}), sandboxPolicy, approvalPolicy });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      if (this.owner.owner !== 'none') this.owner.markUnitState('unknown');
+      if (this.owner.owner !== 'none' && (!relayAdmission ||
+          (this.owner.owner === 'codex' && this.owner.unitId === mutationUnitId))) this.owner.markUnitState('unknown');
       throw e;
     }
     const turnId = turnRes && turnRes.turn && turnRes.turn.id;
@@ -1080,7 +1102,8 @@ export class AppServerExecutor {
     };
   }
 
-  async continue({ jobId, instruction, taskId = null, stepId = null, identity = null }) {
+  async continue({ jobId, instruction, taskId = null, stepId = null, identity = null, relayAdmission = null }) {
+    const admissionChild = this._checkAdmissionChild(relayAdmission);
     const job = this.jobMap.load(jobId);
     if (!job) throw new Error(`unknown job: ${jobId}`);
     if (job.state === PRE_TURN_NOT_MATERIALIZED) throw new Error(`job ${jobId} has no materialized turn/thread rollout to continue`);
@@ -1095,7 +1118,7 @@ export class AppServerExecutor {
     const contractId = JSON.stringify({ accessMode, networkAccess: job.networkAccess === true, sandboxPolicy });
     // Reuse an authoritative verified snapshot ONLY if it matches the current contract.
     // Never unconditionally write effectiveVerified=true.
-    if (job.effectiveVerified !== true || job.verifiedForRequestedContract !== contractId) {
+    if (relayAdmission || job.effectiveVerified !== true || job.verifiedForRequestedContract !== contractId) {
       let verified;
       try {
         verified = await this._bootstrapVerifyPermission({ jobId, threadId: job.threadId, accessMode, sandboxPolicy, approvalPolicy, workspaceRoot: job.workspaceRoot || null, networkAccess: job.networkAccess === true });
@@ -1111,14 +1134,17 @@ export class AppServerExecutor {
     if (stepId != null) bindingPatch.stepId = stepId;
     if (identity != null) bindingPatch.identity = identity;
     this.jobMap.update(jobId, bindingPatch);
-    this.jobMap.update(jobId, { turnStartDispatched: true, updatedAt: Date.now() });
 
     let turnRes;
     try {
+      this._commitRelayAdmission(relayAdmission, admissionChild, { mutationUnitId, isWriter });
+      this.jobMap.update(jobId, { turnStartDispatched: true, updatedAt: Date.now() });
+      relayAdmission?.assertDispatched();
       turnRes = await this.client.request('turn/start', { threadId: job.threadId, input: [{ type: 'text', text: instruction, text_elements: [] }], sandboxPolicy, approvalPolicy });
     } catch (e) {
       this.jobMap.update(jobId, { state: 'recovery_required', updatedAt: Date.now() });
-      if (this.owner.owner !== 'none') this.owner.markUnitState('unknown');
+      if (this.owner.owner !== 'none' && (!relayAdmission ||
+          (this.owner.owner === 'codex' && this.owner.unitId === mutationUnitId))) this.owner.markUnitState('unknown');
       throw e;
     }
     const turnId = turnRes && turnRes.turn && turnRes.turn.id;
