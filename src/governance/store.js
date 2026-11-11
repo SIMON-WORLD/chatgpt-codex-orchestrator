@@ -124,16 +124,22 @@ function syncAdmissionDirectory(dir) {
     // libuv's read-only directory descriptor returns EPERM for fsync on NTFS.
     // Use a write-capable native directory handle, never a volume flush or skip.
     const systemRoot = process.env.SystemRoot ?? 'C:\\Windows';
-    if (!path.isAbsolute(systemRoot)) {
-      throw new GovernanceStoreError('Windows system root is not absolute', { code: 'admission_storage_unverified' });
+    const programFiles = process.env.ProgramFiles;
+    const localDrivePath = /^[A-Za-z]:[\\/]/;
+    if (!localDrivePath.test(systemRoot) || !localDrivePath.test(programFiles ?? '')) {
+      throw new GovernanceStoreError('Windows system and Program Files paths are not local',
+        { code: 'admission_storage_unverified' });
     }
-    const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    // PowerShell 7 compiles this small interop type in-process. Windows PowerShell
+    // 5.1's separate compiler timed out on real Windows runners.
+    const powershell = path.join(programFiles, 'PowerShell', '7', 'pwsh.exe');
     const helper = fileURLToPath(new URL('./windows-directory-flush.ps1', import.meta.url));
-    // Keep only the OS locations needed by Windows PowerShell and its .NET compiler.
+    // Keep only the OS locations needed by PowerShell and its .NET compiler.
     // Avoid inheriting application or connector credentials into the helper.
     const env = {
       SystemRoot: systemRoot, WINDIR: systemRoot, TEMP: os.tmpdir(), TMP: os.tmpdir(),
-      Path: path.join(systemRoot, 'System32'),
+      Path: path.join(systemRoot, 'System32'), PSModulePath: '', ProgramFiles: programFiles,
+      POWERSHELL_TELEMETRY_OPTOUT: '1', POWERSHELL_UPDATECHECK: 'Off',
     };
     for (const key of ['SystemDrive', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ProgramData']) {
       if (process.env[key]) env[key] = process.env[key];

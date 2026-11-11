@@ -22,19 +22,18 @@ function setup() {
   const workspaceRoot = fs.realpathSync.native(dataRoot);
   const store = new GovernanceStore({ dataRoot });
   const service = createDurableGovernanceService({ dataRoot, store, heartbeatMs: 1 });
-  let grant;
   try {
     const { authorityToken } = service.transition({ taskId, projectKey: 'example/fixture',
       workspaceRoot, control: 'PLAN' });
     service.transition({ taskId, workspaceRoot, authorityToken, stepId: 'step',
       control: 'TASK', route: 'CODEX_DELEGATE', acceptance: [{ id: 'fixture' }] });
-    grant = service.issueRelayCodexAdmission(scope(workspaceRoot), authorityToken).admission;
   } finally { service.close(); }
-  return { dataRoot, workspaceRoot, store, grant };
+  return { dataRoot, workspaceRoot, store };
 }
 
 function runInterruptedWriter(fixture, mode) {
   const worker = `
+import fs from 'node:fs';
 import { createDurableGovernanceService, GovernanceStore } from ${JSON.stringify(workerImports)};
 const [dataRoot, workspaceRoot, mode] = process.argv.slice(1);
 const taskId = ${JSON.stringify(taskId)};
@@ -44,6 +43,8 @@ const service = createDurableGovernanceService({ dataRoot, store, heartbeatMs: 1
 service.loadTask(taskId);
 const authorityToken = store.loadAdmissionTask(taskId).authority.token;
 const grant = service.issueRelayCodexAdmission(scope, authorityToken).admission;
+// Pass the exact fixture permit to the test parent without writing it to CI logs.
+fs.writeSync(1, grant);
 if (mode === 'between-replacements') {
   // Interrupt after a real primary rename and native flush, before backup.
   const realFlush = store.syncDirectory;
@@ -63,18 +64,20 @@ process.exit(42);
     fixture.dataRoot, fixture.workspaceRoot, mode], { encoding: 'utf8', timeout: 180000, windowsHide: true });
   if (result.error) throw result.error;
   assert.equal(result.status, mode === 'between-replacements' ? 43 : 42, result.stderr);
+  assert.ok(/^[A-Za-z0-9_-]{43}$/.test(result.stdout), 'worker must return the issued fixture permit');
+  return result.stdout;
 }
 
 test('real Windows checked store preserves a committed dispatch fence after writer process exit', opts, (t) => {
   const f = setup();
-  runInterruptedWriter(f, 'after-dispatch-commit');
+  const grant = runInterruptedWriter(f, 'after-dispatch-commit');
   const env = f.store.loadAdmissionTask(taskId);
   assert.equal(env.relayCodex.records[0].state, 'dispatched');
   assert.equal(env.relayCodex.records[0].revision, env.authorizationRevision);
   const service = createDurableGovernanceService({ dataRoot: f.dataRoot, heartbeatMs: 1 });
   t.after(() => service.close());
   service.loadTask(taskId);
-  assert.throws(() => service.reserveRelayCodexAdmission(scope(f.workspaceRoot), f.grant),
+  assert.throws(() => service.reserveRelayCodexAdmission(scope(f.workspaceRoot), grant),
     (e) => e.code === 'admission_denied');
   assert.throws(() => service.issueRelayCodexAdmission(scope(f.workspaceRoot), env.authority.token),
     (e) => e.code === 'admission_recovery_required');
@@ -82,7 +85,7 @@ test('real Windows checked store preserves a committed dispatch fence after writ
 
 test('real Windows interrupted replacement cannot restore admission from an older backup', opts, (t) => {
   const f = setup();
-  runInterruptedWriter(f, 'between-replacements');
+  const grant = runInterruptedWriter(f, 'between-replacements');
   const primary = path.join(f.store.dir, taskId + '.json');
   assert.notEqual(fs.readFileSync(primary, 'utf8'), fs.readFileSync(primary + '.bak', 'utf8'));
   assert.throws(() => f.store.loadAdmissionTask(taskId), (e) => e.code === 'admission_storage_unverified');
@@ -96,7 +99,7 @@ test('real Windows interrupted replacement cannot restore admission from an olde
   assert.equal(backup.relayCodex.records[0].state, 'issued');
   assert.throws(() => service.issueRelayCodexAdmission(scope(f.workspaceRoot), backup.authority.token),
     (e) => e.code === 'admission_storage_unverified');
-  assert.throws(() => service.reserveRelayCodexAdmission(scope(f.workspaceRoot), f.grant),
+  assert.throws(() => service.reserveRelayCodexAdmission(scope(f.workspaceRoot), grant),
     (e) => e.code === 'admission_storage_unverified');
 });
 
